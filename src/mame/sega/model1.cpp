@@ -712,6 +712,8 @@ void netmerc_state::netmerc_outputs_w(uint8_t data)
 void model1_state::drive_board_w(uint8_t data)
 {
 	m_digits[0] = data;
+	if (m_drive)
+		m_drive->host_cmd_w(data);
 }
 
 uint8_t model1_state::r360_r()
@@ -1883,6 +1885,12 @@ void model1_state::vr(machine_config &config)
 	ioboard.an_callback<2>().set_ioport("BRAKE");
 	ioboard.output_callback().set(FUNC(model1_state::vr_outputs_w));
 	ioboard.output_callback().append(FUNC(model1_state::gen_outputs_w));
+
+	// the Motor PCB, this machine on the link of the seat its configuration
+	// picks; its replies on port D
+	SEGA_838_9081(config, m_drive);
+	m_drive->wheel_callback().set_ioport("WHEEL");
+	ioboard.in_callback<2>().set([this] () { return m_drive->host_reply_r(); });
 
 	M1COMM(config, "m1comm").set_default_bios_tag("epr15112");
 }

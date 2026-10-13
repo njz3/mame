@@ -10,6 +10,7 @@
 #include "segaic24.h"
 
 #include "segam1audio.h"
+#include "vr_drive.h"
 
 #include "cpu/mb86233/mb86233.h"
 #include "cpu/v60/v60.h"
@@ -37,6 +38,7 @@ public:
 		, m_m1uart(*this, "m1uart")
 		, m_m1comm(*this, "m1comm")
 		, m_dsbz80(*this, "dsbz80")
+		, m_drive(*this, "drive")
 		, m_tgp_copro(*this, "tgp_copro")
 		, m_screen(*this, "screen")
 		, m_copro_fifo_in(*this, "copro_fifo_in")
@@ -236,6 +238,7 @@ protected:
 	required_device<i8251_device> m_m1uart;
 	optional_device<m1comm_device> m_m1comm;        // Model 1 communication board
 	optional_device<dsbz80_device> m_dsbz80;        // Digital Sound Board
+	optional_device<sega_838_9081_device> m_drive;  // Virtua Racing's Motor PCB
 	optional_device<mb86233_device> m_tgp_copro;
 	required_device<screen_device> m_screen;
 	required_device<generic_fifo_u32_device> m_copro_fifo_in, m_copro_fifo_out;
