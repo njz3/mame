@@ -267,6 +267,9 @@ int mame_machine_manager::execute()
 			mame_options::parse_standard_inis(m_options, errors, system);
 		}
 
+		// paths may have been changed from the internal UI, so make sure they're still redirected to the write directory
+		m_options.apply_write_directory();
+
 		// otherwise, perform validity checks before anything else
 		bool is_empty = (system == &GAME_NAME(___empty));
 		if (!is_empty)

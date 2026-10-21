@@ -369,7 +369,16 @@ function env.open(file, size, swap)
 		end
 		file = path .. "/" .. curset .. ".hi"
 	else
-		file = manager.options.entries.nvram_directory:value() .. "/" .. curset .. "/" .. file
+		-- the NVRAM directory can be a search path (e.g. with a write directory)
+		local name = file
+		for dir in manager.options.entries.nvram_directory:value():gmatch("([^;]+)") do
+			file = dir .. "/" .. curset .. "/" .. name
+			local f = io.open(file, "rb")
+			if f then
+				f:close()
+				break
+			end
+		end
 	end
 	local f = io.open(file, "rb")
 	local content = f:read("*all")

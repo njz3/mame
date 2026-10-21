@@ -374,7 +374,8 @@ int running_machine::run(bool quiet)
 		if (options().log() && !quiet)
 		{
 			util::core_file::ptr logfile;
-			std::error_condition const filerr = util::core_file::open("error.log", OPEN_FLAG_WRITE | OPEN_FLAG_CREATE | OPEN_FLAG_CREATE_PATHS, logfile);
+			std::string const logpath = *options().write_directory() ? options().write_path("error.log") : "error.log";
+			std::error_condition const filerr = util::core_file::open(logpath, OPEN_FLAG_WRITE | OPEN_FLAG_CREATE | OPEN_FLAG_CREATE_PATHS, logfile);
 			if (filerr)
 				throw emu_fatalerror("running_machine::run: unable to open error.log file");
 
@@ -384,7 +385,7 @@ int running_machine::run(bool quiet)
 
 		if (options().debug() && options().debuglog())
 		{
-			m_debuglogfile = std::make_unique<emu_file>(OPEN_FLAG_WRITE | OPEN_FLAG_CREATE | OPEN_FLAG_CREATE_PATHS);
+			m_debuglogfile = std::make_unique<emu_file>(options().write_directory(), OPEN_FLAG_WRITE | OPEN_FLAG_CREATE | OPEN_FLAG_CREATE_PATHS);
 			std::error_condition const filerr = m_debuglogfile->open("debug.log");
 			if (filerr)
 				throw emu_fatalerror("running_machine::run: unable to open debug.log file");

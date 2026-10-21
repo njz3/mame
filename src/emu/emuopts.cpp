@@ -58,6 +58,7 @@ const options_entry emu_options::s_option_entries[] =
 
 	// output directory options
 	{ nullptr,                                           nullptr,     core_options::option_type::HEADER,     "CORE OUTPUT DIRECTORY OPTIONS" },
+	{ OPTION_WRITE_DIRECTORY ";writedir",                nullptr,     core_options::option_type::PATH,       "directory for all files MAME writes (INI files, plugin data and output directories), searched before their usual locations" },
 	{ OPTION_CFG_DIRECTORY,                              "cfg",       core_options::option_type::PATH,       "directory to save configurations" },
 	{ OPTION_NVRAM_DIRECTORY,                            "nvram",     core_options::option_type::PATH,       "directory to save NVRAM contents" },
 	{ OPTION_INPUT_DIRECTORY,                            "inp",       core_options::option_type::PATH,       "directory to save input device logs" },
@@ -1113,6 +1114,108 @@ image_option &emu_options::image_option(std::string_view device_name)
 	auto const iter = m_image_options.find(device_name);
 	assert(iter != m_image_options.end() && "Attempt to access non-existent image option");
 	return *iter->second;
+}
+
+
+//-------------------------------------------------
+//  write_path - get the path of a subdirectory of
+//  the write directory, or an empty string if
+//  there's no write directory
+//-------------------------------------------------
+
+std::string emu_options::write_path(std::string_view subdir) const
+{
+	std::string result(write_directory());
+	if (!result.empty() && !subdir.empty())
+	{
+		if (!util::is_directory_separator(result.back()))
+			result.append(PATH_SEPARATOR);
+		result.append(subdir);
+	}
+	return result;
+}
+
+
+//-------------------------------------------------
+//  apply_write_directory - point the paths MAME
+//  writes to at the write directory, if any
+//-------------------------------------------------
+
+void emu_options::apply_write_directory()
+{
+	// INI files and plugin data go in the write directory itself, and the output directories in their usual
+	// subdirectories of it; the previous locations are kept behind it in the search path so files that haven't
+	// been saved to the write directory yet are still found (difference files are opened read/write, so they
+	// don't get this fallback)
+	static const struct { const char *name; const char *subdir; bool fallback; } s_redirects[] =
+	{
+		{ OPTION_INIPATH,               "",         true  },
+		{ OPTION_PLUGINDATAPATH,        "",         true  },
+		{ OPTION_CFG_DIRECTORY,         "cfg",      true  },
+		{ OPTION_NVRAM_DIRECTORY,       "nvram",    true  },
+		{ OPTION_INPUT_DIRECTORY,       "inp",      true  },
+		{ OPTION_STATE_DIRECTORY,       "sta",      true  },
+		{ OPTION_SNAPSHOT_DIRECTORY,    "snap",     true  },
+		{ OPTION_DIFF_DIRECTORY,        "diff",     false },
+		{ OPTION_COMMENT_DIRECTORY,     "comments", true  }
+	};
+
+	if (!*write_directory())
+		return;
+
+	for (auto const &redirect : s_redirects)
+	{
+		std::string const target = write_path(redirect.subdir);
+		entry::shared_ptr const option = get_entry(redirect.name);
+		std::string const current = option->value_unsubstituted();
+		if (std::string_view(current).substr(0, current.find(';')) == target)
+			continue;
+
+		std::string redirected = target;
+		if (redirect.fallback && !current.empty())
+			redirected.append(";").append(current);
+
+		// remember the value being replaced so it can be put back before saving INI files
+		auto const existing = std::find_if(
+				m_write_redirects.begin(),
+				m_write_redirects.end(),
+				[&redirect] (write_redirect const &r) { return r.name == redirect.name; });
+		if (existing != m_write_redirects.end())
+		{
+			existing->original = current;
+			existing->redirected = redirected;
+		}
+		else
+		{
+			m_write_redirects.emplace_back(write_redirect{ redirect.name, current, redirected });
+		}
+
+		option->set_value(std::move(redirected), OPTION_PRIORITY_CMDLINE, false, true);
+	}
+}
+
+
+//-------------------------------------------------
+//  revert_write_directory - put back the paths
+//  replaced by apply_write_directory, unless they
+//  have been changed since; when given a copy of
+//  these options, this is done to the copy
+//-------------------------------------------------
+
+void emu_options::revert_write_directory()
+{
+	revert_write_directory(*this);
+	m_write_redirects.clear();
+}
+
+void emu_options::revert_write_directory(core_options &options) const
+{
+	for (write_redirect const &redirect : m_write_redirects)
+	{
+		entry::shared_ptr const option = options.get_entry(redirect.name);
+		if (option && (redirect.redirected == option->value_unsubstituted()))
+			option->set_value(std::string(redirect.original), OPTION_PRIORITY_CMDLINE, true, true);
+	}
 }
 
 

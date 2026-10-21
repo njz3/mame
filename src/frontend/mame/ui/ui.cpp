@@ -2721,6 +2721,17 @@ void mame_ui_manager::load_ui_options()
 			osd_printf_error("**Error loading ui.ini**\n");
 		}
 	}
+
+	// save UI files (favorites, filters, etc.) to the write directory if there is one, still finding existing ones
+	std::string const target = machine().options().write_path("ui");
+	auto const ui_path = options().get_entry(OPTION_UI_PATH);
+	std::string const current = ui_path->value_unsubstituted();
+	if (!target.empty() && (std::string_view(current).substr(0, current.find(';')) != target))
+	{
+		m_ui_path_original = current;
+		m_ui_path_redirected = current.empty() ? target : (target + ';' + current);
+		ui_path->set_value(std::string(m_ui_path_redirected), OPTION_PRIORITY_CMDLINE, false, true);
+	}
 }
 
 //-------------------------------------------------
@@ -2738,7 +2749,14 @@ void mame_ui_manager::save_ui_options()
 			util::owritestream str(file);
 			str.imbue(std::locale::classic());
 
+			// don't save the redirection to the write directory unless it's been changed since
+			auto const ui_path = options().get_entry(OPTION_UI_PATH);
+			bool const redirected = !m_ui_path_redirected.empty() && (m_ui_path_redirected == ui_path->value_unsubstituted());
+			if (redirected)
+				ui_path->set_value(std::string(m_ui_path_original), OPTION_PRIORITY_CMDLINE, false, true);
 			options().output_ini(str);
+			if (redirected)
+				ui_path->set_value(std::string(m_ui_path_redirected), OPTION_PRIORITY_CMDLINE, false, true);
 			str << std::flush;
 		}
 		file.close();
@@ -2791,6 +2809,9 @@ void mame_ui_manager::save_main_option()
 			options.set_value(f_entry->name(), *f_entry->value(), OPTION_PRIORITY_CMDLINE);
 		}
 	}
+
+	// don't save paths redirected to the write directory
+	machine().options().revert_write_directory(options);
 
 	// attempt to open the output file
 	{

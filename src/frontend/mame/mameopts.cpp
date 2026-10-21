@@ -120,22 +120,33 @@ void mame_options::parse_one_ini(emu_options &options, const char *basename, int
 	if (!options.read_config())
 		return;
 
+	auto const parse =
+			[&options, priority, error_stream] (emu_file &file)
+			{
+				osd_printf_verbose("Parsing %s\n", file.fullpath());
+				try
+				{
+					options.parse_ini_file(static_cast<util::core_file &>(file), priority, priority < OPTION_PRIORITY_DRIVER_INI, false);
+				}
+				catch (options_exception const &ex)
+				{
+					if (error_stream)
+						util::stream_format(*error_stream, "While parsing %s:\n%s\n", file.fullpath(), ex.message());
+				}
+			};
+
 	// open the file; if we fail, that's ok
 	emu_file file(options.ini_path(), OPEN_FLAG_READ);
 	osd_printf_verbose("Attempting load of %s.ini\n", basename);
 	for (std::error_condition filerr = file.open(std::string(basename) + ".ini"); !filerr; filerr = file.open_next())
+		parse(file);
+
+	// INI files saved to the write directory are parsed last so they take precedence
+	if (*options.write_directory())
 	{
-		// parse the file
-		osd_printf_verbose("Parsing %s\n", file.fullpath());
-		try
-		{
-			options.parse_ini_file(static_cast<util::core_file &>(file), priority, priority < OPTION_PRIORITY_DRIVER_INI, false);
-		}
-		catch (options_exception const &ex)
-		{
-			if (error_stream)
-				util::stream_format(*error_stream, "While parsing %s:\n%s\n", file.fullpath(), ex.message());
-		}
+		emu_file written(options.write_directory(), OPEN_FLAG_READ);
+		if (!written.open(std::string(basename) + ".ini"))
+			parse(written);
 	}
 }
 

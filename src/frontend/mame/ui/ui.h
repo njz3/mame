@@ -316,6 +316,8 @@ private:
 	bool                    m_pointers_changed;
 
 	ui_options              m_ui_options;
+	std::string             m_ui_path_original;     // ui_path before being redirected to the write directory
+	std::string             m_ui_path_redirected;
 	ui_colors               m_ui_colors;
 	float                   m_target_font_height;
 	bool                    m_unthrottle_mute;

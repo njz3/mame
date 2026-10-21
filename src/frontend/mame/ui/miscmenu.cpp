@@ -779,6 +779,7 @@ menu_machine_configure::menu_machine_configure(
 	// parse the INI file
 	std::ostringstream error;
 	osd_setup_osd_specific_emu_options(m_opts);
+	m_opts.set_value(OPTION_WRITE_DIRECTORY, machine().options().write_directory(), OPTION_PRIORITY_CMDLINE); // so INI files saved there are read
 	mame_options::parse_standard_inis(m_opts, error, m_sys.driver);
 	setup_bios();
 	set_heading(util::string_format(_("System Settings:\n%1$s"), m_sys.description));
