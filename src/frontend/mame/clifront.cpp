@@ -263,6 +263,9 @@ void cli_frontend::start_execution(mame_machine_manager *manager, const std::vec
 		m_osd.set_verbose(m_options.verbose());
 	}
 
+	// send everything we write to the write directory, if any (before plugin.ini is read)
+	m_options.apply_write_directory();
+
 	// otherwise, check for a valid system
 	load_translation(m_options);
 

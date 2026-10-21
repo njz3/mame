@@ -202,7 +202,9 @@ int image_manager::write_config(emu_options &options, const char *filename, cons
 	{
 		util::owritestream str(file);
 		str.imbue(std::locale::classic());
+		options.revert_write_directory(); // don't save paths redirected to the write directory
 		options.output_ini(str);
+		options.apply_write_directory();
 		str << std::flush;
 		if (file.flush() || !str)
 			return 1;

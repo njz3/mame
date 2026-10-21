@@ -45,6 +45,7 @@
 #define OPTION_SWPATH               "swpath"
 
 // core directory options
+#define OPTION_WRITE_DIRECTORY      "write_directory"
 #define OPTION_CFG_DIRECTORY        "cfg_directory"
 #define OPTION_NVRAM_DIRECTORY      "nvram_directory"
 #define OPTION_INPUT_DIRECTORY      "input_directory"
@@ -330,6 +331,7 @@ public:
 	const char *sw_path() const { return value(OPTION_SWPATH); }
 
 	// core directory options
+	const char *write_directory() const { return value(OPTION_WRITE_DIRECTORY); }
 	const char *cfg_directory() const { return value(OPTION_CFG_DIRECTORY); }
 	const char *nvram_directory() const { return value(OPTION_NVRAM_DIRECTORY); }
 	const char *input_directory() const { return value(OPTION_INPUT_DIRECTORY); }
@@ -498,6 +500,12 @@ public:
 	::image_option &image_option(std::string_view device_name);
 	bool has_image_option(std::string_view device_name) const { return m_image_options.find(device_name) != m_image_options.end(); }
 
+	// write directory - redirects everything MAME writes to a single directory
+	std::string write_path(std::string_view subdir) const;
+	void apply_write_directory();
+	void revert_write_directory();
+	void revert_write_directory(core_options &options) const;
+
 protected:
 	virtual void command_argument_processed() override;
 
@@ -541,6 +549,15 @@ private:
 
 	// special option; the software set name that we did specify
 	std::string                                         m_software_name;
+
+	// options redirected to the write directory, with the values they replaced
+	struct write_redirect
+	{
+		std::string name;
+		std::string original;
+		std::string redirected;
+	};
+	std::vector<write_redirect>                         m_write_redirects;
 };
 
 // takes an existing emu_options and adds system specific options

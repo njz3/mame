@@ -1429,6 +1429,44 @@ Core Search Path Options
 Core Output Directory Options
 -----------------------------
 
+.. _mame-commandline-writedirectory:
+
+**-write_directory** / **-writedir** *<path>*
+
+    Specifies a single directory for all the files MAME writes, for example
+    when everything else is on read-only media or protected by a write filter.
+    When set, MAME saves:
+
+    * ``mame.ini``, ``ui.ini``, ``plugin.ini`` and system INI files in the
+      write directory itself (it is put at the front of the
+      :ref:`INI path <mame-commandline-inipath>`, and INI files found there
+      take precedence over the ones in other INI path directories);
+    * plugin data in the write directory itself (it is put at the front of the
+      :ref:`home path <mame-commandline-homepath>`);
+    * configuration, NVRAM, input recordings, saved states, snapshots, hard
+      disk difference files and debugger comments in the ``cfg``, ``nvram``,
+      ``inp``, ``sta``, ``snap``, ``diff`` and ``comments`` subdirectories of
+      the write directory;
+    * UI files (favorites, filters and so on) in its ``ui`` subdirectory;
+    * ``error.log`` and ``debug.log``, if enabled, in the write directory.
+
+    The write directory is searched before the locations given by the other
+    options, which are still used to find files that have not been saved to
+    the write directory yet; for example NVRAM contents and configuration from
+    the ``nvram`` and ``cfg`` directories are used until the system is exited
+    for the first time, and are saved to the write directory then.  Hard disk
+    difference files are an exception: only the write directory is used for
+    them.
+
+    Paths saved to INI files are not affected by the write directory.  This
+    option must be set on the command line or in an INI file read from the
+    usual INI path.  The default is empty (no write directory).
+
+    Example:
+        .. code-block:: bash
+
+            mame -write_directory C:\Racecab\Saves\mame\single vr
+
 .. _mame-commandline-cfgdirectory:
 
 **-cfg_directory** *<path>*
