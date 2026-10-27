@@ -160,6 +160,7 @@ protected:
 
 	int get_pos_irq_scanline() { return (m_c116->get_reg(5) - 32) & 0xff; }
 	TIMER_DEVICE_CALLBACK_MEMBER(screen_scanline);
+	void sci_int_w(int state);
 
 	u16 namcos2_68k_key_r(offs_t offset);
 	void namcos2_68k_key_w(offs_t offset, u16 data);

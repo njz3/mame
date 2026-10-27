@@ -373,6 +373,7 @@ private:
 	void system_reset_w(u8 data);
 	void reset_all_subcpus(int state);
 	void vblank_irq(int state);
+	void sci_int_w(int state);
 
 	bool sprite_mix_callback(u16 &dest, u8 &destpri, u16 colbase, u16 src, int srcpri, int pri);
 	void mix_layer0_sprites(screen_device &screen, bitmap_ind16 &bitmap, const rectangle &cliprect);
@@ -561,7 +562,7 @@ void namcos21_c67_state::common_map(address_map &map)
 	map(0x800000, 0x8fffff).rom().region("data", 0);
 	map(0x900000, 0x90ffff).ram().share("sharedram");
 	map(0xa00000, 0xa00fff).rw(FUNC(namcos21_c67_state::dpram_word_r), FUNC(namcos21_c67_state::dpram_word_w));
-	map(0xb00000, 0xb03fff).rw(m_sci, FUNC(namco_c139_device::ram_r), FUNC(namco_c139_device::ram_w));
+	map(0xb00000, 0xb03fff).m(m_sci, FUNC(namco_c139_device::data_map));
 	map(0xb80000, 0xb8000f).m(m_sci, FUNC(namco_c139_device::regs_map));
 	map(0xc00000, 0xcfffff).rom().mirror(0x100000).region("edata", 0);
 }
@@ -793,6 +794,12 @@ void namcos21_c67_state::vblank_irq(int state)
 	}
 }
 
+void namcos21_c67_state::sci_int_w(int state)
+{
+	m_master_intc->sci_irq_trigger();
+	m_slave_intc->sci_irq_trigger();
+}
+
 void namcos21_c67_state::machine_reset()
 {
 	// Initialise the bank select in the sound CPU
@@ -873,6 +880,7 @@ void namcos21_c67_state::namcos21(machine_config &config)
 	m_slave_intc->link_c148_device(m_master_intc);
 
 	NAMCO_C139(config, m_sci);
+	m_sci->irq_cb().set(FUNC(namcos21_c67_state::sci_int_w));
 
 	PALETTE(config, m_palette).set_format(palette_device::xBRG_888, 0x10000/2);
 
