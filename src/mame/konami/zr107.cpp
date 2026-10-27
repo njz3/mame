@@ -225,7 +225,8 @@ public:
 		m_in(*this, "IN%u", 0U),
 		m_analog(*this, "ANALOG%u", 1U),
 		m_pcb_digit(*this, "pcbdigit%u", 0U),
-		m_wheel_motor(*this, "wheel_motor")
+		m_wheel_motor(*this, "wheel_motor"),
+		m_pcb_output(*this, "pcboutput%u", 0U)
 	{ }
 
 protected:
@@ -267,6 +268,7 @@ protected:
 	optional_ioport_array<3> m_analog;
 	output_finder<2> m_pcb_digit;
 	output_finder<> m_wheel_motor;
+	output_finder<1> m_pcb_output;
 
 	int32_t m_ccu_vcth = 0;
 	int32_t m_ccu_vctl = 0;
@@ -407,6 +409,7 @@ void zr107_state::sysreg_w(offs_t offset, uint8_t data)
 		case 2: // Parallel data register
 			LOGSYSREG("Parallel data = %02X\n", data);
 			m_wheel_motor = data;
+			m_pcb_output[0] = data;
 			break;
 
 		case 3: // System Register 0

@@ -350,6 +350,22 @@ protected:
 	void slave_sgunner_am(address_map &map) ATTR_COLD;
 };
 
+// with "status monitor" (lap/position displays)
+class suzuka8h_state : public sgunner_state
+{
+public:
+	suzuka8h_state(const machine_config &mconfig, device_type type, const char *tag) :
+		sgunner_state(mconfig, type, tag),
+		m_out_digit(*this, "digit%u", 0U)
+	{ }
+
+protected:
+	virtual void dpram_word_w(offs_t offset, u16 data, u16 mem_mask = ~0) override;
+
+private:
+	output_finder<7> m_out_digit;
+};
+
 // with diorama
 class gollygho_state : public namcos2_state
 {

@@ -282,6 +282,7 @@ protected:
 		, m_ports(*this, "IN%u", 0)
 		, m_pcb_digit(*this, "pcbdigit%u", 0U)
 		, m_wheel_motor(*this, "wheel_motor")
+		, m_pcb_output(*this, "pcboutput%u", 0U)
 		, m_cg_view(*this, "cg_view")
 	{ }
 
@@ -316,6 +317,7 @@ protected:
 	required_ioport_array<4> m_ports;
 	output_finder<2> m_pcb_digit;
 	output_finder<> m_wheel_motor;
+	output_finder<1> m_pcb_output;
 	memory_view m_cg_view;
 
 	bool m_sound_irq_enabled = false;
@@ -441,6 +443,7 @@ void gticlub_base_state::sysreg_w(offs_t offset, uint8_t data)
 		case 2:
 			// GTI club drive commands
 			m_wheel_motor = data;
+			m_pcb_output[0] = data;
 			break;
 
 		case 3:

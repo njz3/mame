@@ -2789,6 +2789,11 @@ void namcos22_state::handle_driving_io()
 
 		// drive commands (raverace, acedrive, victlap)
 		m_wheel_motor = m_shareram[0x40 / 2] & 0xff;
+
+		// the same as whole bytes
+		m_mcu_output[0] = m_shareram[0x20 / 2] & 0xff; // lamps, coin counters
+		m_mcu_output[1] = m_shareram[0x40 / 2] & 0xff; // drive commands (raverace, acedrive, victlap)
+		m_mcu_output[2] = m_shareram[0x42 / 2] & 0xff; // led outputs (acedrive, victlap)
 	}
 }
 
