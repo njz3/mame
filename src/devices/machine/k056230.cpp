@@ -73,7 +73,7 @@ public:
 
 	void reset(std::string localhost, std::string localport, std::string remotehost, std::string remoteport)
 	{
-		m_ioctx.post(
+		asio::post(m_ioctx, 
 				[this, localhost = std::move(localhost), localport = std::move(localport), remotehost = std::move(remotehost), remoteport = std::move(remoteport)] ()
 				{
 					std::error_code err;
@@ -115,7 +115,7 @@ public:
 
 	void stop()
 	{
-		m_ioctx.post(
+		asio::post(m_ioctx, 
 				[this] ()
 				{
 					m_stopping = true;
@@ -171,7 +171,7 @@ public:
 		bool const sending = m_fifo_tx.used();
 		m_fifo_tx.write(&buffer[0], data_size);
 		if (!sending)
-			m_ioctx.post(
+			asio::post(m_ioctx, 
 					[this] ()
 					{
 						start_send_tx();
@@ -465,6 +465,8 @@ private:
 				});
 	}
 
+public:
+	// used by LOG(), so it has to be accessible from outside
 	template <typename Format, typename... Params>
 	void logerror(Format &&fmt, Params &&... args) const
 	{
@@ -474,6 +476,8 @@ private:
 				m_device.tag(),
 				util::string_format(std::forward<Format>(fmt), std::forward<Params>(args)...));
 	}
+
+private:
 
 	k056230_device &m_device;
 	std::thread m_thread;

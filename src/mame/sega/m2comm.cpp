@@ -524,6 +524,8 @@ private:
 				});
 	}
 
+public:
+	// used by LOG(), so it has to be accessible from outside
 	template <typename Format, typename... Params>
 	void logerror(Format &&fmt, Params &&... args) const
 	{
@@ -532,6 +534,8 @@ private:
 				"%s",
 				util::string_format(std::forward<Format>(fmt), std::forward<Params>(args)...));
 	}
+
+private:
 
 	asio::io_context m_ioctx;
 	std::optional<asio::ip::tcp::endpoint> m_localaddr;

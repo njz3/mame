@@ -127,7 +127,7 @@ public:
 			LOG("C139: remotehost resolve error: %s\n", err.message());
 		}
 
-		m_ioctx.post(
+		asio::post(m_ioctx, 
 				[this] ()
 				{
 					std::error_code err;
@@ -147,7 +147,7 @@ public:
 
 	void stop()
 	{
-		m_ioctx.post(
+		asio::post(m_ioctx, 
 				[this] ()
 				{
 					m_stopping = true;
@@ -203,7 +203,7 @@ public:
 		bool const sending = m_fifo_tx.used();
 		m_fifo_tx.write(&buffer[0], data_size);
 		if (!sending)
-			m_ioctx.post(
+			asio::post(m_ioctx, 
 					[this] ()
 					{
 						start_send_tx();
@@ -497,6 +497,8 @@ private:
 				});
 	}
 
+public:
+	// used by LOG(), so it has to be accessible from outside
 	template <typename Format, typename... Params>
 	void logerror(Format &&fmt, Params &&... args) const
 	{
@@ -506,6 +508,8 @@ private:
 				m_device.tag(),
 				util::string_format(std::forward<Format>(fmt), std::forward<Params>(args)...));
 	}
+
+private:
 
 	namco_c139_device &m_device;
 	std::thread m_thread;
