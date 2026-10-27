@@ -236,7 +236,7 @@ protected:
 	required_device<mb8421_device> m_dpram;
 	required_device<segam1audio_device> m_m1audio;  // Model 1 standard sound board
 	required_device<i8251_device> m_m1uart;
-	optional_device<m1comm_device> m_m1comm;        // Model 1 communication board
+	optional_device<sega_m1comm_device> m_m1comm;   // Model 1 communication board
 	optional_device<dsbz80_device> m_dsbz80;        // Digital Sound Board
 	optional_device<sega_838_9081_device> m_drive;  // Virtua Racing's Motor PCB
 	optional_device<mb86233_device> m_tgp_copro;
