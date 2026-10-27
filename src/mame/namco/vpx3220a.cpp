@@ -801,7 +801,7 @@ void vpx3220a_device::set_fp_reg()
 	case INFOWD:
 		LOG("%s: Info Word Write (Read-Only): %04x\n", machine().describe_context(), m_fpdata);
 		break;
-	case TVSTNDWR:
+	case TVSTNDWR: {
 		static const char *const STANDARD_NAMES[8] = { "PAL B,G,H,I", "NTSC M", "SECAM", "NTSC 44", "PAL M", "PAL N", "PAL 60", "NTSC Comb" };
 		LOG("%s: TV Standard Write: %04x\n", machine().describe_context(), m_fpdata);
 		LOG("%s:    Selection Mode: %s\n", machine().describe_context(), BIT(m_fpdata, 0) ? "Manual" : "Automatic");
@@ -810,7 +810,7 @@ void vpx3220a_device::set_fp_reg()
 		LOG("%s:       Mode Select: %d\n", machine().describe_context(), BIT(m_fpdata, 5) ? "S-VHS" : "Composite");
 		LOG("%s:  Search Threshold: %d%d%d%d\n", machine().describe_context(), BIT(m_fpdata, 9), BIT(m_fpdata, 8), BIT(m_fpdata, 7), BIT(m_fpdata, 6));
 		m_fp_tvstndwr = m_fpdata & 0x03ef;
-		break;
+		} break;
 	case TVSTNDRD:
 		LOG("%s: TV Standard Info Write (Read-Only): %04x\n", machine().describe_context(), m_fpdata);
 		break;

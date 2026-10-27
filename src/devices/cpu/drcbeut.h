@@ -194,7 +194,7 @@ private:
 
 struct resolved_member_function
 {
-	uintptr_t obj = uintptr_t(nullptr);
+	uintptr_t obj = uintptr_t(0);
 	uint8_t *func = nullptr;
 
 	explicit operator bool() const noexcept

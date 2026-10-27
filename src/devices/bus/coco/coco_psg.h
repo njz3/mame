@@ -9,6 +9,8 @@
 #include "machine/intelfsh.h"
 #include "sound/ay8910.h"
 
+#include "speaker.h"
+
 
 //**************************************************************************
 //  TYPE DEFINITIONS

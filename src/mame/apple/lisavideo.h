@@ -10,6 +10,8 @@
 
 #include "cpu/m68000/m68000.h"
 
+#include "screen.h"
+
 class lisa_video_device : public device_t {
 public:
 	lisa_video_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock);
