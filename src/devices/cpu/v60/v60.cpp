@@ -563,7 +563,6 @@ void v60_device::stall()
 
 void v60_device::v60_do_irq(int vector)
 {
-	standard_irq_callback(vector, PC);
 	uint32_t oldPSW = v60_update_psw_for_exception(1, 0);
 
 	// Push PC and PSW onto the stack
@@ -586,6 +585,7 @@ void v60_device::v60_try_irq()
 			m_irq_line = CLEAR_LINE;
 
 		vector = m_irq_cycle();
+		standard_irq_callback(0, PC);
 
 		v60_do_irq(vector + 0x40);
 	}
@@ -598,6 +598,7 @@ void v60_device::execute_set_input(int irqline, int state)
 		case ASSERT_LINE:
 			if(m_nmi_line == CLEAR_LINE) {
 				m_nmi_line = ASSERT_LINE;
+				standard_irq_callback(INPUT_LINE_NMI, PC);
 				v60_do_irq(2);
 			}
 			break;
