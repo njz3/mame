@@ -457,6 +457,7 @@ void sega_xbdcomm_device::device_add_mconfig(machine_config &config)
 	Z80(config, m_cpu, 16_MHz_XTAL / 2);
 	m_cpu->set_memory_map(&sega_xbdcomm_device::xbdcomm_mem);
 	m_cpu->set_io_map(&sega_xbdcomm_device::xbdcomm_io);
+	m_cpu->set_irq_acknowledge_callback(FUNC(sega_xbdcomm_device::cpu_acknowledge_irq));
 
 	MB8421(config, m_dpram).intl_callback().set(FUNC(sega_xbdcomm_device::dpram_int5_w));
 
@@ -503,6 +504,7 @@ void sega_xbdcomm_device::device_start()
 	save_item(NAME(m_ex_page));
 	save_item(NAME(m_xbd_stat));
 	save_item(NAME(m_z80_stat));
+	save_item(NAME(m_irq_vector));
 
 #ifdef XBDCOMM_SIMULATION
 	auto ctx = std::make_unique<context>();
@@ -523,6 +525,7 @@ void sega_xbdcomm_device::device_start()
 
 void sega_xbdcomm_device::device_reset()
 {
+	m_irq_vector = 0;
 	m_ex_page = 0;
 	m_xbd_stat = 0;
 	m_z80_stat = 0;
@@ -674,15 +677,22 @@ void sega_xbdcomm_device::mpc_hreq_w(int state)
 	//m_mpc->hack_w(state);
 }
 
+IRQ_CALLBACK_MEMBER(sega_xbdcomm_device::cpu_acknowledge_irq)
+{
+	return m_irq_vector;
+}
+
 void sega_xbdcomm_device::dpram_int5_w(int state)
 {
-	m_cpu->set_input_line_and_vector(0, state ? ASSERT_LINE : CLEAR_LINE, 0xef); // Z80 INT5
+	m_irq_vector = 0xef; // Z80 INT5
+	m_cpu->set_input_line(0, state ? ASSERT_LINE : CLEAR_LINE);
 }
 
 void sega_xbdcomm_device::mpc_int7_w(int state)
 {
 	logerror("mpc_int7_w: %02x\n", state);
-	m_cpu->set_input_line_and_vector(0, state ? ASSERT_LINE : CLEAR_LINE, 0xff); // Z80 INT7
+	m_irq_vector = 0xff; // Z80 INT7
+	m_cpu->set_input_line(0, state ? ASSERT_LINE : CLEAR_LINE);
 }
 
 uint8_t sega_xbdcomm_device::mpc_mem_r(offs_t offset)

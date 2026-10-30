@@ -36,6 +36,8 @@ protected:
 	virtual void device_add_mconfig(machine_config &config) override ATTR_COLD;
 
 private:
+	IRQ_CALLBACK_MEMBER(cpu_acknowledge_irq);
+
 	required_device<z80_device> m_cpu;
 	required_device<mb8421_device> m_dpram;
 	//required_device<mb89372_device> m_mpc;
@@ -43,6 +45,7 @@ private:
 	uint8_t m_ex_page;  // 74LS374 probably
 	uint8_t m_xbd_stat; // not sure about those yet - 7474 for top bit? and 74161 for lower 4 bits
 	uint8_t m_z80_stat; // not sure about those yet - 74LS374
+	uint8_t m_irq_vector = 0; // Z80 interrupt vector
 
 	void xbdcomm_mem(address_map &map) ATTR_COLD;
 	void xbdcomm_io(address_map &map) ATTR_COLD;

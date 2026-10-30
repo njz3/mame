@@ -492,6 +492,7 @@ void sega_m1comm_device::device_add_mconfig(machine_config &config)
 	Z80(config, m_cpu, 32_MHz_XTAL / 4);
 	m_cpu->set_memory_map(&sega_m1comm_device::m1comm_mem);
 	m_cpu->set_io_map(&sega_m1comm_device::m1comm_io);
+	m_cpu->set_irq_acknowledge_callback(FUNC(sega_m1comm_device::cpu_acknowledge_irq));
 
 	AM9517A(config, m_dma, 32_MHz_XTAL / 4);
 	m_dma->out_hreq_callback().set(FUNC(sega_m1comm_device::dma_hreq_w));
@@ -547,6 +548,13 @@ void sega_m1comm_device::device_start()
 	m_context = std::move(ctx);
 	m_context->start();
 #endif
+
+	save_pointer(NAME(m_shared), 0x1000);
+	save_item(NAME(m_syn));
+	save_item(NAME(m_zfg));
+	save_item(NAME(m_cn));
+	save_item(NAME(m_fg));
+	save_item(NAME(m_irq_vector));
 }
 
 //-------------------------------------------------
@@ -572,6 +580,8 @@ void sega_m1comm_device::device_reset()
 	m_linkid = 0;
 	m_linkcount = 0;
 #endif
+
+	m_irq_vector = 0;
 }
 
 void sega_m1comm_device::device_stop()
@@ -607,7 +617,8 @@ void sega_m1comm_device::dma_mem_w(offs_t offset, uint8_t data)
 
 void sega_m1comm_device::dlc_int7_w(int state)
 {
-	m_cpu->set_input_line_and_vector(0, state ? ASSERT_LINE : CLEAR_LINE, 0xff); // Z80
+	m_irq_vector = 0xff;
+	m_cpu->set_input_line(0, state ? ASSERT_LINE : CLEAR_LINE);
 }
 
 uint8_t sega_m1comm_device::syn_r()
@@ -695,12 +706,18 @@ void sega_m1comm_device::fg_w(uint8_t data)
 	m_fg = data & 0x01;
 }
 
+IRQ_CALLBACK_MEMBER(sega_m1comm_device::cpu_acknowledge_irq)
+{
+	return m_irq_vector;
+}
+
 void sega_m1comm_device::check_vint_irq()
 {
 #ifndef M1COMM_SIMULATION
 	if (m_syn & 0x02)
 	{
-		m_cpu->set_input_line_and_vector(0, HOLD_LINE, 0xef); // Z80
+		m_irq_vector = 0xef;
+		m_cpu->set_input_line(0, HOLD_LINE);
 	}
 #else
 	comm_tick();
