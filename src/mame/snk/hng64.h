@@ -15,6 +15,7 @@
 #include "video/poly.h"
 
 #include "emupal.h"
+#include "hires3d.h"
 #include "screen.h"
 #include "tilemap.h"
 
@@ -111,8 +112,13 @@ public:
 	float *depthBuffer3d() { return m_depthBuffer3d.get(); }
 	u16 *colorBuffer3d() { return m_colorBuffer3d.get(); }
 
+	// the 3D buffers are m_scale times 512x512 (-hires3d)
+	int scale() const { return m_scale; }
+	int size() const { return 512 * m_scale; }
+
 private:
 	hng64_state &m_state;
+	int m_scale;
 
 	// (Temporarily class members - someday they will live in the memory map)
 	std::unique_ptr<float[]> m_depthBuffer3d;
@@ -203,6 +209,13 @@ public:
 
 	required_region_ptr<u8> m_texturerom;
 	required_device<screen_device> m_screen;
+
+	// -hires3d: the 3D is drawn at a multiple of the native resolution, the
+	// tilemaps and sprites natively (the layers above the 3D are mixed
+	// natively and only the pixels they change are magnified)
+	std::unique_ptr<hires3d_output> m_hires;
+	bitmap_rgb32 m_below;
+	void blit_3d(bitmap_rgb32 &bitmap, const rectangle &cliprect, int scale);
 	required_device<palette_device> m_palette;
 	required_device<palette_device> m_palette_fade0;
 	required_device<palette_device> m_palette_fade1;

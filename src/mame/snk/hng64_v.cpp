@@ -3,6 +3,8 @@
 #include "emu.h"
 #include "hng64.h"
 
+#include "emuopts.h"
+
 #include <algorithm>
 
 #define LOG_3D           (1 << 1)
@@ -750,6 +752,69 @@ void hng64_state::mixsprites_test(screen_device& screen, bitmap_rgb32& bitmap, c
 	}
 }
 
+// Blit the 3D colour buffer into bitmap, whose resolution is scale times the
+// native one (cliprect in its pixels); the buffer is sampled when it is larger.
+void hng64_state::blit_3d(bitmap_rgb32 &bitmap, const rectangle &cliprect, int scale)
+{
+	// 3D palette half, same bit as spriteblendtype
+	const u16 palbase = BIT(m_tcram[0x4c / 4], 16) ? 0x800 : 0x000;
+
+	rectangle visarea = m_screen->visible_area();
+	const int ysize = visarea.bottom() - visarea.top();
+	const int size = m_poly_renderer->size();
+	const int mask = size - 1;
+	const int step = m_poly_renderer->scale() / scale;
+
+	if (ysize)
+	{
+		const int yinc = (512 << 16) / ysize;
+
+		pen_t const* const clut_3d = &m_palette_3d->pen(0);
+		if (!(m_fbcontrol[0] & 0x01))
+		{
+			// this moves the car in the xrally selection screen the correct number of pixels to the left
+			int xscroll = (m_fbscroll[0] >> 21);
+			if (xscroll & 0x400)
+				xscroll -= 0x800;
+
+			// value is midpoint?
+			xscroll += 256;
+			xscroll *= scale;
+
+			// Blit the color buffer into the primary bitmap
+			for (int y = cliprect.top(); y <= cliprect.bottom(); y++)
+			{
+				const int realy = (((y - visarea.top() * scale) * yinc) >> 16) * step;
+
+				const u16 *src = &m_poly_renderer->colorBuffer3d()[((realy) & mask) * size];
+				u32 *dst = &bitmap.pix(y, cliprect.left());
+
+				for (int x = cliprect.left(); x <= cliprect.right(); x++)
+				{
+					const u16 srcpix = src[(((cliprect.left() + x) + xscroll) * step) & mask];
+					if (srcpix & 0x07ff)
+					{
+						// format in our framebuffer is llll appp pppp pppp
+						// where l = lighting, a = alpha, p = palindex
+						// our m_palette_3d has 16 copies of the palette at different brightness levels, so we can pass directly
+						if (srcpix & 0x0800)
+						{
+							*dst = alpha_blend_r32(*dst, clut_3d[(srcpix & 0xf7ff) | palbase], 0x80);
+						}
+						else
+						{
+							*dst = clut_3d[(srcpix & 0xf7ff) | palbase];
+						}
+					}
+
+					dst++;
+				}
+			}
+		}
+	}
+}
+
+
 u32 hng64_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect)
 {
 #if 0
@@ -775,16 +840,27 @@ u32 hng64_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, cons
 
 	screen.priority().fill(0x00, cliprect);
 
+	// with -hires3d, frames left without 3D are shown magnified
+	auto const native_only = [&] ()
+	{
+		if (m_hires->active())
+		{
+			m_hires->upscale(bitmap, m_hires->frame_bitmap(), cliprect, false);
+			m_hires->frame_done(cliprect);
+		}
+		return 0;
+	};
+
 	// If the screen is disabled, don't draw anything (m_screen_dis is a shady variable at best)
 	if (m_screen_dis)
-		return 0;
+		return native_only();
 
 	// Draw sprites to buffer for later mixing
 	draw_sprites_buffer(screen, cliprect);
 
 	// set during transitions, could be 'disable all palette output'?
 	if (BIT(m_tcram[0x24 / 4], 17))
-		return 0;
+		return native_only();
 
 
 	// If the auto-animation mask or bits have changed search for tiles using them and mark as dirty
@@ -873,58 +949,20 @@ u32 hng64_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, cons
 	            8 bit depth?
 	*/
 
-	// 3d gets drawn next
-	// 3D palette half, same bit as spriteblendtype
-	const u16 palbase = BIT(m_tcram[0x4c / 4], 16) ? 0x800 : 0x000;
-
-	rectangle visarea = m_screen->visible_area();
-	const int ysize = visarea.bottom() - visarea.top();
-
-	if (ysize)
+	// 3d gets drawn next (with -hires3d, also at the higher resolution over
+	// the magnified layers below it)
+	bool const hires = m_hires->active();
+	if (hires)
 	{
-		const int yinc = (512 << 16) / ysize;
-
-		pen_t const* const clut_3d = &m_palette_3d->pen(0);
-		if (!(m_fbcontrol[0] & 0x01))
-		{
-			// this moves the car in the xrally selection screen the correct number of pixels to the left
-			int xscroll = (m_fbscroll[0] >> 21);
-			if (xscroll & 0x400)
-				xscroll -= 0x800;
-
-			// value is midpoint?
-			xscroll += 256;
-
-			// Blit the color buffer into the primary bitmap
-			for (int y = cliprect.top(); y <= cliprect.bottom(); y++)
-			{
-				const int realy = (((y-visarea.top()) * yinc) >> 16);
-
-				const u16 *src = &m_poly_renderer->colorBuffer3d()[((realy) & 0x1ff) * 512];
-				u32 *dst = &bitmap.pix(y, cliprect.left());
-
-				for (int x = cliprect.left(); x <= cliprect.right(); x++)
-				{
-					const u16 srcpix = src[((cliprect.left() + x) + xscroll) & 0x1ff];
-					if (srcpix & 0x07ff)
-					{
-						// format in our framebuffer is llll appp pppp pppp
-						// where l = lighting, a = alpha, p = palindex
-						// our m_palette_3d has 16 copies of the palette at different brightness levels, so we can pass directly
-						if (srcpix & 0x0800)
-						{
-							*dst = alpha_blend_r32(*dst, clut_3d[(srcpix & 0xf7ff) | palbase], 0x80);
-						}
-						else
-						{
-							*dst = clut_3d[(srcpix & 0xf7ff) | palbase];
-						}
-					}
-
-					dst++;
-				}
-			}
-		}
+		m_hires->upscale(bitmap, m_hires->frame_bitmap(), cliprect, false);
+		blit_3d(m_hires->frame_bitmap(), m_hires->scaled(cliprect), m_hires->scale());
+	}
+	blit_3d(bitmap, cliprect, 1);
+	if (hires)
+	{
+		if ((m_below.width() != bitmap.width()) || (m_below.height() != bitmap.height()))
+			m_below.allocate(bitmap.width(), bitmap.height());
+		copybitmap(m_below, bitmap, 0, 0, 0, 0, cliprect);
 	}
 
 	// tilemaps with 'priority' 0x00 - 0x0f are always above the 3d? - could bit 0x10 really be a 'relative to 3d' bit, rather than a 'relative to other tilemaps' bit?
@@ -943,6 +981,27 @@ u32 hng64_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, cons
 			if ((i & 3) == 0)
 				mixsprites_test(screen, bitmap, cliprect, (i/4)<<12, y);
 		}
+	}
+
+	if (hires)
+	{
+		// magnify what the layers above the 3D changed
+		int const scale = m_hires->scale();
+		bitmap_rgb32 &frame = m_hires->frame_bitmap();
+		for (int y = cliprect.top(); y <= cliprect.bottom(); y++)
+		{
+			u32 const *const before = &m_below.pix(y);
+			u32 const *const after = &bitmap.pix(y);
+			for (int x = cliprect.left(); x <= cliprect.right(); x++)
+			{
+				if (after[x] != before[x])
+				{
+					for (int sub = 0; sub < scale; sub++)
+						std::fill_n(&frame.pix(y * scale + sub, x * scale), scale, after[x]);
+				}
+			}
+		}
+		m_hires->frame_done(cliprect);
 	}
 
 #if HNG64_VIDEO_DEBUG
@@ -1498,6 +1557,7 @@ void hng64_state::video_start()
 
 	// Rasterizer creation
 	m_poly_renderer = std::make_unique<hng64_poly_renderer>(*this);
+	m_hires = std::make_unique<hires3d_output>(*m_screen);
 
 	// 3d information
 	m_dl = std::make_unique<u16[]>(0x100);

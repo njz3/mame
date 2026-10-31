@@ -27,7 +27,7 @@ Matériel visé, dans l'ordre :
 | 7 | Namco System 21 | winrun, driveyes | OK (winrun, driveyes ×2) | à faire |
 | 8 | Taito JC (TC0780FPA) | sidebs, sidebs2, dangcurv | OK (sidebs, sidebs2 ×2) | à faire |
 | 9 | Gaelco 3D | speedup, surfplnt, radikalb | OK (speedup, radikalb ×2) | à faire |
-| 10 | SNK HNG64 | roadedge, xrally | à faire | à faire |
+| 10 | SNK HNG64 | roadedge, xrally | OK (roadedge, xrally ×2) | à faire |
 | — | Namco System 23 | motoxgo, raceon, finfurl | quand l'émulation de base marchera | |
 
 ## Architecture
@@ -194,3 +194,13 @@ l'écraser.
   sommets multipliés par N, le tampon image et le z-buffer sont agrandis × N.
   Le tampon est rangé tête en bas, il est retourné en copiant vers l'image HD
   et échantillonné pour l'écran natif.
+- 2026-10-31 : **SNK HNG64** en logiciel HD.
+  - Tampons 3D (index, lumière, bit de mélange) de 512 × N de côté ; sommets
+    et découpage mis à l'échelle.
+  - `blit_3d()` sert pour l'écran natif (échantillonné) et pour l'image HD
+    (étirement vertical et défilement x mis à l'échelle, mélange 50 %).
+  - Couches du fond agrandies. Couches du dessus mélangées en natif ; seuls
+    les pixels qu'elles changent sont reportés en blocs.
+  - Les images sans 3D (écran coupé, transitions) sont publiées agrandies.
+  - `hng64.zip` (BIOS) remplacé par celui du partage, qui ajoute trois PROM
+    de configuration (mêmes CRC pour le reste).
