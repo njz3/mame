@@ -24,7 +24,7 @@ Matériel visé, dans l'ordre :
 | 4 | 3dfx Voodoo 1/2 | sfrush, sfrushrk, calspeed, hyprdriv, vaportrx, roadburn, thrilld, racingj | à faire | à faire |
 | 5 | Midway V-Unit | crusnusa, crusnwld, offroadc | 2D OK (crusnusa ×2) ; 3D à vérifier en démo (sommets entiers : bords natifs, textures HD) | à faire |
 | 6 | Midway Zeus 2 | crusnexo | à faire | à faire |
-| 7 | Namco System 21 | winrun, driveyes | à faire | à faire |
+| 7 | Namco System 21 | winrun, driveyes | OK (winrun, driveyes ×2) | à faire |
 | 8 | Taito JC (TC0780FPA) | sidebs, sidebs2, dangcurv | à faire | à faire |
 | 9 | Gaelco 3D | speedup, surfplnt, radikalb | à faire | à faire |
 | 10 | SNK HNG64 | roadedge, xrally | à faire | à faire |
@@ -167,3 +167,14 @@ l'écraser.
    CPU sur le tampon natif.
 4. System 21, Taito JC, Gaelco 3D, HNG64.
 5. Rendu Vulkan de System 22 et K001005 (shaders propres à chaque puce).
+- 2026-10-31 : **Namco System 21** en logiciel HD.
+  - `namcos21_3d` : tampons × N, sommets (entiers) mis à l'échelle, ce qui
+    affine les arêtes. Une copie native de la profondeur visible reste
+    disponible pour le mélange des sprites de Cyber Sled.
+  - Winning Run : mélange en index à la résolution HD. `bitmap_draw` lit la
+    2D native pour chaque pixel HD, ombres comprises, puis la conversion passe
+    par la palette ajustée (`hires3d_output::indexed_to_frame`).
+  - Driver's Eyes : sprites et mélange en natif, 3D copiée en HD. Seuls les
+    pixels que les sprites de priorité 15 modifient (ombres sur la 3D) sont
+    reportés en blocs.
+  - ROMs copiées : winrun, driveyes, namcoc65, namcoc68.

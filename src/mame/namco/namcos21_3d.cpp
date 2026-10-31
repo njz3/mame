@@ -12,6 +12,9 @@ TODO:
 #include "emu.h"
 #include "namcos21_3d.h"
 
+#include "emuopts.h"
+#include "hires3d.h"
+
 DEFINE_DEVICE_TYPE(NAMCOS21_3D, namcos21_3d_device, "namcos21_3d", "Namco System 21 3D Rasterizer")
 
 namcos21_3d_device::namcos21_3d_device(const machine_config &mconfig, const char *tag, device_t *owner, u32 clock) :
@@ -20,7 +23,11 @@ namcos21_3d_device::namcos21_3d_device(const machine_config &mconfig, const char
 	m_depth_reverse(false),
 	m_poly_frame_width(0),
 	m_poly_frame_height(0),
-	m_framebuffer_size(0)
+	m_framebuffer_size(0),
+	m_scale(1),
+	m_fb_width(0),
+	m_fb_height(0),
+	m_fb_size(0)
 {
 }
 
@@ -29,17 +36,24 @@ void namcos21_3d_device::device_start()
 	assert(m_num_palettes != 0);
 	assert(m_framebuffer_size > 0);
 
-	m_poly_framebuffer_z = std::make_unique<u16[]>(m_framebuffer_size);
-	m_poly_framebuffer_pens = std::make_unique<u16[]>(m_framebuffer_size);
+	m_scale = std::clamp(machine().options().int_value(OPTION_HIRES3D), 1, 16);
+	m_fb_width = m_poly_frame_width * m_scale;
+	m_fb_height = m_poly_frame_height * m_scale;
+	m_fb_size = m_fb_width * m_fb_height;
 
-	m_poly_framebuffer_z2 = std::make_unique<u16[]>(m_framebuffer_size);
-	m_poly_framebuffer_pens2 = std::make_unique<u16[]>(m_framebuffer_size);
+	m_poly_framebuffer_z = std::make_unique<u16[]>(m_fb_size);
+	m_poly_framebuffer_pens = std::make_unique<u16[]>(m_fb_size);
 
-	save_pointer(NAME(m_poly_framebuffer_z), m_framebuffer_size);
-	save_pointer(NAME(m_poly_framebuffer_pens), m_framebuffer_size);
+	m_poly_framebuffer_z2 = std::make_unique<u16[]>(m_fb_size);
+	m_poly_framebuffer_pens2 = std::make_unique<u16[]>(m_fb_size);
 
-	save_pointer(NAME(m_poly_framebuffer_z2), m_framebuffer_size);
-	save_pointer(NAME(m_poly_framebuffer_pens2), m_framebuffer_size);
+	m_native_z = std::make_unique<u16[]>(m_framebuffer_size);
+
+	save_pointer(NAME(m_poly_framebuffer_z), m_fb_size);
+	save_pointer(NAME(m_poly_framebuffer_pens), m_fb_size);
+
+	save_pointer(NAME(m_poly_framebuffer_z2), m_fb_size);
+	save_pointer(NAME(m_poly_framebuffer_pens2), m_fb_size);
 
 	swap_and_clear_poly_framebuffer();
 	swap_and_clear_poly_framebuffer();
@@ -52,23 +66,33 @@ void namcos21_3d_device::swap_and_clear_poly_framebuffer()
 	m_poly_framebuffer_pens.swap(m_poly_framebuffer_pens2);
 
 	// wipe work framebuffers
-	std::fill_n(m_poly_framebuffer_z.get(), m_framebuffer_size, 0x8000);
-	std::fill_n(m_poly_framebuffer_pens.get(), m_framebuffer_size, 0);
+	std::fill_n(m_poly_framebuffer_z.get(), m_fb_size, 0x8000);
+	std::fill_n(m_poly_framebuffer_pens.get(), m_fb_size, 0);
+
+	// native-size copy of the visible depth
+	if (m_scale > 1)
+	{
+		for (int y = 0; y < m_poly_frame_height; y++)
+			for (int x = 0; x < m_poly_frame_width; x++)
+				m_native_z[y * m_poly_frame_width + x] = m_poly_framebuffer_z2[size_t(y * m_scale) * m_fb_width + x * m_scale];
+	}
 }
 
-void namcos21_3d_device::copy_visible_poly_framebuffer(bitmap_ind16 &bitmap, const rectangle &cliprect)
+void namcos21_3d_device::copy_visible_poly_framebuffer(bitmap_ind16 &bitmap, const rectangle &cliprect, int scale)
 {
-	rectangle clip = { 0, m_poly_frame_width - 1, 0, m_poly_frame_height - 1 };
+	rectangle clip = { 0, m_poly_frame_width * scale - 1, 0, m_poly_frame_height * scale - 1 };
 	clip &= cliprect;
 
-	// blit the visible framebuffer
+	// blit the visible framebuffer (sampled when the destination is native
+	// and the frame buffer is larger)
+	int const step = m_scale / scale;
 	for (int sy = clip.top(); sy <= clip.bottom(); sy++)
 	{
 		u16 *const dest = &bitmap.pix(sy);
-		const u16 *const source = m_poly_framebuffer_pens2.get() + m_poly_frame_width * sy;
+		const u16 *const source = m_poly_framebuffer_pens2.get() + size_t(m_fb_width) * sy * step;
 		for (int sx = clip.left(); sx <= clip.right(); sx++)
 		{
-			const u16 pen = source[sx];
+			const u16 pen = source[sx * step];
 			if (pen)
 				dest[sx] = pen;
 		}
@@ -82,8 +106,8 @@ void namcos21_3d_device::renderscanline_flat(const edge *e1, const edge *e2, int
 	if (e1->x > e2->x)
 		std::swap(e1, e2);
 
-	u16 *dest = m_poly_framebuffer_pens.get() + sy * m_poly_frame_width;
-	u16 *zbuf = m_poly_framebuffer_z.get() + sy * m_poly_frame_width;
+	u16 *dest = m_poly_framebuffer_pens.get() + size_t(sy) * m_fb_width;
+	u16 *zbuf = m_poly_framebuffer_z.get() + size_t(sy) * m_fb_width;
 	int x0 = (int)e1->x;
 	int x1 = (int)e2->x;
 	int w = x1 - x0;
@@ -91,7 +115,7 @@ void namcos21_3d_device::renderscanline_flat(const edge *e1, const edge *e2, int
 	if (w)
 	{
 		x0 = std::max(x0, 0);
-		x1 = std::min(x1, m_poly_frame_width);
+		x1 = std::min(x1, m_fb_width);
 
 		for (int x = x0; x < x1; x++)
 		{
@@ -165,7 +189,7 @@ void namcos21_3d_device::rendertri(const n21_vertex *v0, const n21_vertex *v1, c
 				e1.z += dz1dy * crop;
 				ystart = 0;
 			}
-			yend = std::min(yend, m_poly_frame_height);
+			yend = std::min(yend, m_fb_height);
 
 			for (int y = ystart; y < yend; y++)
 			{
@@ -197,7 +221,7 @@ void namcos21_3d_device::rendertri(const n21_vertex *v0, const n21_vertex *v1, c
 				e1.z += dz1dy * crop;
 				ystart = 0;
 			}
-			yend = std::min(yend, m_poly_frame_height);
+			yend = std::min(yend, m_fb_height);
 
 			for (int y = ystart; y < yend; y++)
 			{
@@ -252,8 +276,8 @@ void namcos21_3d_device::blit_single_quad(int sx[4], int sy[4], int zcode[4], u1
 
 	for (int i = 0; i < 4; i++)
 	{
-		v[i].x = m_poly_frame_width / 2 + sx[i];
-		v[i].y = m_poly_frame_height / 2 + sy[i];
+		v[i].x = (m_poly_frame_width / 2 + sx[i]) * m_scale;
+		v[i].y = (m_poly_frame_height / 2 + sy[i]) * m_scale;
 		v[i].z = zcode[i];
 	}
 

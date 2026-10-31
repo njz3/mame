@@ -12,6 +12,7 @@
 #include "hires3d.h"
 
 #include "emuopts.h"
+#include "emupal.h"
 #include "render.h"
 #include "screen.h"
 #include "vk3d.h"
@@ -121,6 +122,65 @@ void hires3d_output::upscale(const bitmap_rgb32 &source, bitmap_rgb32 &dest, con
 				}
 			}
 		}
+	}
+}
+
+
+void hires3d_output::upscale(const bitmap_ind16 &source, bitmap_ind16 &dest, const rectangle &cliprect, int transparent_pen) const
+{
+	int const scale = m_scale;
+	int const left = cliprect.left() * scale;
+	size_t const bytes = size_t(cliprect.width()) * scale * sizeof(u16);
+	for (int y = cliprect.top(); y <= cliprect.bottom(); y++)
+	{
+		u16 const *const src = &source.pix(y);
+		if (transparent_pen < 0)
+		{
+			// magnify one row, then copy it
+			u16 *dst = &dest.pix(y * scale, left);
+			for (int x = cliprect.left(); x <= cliprect.right(); x++)
+			{
+				u16 const pixel = src[x];
+				for (int i = 0; i < scale; i++)
+					*dst++ = pixel;
+			}
+			u16 const *const first = &dest.pix(y * scale, left);
+			for (int sub = 1; sub < scale; sub++)
+				std::memcpy(&dest.pix(y * scale + sub, left), first, bytes);
+		}
+		else
+		{
+			for (int x = cliprect.left(); x <= cliprect.right(); x++)
+			{
+				u16 const pixel = src[x];
+				if (pixel != transparent_pen)
+				{
+					for (int sub = 0; sub < scale; sub++)
+					{
+						u16 *const dst = &dest.pix(y * scale + sub, x * scale);
+						for (int i = 0; i < scale; i++)
+							dst[i] = pixel;
+					}
+				}
+			}
+		}
+	}
+}
+
+
+void hires3d_output::indexed_to_frame(const bitmap_ind16 &source, const rectangle &hclip, device_palette_interface &palette)
+{
+	// an indexed screen gets its colours when it is displayed: the pens of
+	// such a palette are pen numbers, the colours are the adjusted entries
+	bitmap_rgb32 &dest = frame_bitmap();
+	rgb_t const *const colors = palette.palette()->entry_list_adjusted();
+	u32 const count = palette.entries();
+	for (int y = hclip.top(); y <= hclip.bottom(); y++)
+	{
+		u16 const *const src = &source.pix(y);
+		u32 *const dst = &dest.pix(y);
+		for (int x = hclip.left(); x <= hclip.right(); x++)
+			dst[x] = colors[(src[x] < count) ? src[x] : 0];
 	}
 }
 

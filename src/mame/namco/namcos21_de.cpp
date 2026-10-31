@@ -43,6 +43,7 @@ TODO:
 #include "sound/ymopm.h"
 
 #include "emupal.h"
+#include "hires3d.h"
 #include "screen.h"
 #include "speaker.h"
 
@@ -85,6 +86,13 @@ private:
 
 	u8 m_pcb = 0;
 	u16 m_video_enable = 0;
+
+	// -hires3d: the 3D is copied at a multiple of the native resolution, the
+	// sprites are mixed natively and magnified (only the pixels the top
+	// sprites change, since they shade the polygons underneath)
+	std::unique_ptr<hires3d_output> m_hires;
+	bitmap_ind16 m_hires_ind;
+	bitmap_ind16 m_below;
 
 	u16 video_enable_r();
 	void video_enable_w(offs_t offset, u16 data, u16 mem_mask = ~0);
@@ -306,8 +314,45 @@ u32 namco_de_pcbstack_device::screen_update(screen_device &screen, bitmap_ind16 
 	m_c355spr->build_sprite_list_and_render_sprites(cliprect); // TODO : buffered?
 
 	m_c355spr->draw(screen, bitmap, cliprect, 14);
+
+	bool const hires = m_hires->active();
+	int const scale = m_hires->scale();
+	rectangle const hclip = m_hires->scaled(cliprect);
+	if (hires)
+	{
+		if ((m_hires_ind.width() != screen.width() * scale) || (m_hires_ind.height() != screen.height() * scale))
+			m_hires_ind.allocate(screen.width() * scale, screen.height() * scale);
+		m_hires->upscale(bitmap, m_hires_ind, cliprect);
+		m_namcos21_3d->copy_visible_poly_framebuffer(m_hires_ind, hclip, scale);
+	}
+
 	m_namcos21_3d->copy_visible_poly_framebuffer(bitmap, cliprect);
+	if (hires)
+	{
+		if ((m_below.width() != bitmap.width()) || (m_below.height() != bitmap.height()))
+			m_below.allocate(bitmap.width(), bitmap.height());
+		copybitmap(m_below, bitmap, 0, 0, 0, 0, cliprect);
+	}
 	m_c355spr->draw(screen, bitmap, cliprect, 15);
+
+	if (hires)
+	{
+		for (int y = cliprect.top(); y <= cliprect.bottom(); y++)
+		{
+			u16 const *const before = &m_below.pix(y);
+			u16 const *const after = &bitmap.pix(y);
+			for (int x = cliprect.left(); x <= cliprect.right(); x++)
+			{
+				if (after[x] != before[x])
+				{
+					for (int sub = 0; sub < scale; sub++)
+						std::fill_n(&m_hires_ind.pix(y * scale + sub, x * scale), scale, after[x]);
+				}
+			}
+		}
+		m_hires->indexed_to_frame(m_hires_ind, hclip, *m_palette);
+		m_hires->frame_done(cliprect);
+	}
 
 	return 0;
 }
@@ -473,6 +518,8 @@ void namco_de_pcbstack_device::device_start()
 		m_audiobank->configure_entry(i, memregion("audiocpu")->base() + (i % max) * 0x4000);
 
 	save_item(NAME(m_video_enable));
+
+	m_hires = std::make_unique<hires3d_output>(*m_screen);
 
 	// the three stacks are linked through their C139s on fixed local ports
 	m_sci->sci_de_hack(m_pcb);

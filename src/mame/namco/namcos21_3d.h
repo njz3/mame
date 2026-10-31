@@ -29,9 +29,11 @@ public:
 	int width() { return m_poly_frame_width; }
 	int height() { return m_poly_frame_height; }
 
-	void copy_visible_poly_framebuffer(bitmap_ind16 &bitmap, const rectangle &cliprect);
+	// scale is the resolution multiple of bitmap: 1 for the native screen, or
+	// the -hires3d factor for a high-resolution frame
+	void copy_visible_poly_framebuffer(bitmap_ind16 &bitmap, const rectangle &cliprect, int scale = 1);
 	void swap_and_clear_poly_framebuffer();
-	u16 *get_visible_zbuffer() { return m_poly_framebuffer_z2.get(); }
+	u16 *get_visible_zbuffer() { return (m_scale == 1) ? m_poly_framebuffer_z2.get() : m_native_z.get(); }
 
 	void draw_direct_quad(const u16 *source, u16 color);
 	int draw_quads(const u16 *source, const u8 *pointram, const u32 ptram_size, u32 quad_idx);
@@ -69,6 +71,14 @@ private:
 	int m_poly_frame_width;
 	int m_poly_frame_height;
 	int m_framebuffer_size;
+
+	// the frame buffers are m_scale times the native size (-hires3d); the
+	// visible depth is also kept at the native size for the sprite mixer
+	int m_scale;
+	int m_fb_width;
+	int m_fb_height;
+	int m_fb_size;
+	std::unique_ptr<u16[]> m_native_z;
 };
 
 DECLARE_DEVICE_TYPE(NAMCOS21_3D, namcos21_3d_device)

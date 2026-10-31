@@ -26,6 +26,7 @@
 
 #define OPTION_HIRES3D "hires3d"
 
+class device_palette_interface;
 class screen_device;
 class vk3d_renderer;
 
@@ -55,6 +56,15 @@ public:
 	// magnify the cliprect area of a native bitmap into dest; when
 	// transparent is set, pixels with a zero alpha are skipped
 	void upscale(const bitmap_rgb32 &source, bitmap_rgb32 &dest, const rectangle &cliprect, bool transparent) const;
+
+	// same for indexed bitmaps; pixels equal to transparent_pen are skipped
+	// when it is not negative
+	void upscale(const bitmap_ind16 &source, bitmap_ind16 &dest, const rectangle &cliprect, int transparent_pen = -1) const;
+
+	// convert the hclip area of a high-resolution indexed bitmap into the
+	// frame bitmap through the palette, as the renderer does for an
+	// indexed screen
+	void indexed_to_frame(const bitmap_ind16 &source, const rectangle &hclip, device_palette_interface &palette);
 
 	// GPU renderer, created on first use; nullptr when -hires3d_renderer is
 	// software or Vulkan is not available (the driver then draws in software)

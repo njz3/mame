@@ -288,6 +288,7 @@ Filter Board
 #include "sound/ymopm.h"
 
 #include "emupal.h"
+#include "hires3d.h"
 #include "screen.h"
 #include "speaker.h"
 
@@ -393,7 +394,12 @@ private:
 
 	u32 screen_update(screen_device &screen, bitmap_ind16 &bitmap, const rectangle &cliprect);
 
-	void bitmap_draw(bitmap_ind16 &bitmap, const rectangle &cliprect);
+	void bitmap_draw(bitmap_ind16 &bitmap, const rectangle &cliprect, int scale = 1);
+
+	// -hires3d: the frame is mixed in an indexed bitmap at a multiple of the
+	// native resolution, then converted through the palette
+	std::unique_ptr<hires3d_output> m_hires;
+	bitmap_ind16 m_hires_ind;
 
 	void common_map(address_map &map) ATTR_COLD;
 	void master_map(address_map &map) ATTR_COLD;
@@ -406,6 +412,8 @@ private:
 
 void namcos21_state::video_start()
 {
+	m_hires = std::make_unique<hires3d_output>(*m_screen);
+
 	m_gpu_videoram = make_unique_clear<u8[]>(0x80000);
 	save_pointer(NAME(m_gpu_videoram), 0x80000);
 
@@ -480,7 +488,9 @@ void namcos21_state::gpu_enable_w(u8 data)
 	m_video_enable = BIT(data, 1);
 }
 
-void namcos21_state::bitmap_draw(bitmap_ind16 &bitmap, const rectangle &cliprect)
+// cliprect is native; with scale > 1 the destination is the high-resolution
+// bitmap and every pixel reads the source pixel it magnifies
+void namcos21_state::bitmap_draw(bitmap_ind16 &bitmap, const rectangle &cliprect, int scale)
 {
 	// show GPU registers & related
 #if 0
@@ -494,13 +504,14 @@ void namcos21_state::bitmap_draw(bitmap_ind16 &bitmap, const rectangle &cliprect
 	int const xscroll = m_gpu_register[0] & 0xff;
 	int const base = 0x1000 | (m_gpu_color << 8 & 0xf00);
 
-	for (int sy = cliprect.top(); sy <= cliprect.bottom(); sy++)
+	for (int dy = cliprect.top() * scale; dy < (cliprect.bottom() + 1) * scale; dy++)
 	{
+		int const sy = dy / scale;
 		u8 const *const source = &m_gpu_videoram[((yscroll + sy) & 0x3ff) * 0x200];
-		u16 *const dest = &bitmap.pix(sy);
-		for (int sx = cliprect.left(); sx <= cliprect.right(); sx++)
+		u16 *const dest = &bitmap.pix(dy);
+		for (int sx = cliprect.left() * scale; sx < (cliprect.right() + 1) * scale; sx++)
 		{
-			int const pen = source[(sx + xscroll) & 0x1ff];
+			int const pen = source[(sx / scale + xscroll) & 0x1ff];
 			switch (pen)
 			{
 			case 0xff:
@@ -538,10 +549,37 @@ u32 namcos21_state::screen_update(screen_device &screen, bitmap_ind16 &bitmap, c
 		return 0;
 	}
 
-	bitmap.fill((m_gpu_color << 8 & 0xf00) | 0xff, cliprect);
-
 	// entries 0 and 1 unused parts controls priority mixing
 	const u16 pri = (m_palette->read16_ext(1) >> 8) & 7;
+
+	if (m_hires->active())
+	{
+		int const scale = m_hires->scale();
+		rectangle const hclip = m_hires->scaled(cliprect);
+		if ((m_hires_ind.width() != screen.width() * scale) || (m_hires_ind.height() != screen.height() * scale))
+			m_hires_ind.allocate(screen.width() * scale, screen.height() * scale);
+
+		m_hires_ind.fill((m_gpu_color << 8 & 0xf00) | 0xff, hclip);
+		switch (pri)
+		{
+			case 5:
+				bitmap_draw(m_hires_ind, cliprect, scale);
+				m_namcos21_3d->copy_visible_poly_framebuffer(m_hires_ind, hclip, scale);
+				break;
+			case 0:
+				bitmap_draw(m_hires_ind, cliprect, scale);
+				break;
+			case 2:
+			default:
+				m_namcos21_3d->copy_visible_poly_framebuffer(m_hires_ind, hclip, scale);
+				bitmap_draw(m_hires_ind, cliprect, scale);
+				break;
+		}
+		m_hires->indexed_to_frame(m_hires_ind, hclip, *m_palette);
+		m_hires->frame_done(cliprect);
+	}
+
+	bitmap.fill((m_gpu_color << 8 & 0xf00) | 0xff, cliprect);
 
 	switch (pri)
 	{
