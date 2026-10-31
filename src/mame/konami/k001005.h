@@ -7,6 +7,7 @@
 
 #include "video/poly.h"
 #include "cpu/sharc/sharc.h"
+#include "k001005_vk.h"
 #include "k001006.h"
 #include "video/rgbutil.h"
 
@@ -43,6 +44,9 @@ public:
 
 	int parse_polygon(int index, uint32_t cmd);
 	void render_polygons();
+
+	// -hires3d on the GPU: the triangles are handed to it
+	void set_vulkan(std::unique_ptr<k001005_vk> &&vk) { m_vk = std::move(vk); }
 
 	template<bool UseTexture, bool UseVertexColor>
 	void draw_scanline_generic(int32_t scanline, const extent_t& extent, const k001005_polydata& extradata, int threadid);
@@ -96,6 +100,10 @@ private:
 	device_t *m_k001006;
 
 	std::unique_ptr<int[]> m_tex_mirror_table[2][8];
+
+	std::unique_ptr<k001005_vk> m_vk;
+	bool m_vk_ready = false;                // K001006 textures and palette handed over
+	void emit_vk(const k001005_polydata &extra, const vertex_t &v0, const vertex_t &v1, const vertex_t &v2, const rectangle &cliprect);
 };
 
 
@@ -122,6 +130,12 @@ public:
 	// or the -hires3d factor for a high-resolution frame
 	void draw(bitmap_rgb32 &bitmap, const rectangle &cliprect, int scale = 1);
 	void swap_buffers();
+
+	// -hires3d on the GPU: the screen is composed there from the native back
+	// and front layers and the 3D, and shown from the read-back memory;
+	// nullptr when the 3D is drawn in software or composing fails
+	bool hires_on_gpu() const;
+	bitmap_rgb32 *compose_hires(bool with_3d, const bitmap_rgb32 &back, const bitmap_rgb32 &front, const rectangle &cliprect, int scale);
 
 	uint32_t read(address_space &space, offs_t offset, uint32_t mem_mask = ~0);
 	void write(address_space &space, offs_t offset, uint32_t data, uint32_t mem_mask = ~0);

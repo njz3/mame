@@ -26,7 +26,7 @@ Matériel visé, dans l'ordre :
 |---|---|---|---|---|
 | 1 | Sega Model 1 | vr, vformula | OK (vr ×2, ×4) | OK (vr ×2, ×4) ; relecture lente |
 | 2 | Namco System 22 / Super 22 | ridgerac, ridgera2, raverace, acedrive, victlap, cybrcycc, dirtdash, alpinerd | OK (ridgerac, dirtdash ×2) | OK (5 jeux ×2) ; plus rapide que le natif |
-| 3 | Konami K001005 | gticlub, midnrun, windheat, jetwave | OK (gticlub, midnrun ×2) | à faire |
+| 3 | Konami K001005 | gticlub, midnrun, windheat, jetwave | OK (gticlub, midnrun ×2) | OK (midnrun, gticlub) ; proche du natif |
 | 4 | 3dfx Voodoo 1/2 | sfrush, sfrushrk, calspeed, hyprdriv, vaportrx, roadburn, thrilld, racingj | OK (sfrush ×2 ×4, racingj ×2, roadburn ×2) ; coûteux en CPU | OK (même image que le logiciel) ; au niveau du natif en ×2 sur roadburn |
 | 5 | Midway V-Unit | crusnusa, crusnwld, offroadc | 2D OK (crusnusa ×2) ; 3D à vérifier en démo (sommets entiers : bords natifs, textures HD) | à faire |
 | 6 | Midway Zeus 2 | crusnexo | OK (crusnexo ×2, mode démo) | à faire |
@@ -351,3 +351,32 @@ l'écraser.
     raverace 29,2 s (logiciel 101 s) ; acedrive 34,5 s (75 s) ; alpinerd
     31 s (100 s). Le GPU fait mieux que le rendu natif, qui rastérise sur
     le CPU.
+- 2026-10-31 : **Konami K001005 sur Vulkan** (`k001005_vk`).
+  - Le K001005 envoie ses triangles au GPU au lieu de les rastériser. Le
+    shader `tri.frag` reprend `draw_scanline_generic` : texels de la ROM du
+    K001006 (envoyée une fois) et sa palette (envoyée avec chaque lot),
+    miroir, bilinéaire, lumière diffuse et ambiante, brouillard, couleur par
+    sommet ou par polygone.
+  - Le z-buffer flottant du matériel devient la profondeur du GPU : le Z est
+    multiplié par 2^-40, ce qui ne change pas son ordre en flottant, avec
+    `depthClamp` puisque la puce ne coupe pas en Z.
+  - Les mélanges avec l'image (texture bilinéaire semi-transparente, puis
+    brouillard, puis mélange du polygone) sont tous linéaires en la couleur
+    de destination. Le shader calcule donc « A + K × destination » et la
+    double source du GPU fait l'addition.
+  - Deux pages et un z-buffer partagé ; l'échange de pages devient un
+    effacement. Les lots partent sans attendre (tous les 1024 triangles et à
+    chaque échange).
+  - À l'affichage HD, GTI Club, Jet Wave et Midnight Run / Winding Heat
+    font composer l'écran par le GPU : couche 2D du fond (native), pixels
+    opaques de la page 3D, couche 2D du dessus (native). L'image relue est
+    montrée sans copie. La composition n'envoie que sa propre passe, pour
+    ne pas attendre les triangles de la page en cours. Quand rien n'a changé
+    (même page, mêmes couches), l'image précédente est remontrée.
+  - Contrôle : midnrun identique au logiciel HD (0,02 % des pixels
+    au-delà de 24) ; gticlub identique sur ses écrans 2D, avec le décalage
+    d'écran (40, 28). Sa démo 3D n'a pas été atteinte : l'appui sur Test
+    pour passer « DEVICE ERROR (STEERING WHEEL) » ouvre le menu de test.
+  - Temps, midnrun 60 s émulées en ×2 : 14,3 à 17,1 s en Vulkan, 12,7 s en
+    natif, 27,5 s en logiciel. Il reste environ 1 ms d'attente par image
+    composée (composition et relecture), sur environ 1500 images composées.

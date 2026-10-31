@@ -6,6 +6,7 @@
 #include "emuopts.h"
 #include "hires3d.h"
 #include "screen.h"
+#include "vk3d.h"
 
 #include "corefloat.h"
 
@@ -126,6 +127,15 @@ void k001005_renderer::push_data(uint32_t data)
 
 void k001005_renderer::swap_buffers()
 {
+	// on the GPU, the finished page is read back while the next one is drawn
+	if (m_vk)
+	{
+		m_vk->prefetch(m_fb_page);
+		m_fb_page ^= 1;
+		m_vk->clear(m_fb_page);
+		return;
+	}
+
 	m_fb_page ^= 1;
 
 	m_fb[m_fb_page].fill(0, m_cliprect);
@@ -452,7 +462,8 @@ int k001005_renderer::parse_polygon(int index, uint32_t cmd)
 
 	while ((fifo[index] & 0xffff0000) != 0x80000000 && index < m_3dfifo_ptr)
 	{
-		k001005_polydata& extra = object_data().next();
+		k001005_polydata local{};
+		k001005_polydata& extra = m_vk ? local : object_data().next();
 
 		bool last_vertex = false;
 		bool is_quad = false;
@@ -633,7 +644,17 @@ int k001005_renderer::parse_polygon(int index, uint32_t cmd)
 		// No texture, constant color:   Z, Fog, Diffuse
 		// Texture, constant color:      Z, Fog, Diffuse, U, V, W
 		// Per-vertex color:             Z, Fog, Diffuse, U, V, W, R, G, B, A
-		if (is_quad)
+		if (m_vk)
+		{
+			if (is_quad)
+			{
+				emit_vk(extra, m_vertexb[v0], m_vertexb[v1], m_vertexb[v2], cliprect);
+				emit_vk(extra, m_vertexb[v2], m_vertexb[v3], m_vertexb[v0], cliprect);
+			}
+			else
+				emit_vk(extra, m_vertexb[v1], m_vertexb[v2], m_vertexb[v3], cliprect);
+		}
+		else if (is_quad)
 		{
 			if (has_vertex_color)
 			{
@@ -695,8 +716,68 @@ void k001005_renderer::render_polygons()
 }
 
 
+// hand a triangle to the GPU renderer with what draw_scanline_generic reads
+void k001005_renderer::emit_vk(const k001005_polydata &extra, const vertex_t &v0, const vertex_t &v1, const vertex_t &v2, const rectangle &cliprect)
+{
+	k001006_device *const k001006 = downcast<k001006_device *>(m_k001006);
+	if (!m_vk_ready)
+	{
+		// the K001006 is started by now
+		m_vk->set_texture_memory(k001006->texture_data(), k001006->texture_size());
+		m_vk->set_palette(k001006->pens());
+		m_vk_ready = true;
+	}
+	bool const has_texture = (extra.cmd & 0x18) != 0;
+	bool const has_vertex_color = BIT(extra.cmd, 8);
+
+	k001005_vk::poly p{};
+	p.texture_x = extra.texture_x * 8;
+	p.texture_y = extra.texture_y * 8;
+	p.texture_width = extra.texture_width;
+	p.texture_height = extra.texture_height;
+	p.texture_page = extra.texture_page;
+	p.texture_palette = extra.texture_palette;
+	p.mirror = extra.texture_mirror;
+	p.fog = extra.fog_enable;
+	p.bilinear = k001006->bilinear_enabled();
+	p.texture = has_texture;
+	p.vertexcolor = has_vertex_color;
+	p.fbblend = BIT(~extra.cmd, 1);
+	p.zcompare = BIT(extra.cmd, 2);
+	p.diffuse = extra.diffuse_light;
+	p.ambient = extra.ambient_light;
+	p.fogcolor = extra.fog_color;
+	p.polycolor = extra.poly_color;
+
+	k001005_vk::vertex v[3];
+	vertex_t const *const src[3] = { &v0, &v1, &v2 };
+	for (int i = 0; i < 3; i++)
+	{
+		v[i].x = src[i]->x;
+		v[i].y = src[i]->y;
+		v[i].z = src[i]->p[POLY_Z];
+		v[i].fog = src[i]->p[POLY_FOG];
+		v[i].diff = src[i]->p[POLY_DIFF];
+		v[i].u = has_texture ? src[i]->p[POLY_U] : 0.0f;
+		v[i].v = has_texture ? src[i]->p[POLY_V] : 0.0f;
+		v[i].w = has_texture ? src[i]->p[POLY_W] : 1.0f;
+		v[i].r = has_vertex_color ? src[i]->p[POLY_R] : 0.0f;
+		v[i].g = has_vertex_color ? src[i]->p[POLY_G] : 0.0f;
+		v[i].b = has_vertex_color ? src[i]->p[POLY_B] : 0.0f;
+		v[i].a = has_vertex_color ? src[i]->p[POLY_A] : 0.0f;
+	}
+	m_vk->triangle(m_fb_page, p, v, cliprect);
+}
+
+
 void k001005_renderer::draw(bitmap_rgb32 &bitmap, const rectangle &cliprect, int scale)
 {
+	if (m_vk)
+	{
+		m_vk->draw(m_fb_page ^ 1, bitmap, cliprect, m_scale / scale);
+		return;
+	}
+
 	// the destination is either native (sample every m_scale pixels) or at
 	// the frame buffer resolution (copy one to one)
 	int const step = m_scale / scale;
@@ -751,7 +832,22 @@ void k001005_device::device_start()
 
 	m_fifo = std::make_unique<uint32_t[]>(0x800);
 
-	m_renderer = std::make_unique<k001005_renderer>(*this, screen(), m_k001006, std::clamp(machine().options().int_value(OPTION_HIRES3D), 1, 16));
+	int const scale = std::clamp(machine().options().int_value(OPTION_HIRES3D), 1, 16);
+	m_renderer = std::make_unique<k001005_renderer>(*this, screen(), m_k001006, scale);
+
+	// -hires3d: on the GPU unless -hires3d_renderer is software
+	if ((scale > 1) && m_k001006 && (strcmp(machine().options().value(OPTION_HIRES3D_RENDERER), "software") != 0))
+	{
+		std::string error;
+		std::unique_ptr<k001005_vk> vk = k001005_vk::create(512 * scale, 384 * scale, error);
+		if (vk)
+		{
+			osd_printf_verbose("%s: hires3d drawn with Vulkan on %s\n", tag(), vk->device_name());
+			m_renderer->set_vulkan(std::move(vk));
+		}
+		else
+			osd_printf_verbose("%s: hires3d drawn in software (%s)\n", tag(), error);
+	}
 
 	save_pointer(NAME(m_ram[0]), 0x140000);
 	save_pointer(NAME(m_ram[1]), 0x140000);
@@ -985,4 +1081,16 @@ void k001005_device::write(address_space &space, offs_t offset, uint32_t data, u
 void k001005_device::draw(bitmap_rgb32 &bitmap, const rectangle &cliprect, int scale)
 {
 	m_renderer->draw(bitmap, cliprect, scale);
+}
+
+bool k001005_device::hires_on_gpu() const
+{
+	return m_renderer->m_vk != nullptr;
+}
+
+bitmap_rgb32 *k001005_device::compose_hires(bool with_3d, const bitmap_rgb32 &back, const bitmap_rgb32 &front, const rectangle &cliprect, int scale)
+{
+	if (!m_renderer->m_vk)
+		return nullptr;
+	return m_renderer->m_vk->compose(m_renderer->m_fb_page ^ 1, with_3d, back, front, cliprect, scale);
 }

@@ -264,6 +264,11 @@ protected:
 
 	// -hires3d: the K001005 renders at a multiple of the native resolution
 	std::unique_ptr<hires3d_output> m_hires;
+	bitmap_rgb32 m_back; // native back layer composed on the GPU
+
+	// with -hires3d on the GPU: show the native layers and the 3D composed
+	// there; false to draw the frame in software
+	bool compose_hires(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect, bool with_3d, const std::function<void (bitmap_rgb32 &)> &back, const std::function<void (bitmap_rgb32 &)> &front);
 	required_device<palette_device> m_palette;
 	required_shared_ptr<uint32_t> m_sharc_dataram;
 	required_device<konppc_device> m_konppc;
@@ -323,8 +328,30 @@ private:
 	required_device<k001006_device> m_k001006_2;
 };
 
+bool zr107_state::compose_hires(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect, bool with_3d, const std::function<void (bitmap_rgb32 &)> &back, const std::function<void (bitmap_rgb32 &)> &front)
+{
+	if (!m_hires->active() || !m_k001005->hires_on_gpu())
+		return false;
+	if ((m_back.width() != bitmap.width()) || (m_back.height() != bitmap.height()))
+		m_back.allocate(bitmap.width(), bitmap.height());
+	back(m_back);
+	bitmap.fill(0, cliprect);
+	front(bitmap);
+	bitmap_rgb32 *const frame = m_k001005->compose_hires(with_3d, m_back, bitmap, cliprect, m_hires->scale());
+	if (!frame)
+		return false;
+	m_hires->use_frame(*frame);
+	m_hires->frame_done(cliprect);
+	return true;
+}
+
 uint32_t jetwave_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect)
 {
+	if (compose_hires(screen, bitmap, cliprect, true,
+			[&] (bitmap_rgb32 &dest) { dest.fill(m_palette->pen(0), cliprect); m_k001604->draw_back_layer(screen, dest, cliprect); },
+			[&] (bitmap_rgb32 &dest) { m_k001604->draw_front_layer(screen, dest, cliprect); }))
+		return 0;
+
 	if (m_hires->active())
 	{
 		// tilemaps drawn natively and magnified around the high-resolution 3D
@@ -371,6 +398,11 @@ void midnrun_state::video_start()
 
 uint32_t midnrun_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect)
 {
+	if (compose_hires(screen, bitmap, cliprect, m_konppc->output_3d_enabled(),
+			[&] (bitmap_rgb32 &dest) { dest.fill(m_palette->pen(0), cliprect); m_k056832->tilemap_draw_dj(screen, dest, cliprect, 1, 0, 0); },
+			[&] (bitmap_rgb32 &dest) { m_k056832->tilemap_draw_dj(screen, dest, cliprect, 0, 0, 0); }))
+		return 0;
+
 	if (m_hires->active())
 	{
 		// tilemaps drawn natively and magnified around the high-resolution 3D

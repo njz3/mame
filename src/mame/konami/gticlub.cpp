@@ -350,6 +350,7 @@ protected:
 
 	// -hires3d: the K001005 renders at a multiple of the native resolution
 	std::unique_ptr<hires3d_output> m_hires;
+	bitmap_rgb32 m_back; // native back layer composed on the GPU
 
 #if DEBUG_GTI
 	uint8_t m_tick = 0;
@@ -801,6 +802,23 @@ void gticlub_state::video_start()
 
 uint32_t gticlub_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect)
 {
+	if (m_hires->active() && m_k001005->hires_on_gpu())
+	{
+		// on the GPU: the native tilemaps and the 3D are composed there
+		if ((m_back.width() != bitmap.width()) || (m_back.height() != bitmap.height()))
+			m_back.allocate(bitmap.width(), bitmap.height());
+		m_k001604[0]->draw_back_layer(screen, m_back, cliprect);
+		bitmap.fill(0, cliprect);
+		m_k001604[0]->draw_front_layer(screen, bitmap, cliprect);
+		bitmap_rgb32 *const frame = m_k001005->compose_hires(m_konppc[0].output_3d_enabled(), m_back, bitmap, cliprect, m_hires->scale());
+		if (frame)
+		{
+			m_hires->use_frame(*frame);
+			m_hires->frame_done(cliprect);
+			return 0;
+		}
+	}
+
 	if (m_hires->active())
 	{
 		// tilemaps drawn natively and magnified around the high-resolution 3D

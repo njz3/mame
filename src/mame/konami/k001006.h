@@ -24,6 +24,10 @@ public:
 
 	bool bilinear_enabled() { return m_enable_bilinear; }
 
+	// decoded texture ROM, for the GPU renderer of the K001005 (-hires3d)
+	const uint8_t *texture_data() const { return m_texrom.get(); }
+	size_t texture_size() const { return m_gfxrom.length(); }
+
 protected:
 	// device-level overrides
 	virtual void device_start() override ATTR_COLD;
