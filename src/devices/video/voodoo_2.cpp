@@ -585,7 +585,11 @@ u32 command_fifo::packet_type_5(u32 command)
 
 			m_device.renderer().wait("packet_type_5(0)");
 			for (u32 word = 0; word < count; word++)
-				m_ram[target++ & m_mask] = little_endianize_int32(read_next());
+			{
+				m_ram[target & m_mask] = little_endianize_int32(read_next());
+				m_device.hires_fbram_written((target & m_mask) * 4);
+				target++;
+			}
 			break;
 
 		// 3D LFB

@@ -64,6 +64,7 @@ static constexpr bool LOG_CMDFIFO_VERBOSE = false;
 // include register and render classes
 #include "voodoo_regs.h"
 #include "voodoo_render.h"
+#include "voodoo_vk.h"
 
 
 namespace voodoo
@@ -615,12 +616,15 @@ protected:
 	// becoming m_hires_scale rows of rowpixels * m_hires_scale pixels; the
 	// triangles and fast fills are drawn in both, the LFB writes and blits
 	// are magnified into it, and the display reads it
+	int buffer_index(u16 const *buffer) const;
 	u16 *hires_buffer(u16 const *buffer) const;
 	bool hires_fits(u16 const *buffer, s32 left, s32 right, s32 top, s32 bottom) const;
 	void hires_triangle(voodoo::poly_data const &poly, voodoo::voodoo_renderer::vertex_t const *vert);
 	void hires_fastfill(voodoo::poly_data const &poly);
 	void hires_pixel(u16 const *buffer, s32 x, s32 scry);
 	void hires_fill_rows(u16 const *buffer, u32 first, u32 count, u16 value);
+	void hires_fbram_written(u32 byteoffs);
+	void recycle_renderer();
 
 	// statistics
 	void accumulate_statistics(const voodoo::thread_stats_block &block);
@@ -662,9 +666,22 @@ protected:
 	std::unique_ptr<voodoo::shared_tables> m_shared; // shared tables
 	std::unique_ptr<voodoo::voodoo_renderer> m_renderer; // rendering helper
 
-	// high-resolution copy of the frame buffer (-hires3d)
+	// high-resolution copy of the frame buffer (-hires3d), on the GPU when
+	// Vulkan is available, otherwise in memory
 	std::unique_ptr<hires3d_output> m_hires; // output, when there is a screen
 	int m_hires_scale = 1;                   // resolution multiplier (1 = off)
+	std::unique_ptr<voodoo::voodoo_vk> m_vk; // GPU renderer
+	u64 m_hires_frame = 0;                   // last frame shown at the high resolution
+	u64 m_native_until = 0;                  // the CPU read the frame buffer: native rasterizer until this frame
+	u32 m_native_restarts = 0;               // statistics: reads that restarted the native rasterizer
+
+	// the high-resolution output was shown lately (a Voodoo that is not
+	// displayed does not draw it)
+	bool hires_wanted() const { return (m_hires_scale > 1) && (screen().frame_number() <= m_hires_frame + 2); }
+
+	// only the GPU draws: the native rasterizer is skipped while the CPU
+	// does not read the frame buffer back
+	bool gpu_only() const { return m_vk && (screen().frame_number() > m_native_until); }
 	size_t m_hires_guard = 0;                // pixels before the copy of address 0
 	size_t m_hires_size = 0;                 // pixels allocated
 	std::unique_ptr<u16[]> m_hires_fb;       // the copy

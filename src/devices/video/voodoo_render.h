@@ -355,6 +355,20 @@ public:
 	// texture-specific color combination unit
 	rgbaint_t combine_texture(voodoo::reg_texture_mode const texmode, rgbaint_t const &c_local, rgbaint_t const &c_other, s32 lod);
 
+	// state read by the GPU renderer (voodoo_vk)
+	rgb_t const *lookup() const { return m_lookup; }
+	u32 wmask() const { return m_wmask; }
+	u32 hmask() const { return m_hmask; }
+	s16 lodmin() const { return m_lodmin; }
+	s16 lodmax() const { return m_lodmax; }
+	s16 lodbias() const { return m_lodbias; }
+	u16 lodmask() const { return m_lodmask; }
+	s32 detailmax() const { return m_detailmax; }
+	s32 detailbias() const { return m_detailbias; }
+	u8 detailscale() const { return m_detailscale; }
+	u32 ram_mask() const { return m_mask; }
+	u32 lodoffset(int lod) const { return m_lodoffset[lod]; }
+
 	// return a write pointer based on the LOD, s/t coordinates, and format
 	u8 *write_ptr(u32 lod, u32 s, u32 t, u32 scale) const
 	{
@@ -417,6 +431,7 @@ struct poly_data
 	u16 cliptop, clipbottom;    // y clipping
 	u32 rowpixels;              // pixels per row of the buffers
 	s32 yorigin;                // Y origin, when the y_origin mode is on
+	bool hires;                 // -hires3d copy: kept out of the chip statistics
 
 	s32 ax, ay;                 // vertex A x,y (12.4)
 	s32 startr, startg, startb, starta; // starting R,G,B,A (12.12)
@@ -511,6 +526,10 @@ public:
 	s32 yorigin() const { return m_yorigin; }
 	u32 rowpixels() const { return m_rowpixels; }
 	u16 tmu_config() const { return m_tmu_config; }
+	u8 const *fogblend() const { return m_fogblend; }
+	u8 const *fogdelta() const { return m_fogdelta; }
+	u8 fogdelta_mask() const { return m_fogdelta_mask; }
+	u8 bilinear_mask() const { return m_bilinear_mask; }
 	std::vector<thread_stats_block> &thread_stats() { return m_thread_stats; }
 
 	// simple setters
@@ -552,6 +571,16 @@ public:
 		if (m_yorigin != yorigin)
 			wait("set_yorigin");
 		m_yorigin = yorigin;
+	}
+
+	// with -hires3d on the GPU the native rasterizer can be skipped: recycle
+	// the poly_data, textures and palettes allocated for what was not queued
+	void recycle()
+	{
+		wait("recycle");
+		object_data().reset();
+		m_textures.reset();
+		m_palettes.reset();
 	}
 
 	// update the rowpixels
@@ -611,6 +640,7 @@ private:
 	voodoo::rasterizer_info *m_generic_rasterizer[16];
 	std::list<voodoo::rasterizer_info> m_rasterizer_list;
 	std::vector<thread_stats_block> m_thread_stats;
+	std::vector<thread_stats_block> m_hires_stats; // what the -hires3d copies count, thrown away
 };
 
 }

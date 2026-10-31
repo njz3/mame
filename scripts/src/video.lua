@@ -1851,6 +1851,8 @@ if VIDEOS["VOODOO"] then
 		MAME_DIR .. "src/devices/video/voodoo_regs.h",
 		MAME_DIR .. "src/devices/video/voodoo_render.cpp",
 		MAME_DIR .. "src/devices/video/voodoo_render.h",
+		MAME_DIR .. "src/devices/video/voodoo_vk.cpp",
+		MAME_DIR .. "src/devices/video/voodoo_vk.h",
 	}
 end
 

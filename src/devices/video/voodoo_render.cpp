@@ -1245,7 +1245,8 @@ voodoo_renderer::voodoo_renderer(running_machine &machine, u16 tmu_config, const
 	m_tmu1_reg(tmu1_regs),
 	m_rgb565(rgb565),
 	m_fogdelta_mask(0xff),
-	m_thread_stats(WORK_MAX_THREADS)
+	m_thread_stats(WORK_MAX_THREADS),
+	m_hires_stats(WORK_MAX_THREADS)
 {
 	// empty the hash table
 	std::fill(std::begin(m_raster_hash), std::end(m_raster_hash), nullptr);
@@ -1290,6 +1291,7 @@ poly_data &voodoo_renderer::alloc_poly()
 	poly.raster.compute(m_fbi_reg, m_tmu0_reg, m_tmu1_reg);
 	poly.rowpixels = m_rowpixels;
 	poly.yorigin = m_yorigin;
+	poly.hires = false;
 	return poly;
 }
 
@@ -2223,7 +2225,7 @@ void voodoo_renderer::pixel_pipeline(thread_stats_block &threadstats, u16 *dest,
 template<u32 GenericFlags, u32 FbzCp, u32 FbzMode, u32 AlphaMode, u32 FogMode, u32 TexMode0, u32 TexMode1>
 void voodoo_renderer::rasterizer(s32 y, const voodoo_renderer::extent_t &extent, const poly_data &poly, int threadid)
 {
-	thread_stats_block &threadstats = m_thread_stats[threadid];
+	thread_stats_block &threadstats = poly.hires ? m_hires_stats[threadid] : m_thread_stats[threadid];
 	reg_texture_mode const texmode0(TexMode0, (GenericFlags & rasterizer_params::GENERIC_TEX0) ? poly.raster.texmode0() : 0);
 	reg_texture_mode const texmode1(TexMode1, (GenericFlags & rasterizer_params::GENERIC_TEX1) ? poly.raster.texmode1() : 0);
 	reg_fbz_colorpath const fbzcp(FbzCp, poly.raster.fbzcp());
@@ -2422,7 +2424,7 @@ void voodoo_renderer::rasterizer(s32 y, const voodoo_renderer::extent_t &extent,
 
 void voodoo_renderer::rasterizer_fastfill(s32 y, const voodoo_renderer::extent_t &extent, const poly_data &poly, int threadid)
 {
-	thread_stats_block &threadstats = m_thread_stats[threadid];
+	thread_stats_block &threadstats = poly.hires ? m_hires_stats[threadid] : m_thread_stats[threadid];
 	auto const fbzmode = poly.raster.fbzmode();
 	s32 startx = extent.startx;
 	s32 stopx = extent.stopx;

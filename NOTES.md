@@ -27,7 +27,7 @@ Matériel visé, dans l'ordre :
 | 1 | Sega Model 1 | vr, vformula | OK (vr ×2, ×4) | OK (vr ×2, ×4) ; relecture lente |
 | 2 | Namco System 22 / Super 22 | ridgerac, ridgera2, raverace, acedrive, victlap, cybrcycc, dirtdash, alpinerd | OK (ridgerac, dirtdash ×2) | à faire |
 | 3 | Konami K001005 | gticlub, midnrun, windheat, jetwave | OK (gticlub, midnrun ×2) | à faire |
-| 4 | 3dfx Voodoo 1/2 | sfrush, sfrushrk, calspeed, hyprdriv, vaportrx, roadburn, thrilld, racingj | OK (sfrush ×2 ×4, racingj ×2, roadburn ×2) ; coûteux en CPU | à faire (prochaine étape) |
+| 4 | 3dfx Voodoo 1/2 | sfrush, sfrushrk, calspeed, hyprdriv, vaportrx, roadburn, thrilld, racingj | OK (sfrush ×2 ×4, racingj ×2, roadburn ×2) ; coûteux en CPU | OK (même image que le logiciel) ; relecture à optimiser |
 | 5 | Midway V-Unit | crusnusa, crusnwld, offroadc | 2D OK (crusnusa ×2) ; 3D à vérifier en démo (sommets entiers : bords natifs, textures HD) | à faire |
 | 6 | Midway Zeus 2 | crusnexo | OK (crusnexo ×2, mode démo) | à faire |
 | 7 | Namco System 21 | winrun, driveyes | OK (winrun, driveyes ×2) | à faire |
@@ -77,6 +77,19 @@ Matériel visé, dans l'ordre :
 
      (`C:\VulkanSDK\1.4.363.0\Bin\glslc.exe`)
    - Plus tard : partage direct de la texture avec bgfx, sans relecture.
+5. **Contexte Vulkan commun** : `src/emu/vk3d_context.{h,cpp}` charge Vulkan,
+   crée le périphérique (avec les options demandées que le GPU possède) et
+   fournit les aides tampons, images et shaders. `vk3d_renderer` et les rendus
+   propres à une puce en héritent.
+6. **Rendus GPU propres à une puce** : quand le modèle « lots de triangles »
+   de `vk3d_renderer` ne suffit pas, la puce a son propre rendu qui traduit
+   ses commandes. Premier cas : `src/devices/video/voodoo_vk.{h,cpp}` (voir le
+   journal Voodoo). Ses shaders sont dans `src/devices/video/voodoo_vk_shaders`
+   et se compilent avec `-I .` pour `layout.h`, partagé avec le C++ :
+
+   ```
+   glslc --target-env=vulkan1.0 -O -mfmt=num -I . -o X.spv.inc X
+   ```
 
 ## Compilation
 
@@ -243,3 +256,42 @@ l'écraser.
     ×2, 80 s de roadburn en 85 s en natif et 232 s en ×2. D'où la priorité au
     rendu Vulkan pour cette puce.
   - ROMs copiées : sfrush (+ CHD), racingj, roadburn (+ CHD).
+- 2026-10-31 : **3dfx Voodoo 1/2 sur Vulkan** (`voodoo_vk`), choisi par
+  défaut quand Vulkan est disponible (`-hires3d_renderer software` garde le
+  rendu logiciel HD).
+  - Le pipeline de pixels du Voodoo tourne dans un fragment shader
+    (`tri.frag`). Il refait les valeurs itérées de chaque pixel avec la même
+    arithmétique entière que le rastériseur logiciel (entiers 64 bits pour W
+    et les textures), et lit les texels directement dans la mémoire des TMU,
+    copiée sur le GPU page par page quand elle change. Il n'y a donc pas de
+    cache de textures. Les tables de texels, palettes et tables de brouillard
+    sont dans un tampon de consultation. Test de profondeur, mélange
+    (« couleur avant brouillard » par double source) et ordre des pixels
+    passent par les étages fixes du GPU.
+  - Une image par tampon couleur et une image de profondeur, × N.
+    Remplissages rapides et blits en effacements, écritures LFB en blocs.
+  - Lots envoyés au GPU sans attendre (tous les 256 triangles), sur un
+    anneau de 3. L'affichage attend la fin du lot courant et relit le tampon
+    avant. La table de couleurs (CLUT) est appliquée en relisant, sauf si
+    elle est linéaire.
+  - Quand Vulkan dessine, le rastériseur natif est sauté, sauf pendant
+    2 secondes après une lecture du tampon d'image par le CPU (sfrush en fait
+    au démarrage, roadburn aussi). Le temps émulé du Voodoo vient alors de
+    l'aire des triangles : la démo peut se décaler d'un peu par rapport au
+    rendu natif, mais l'image d'une scène donnée est la même.
+  - Un Voodoo qui n'est pas affiché ne dessine pas sa copie HD (Racing Jam
+    en a deux).
+  - Les paquets CMDFIFO de type 5 qui écrivent directement dans la mémoire
+    d'image du Voodoo 2 sont recopiés en HD (logiciel et Vulkan).
+  - Contrôle : écart moyen avec le logiciel HD de 0 à 1,6 sur 255, aucun
+    pixel au-delà de 24 (0,01 % sur roadburn). Les différences viennent du
+    tramage 565 que le GPU ne fait pas.
+  - Temps sur le portable (RTX 3050), ×2, très variables d'un essai à
+    l'autre : racingj 110 s émulées en 127 s (logiciel 194 s, natif 109 s),
+    roadburn 30 s en 21,7 s (natif 14 s), sfrush 60 s en 22,7 s (natif 18 s).
+    L'attente du GPU suit le nombre de pixels (3,4 ms par image en ×2,
+    10,6 ms en ×4 sur roadburn) : c'est surtout la relecture de l'image et sa
+    copie dans le bitmap.
+  - À faire : relecture sans attente (une image de retard, en option) et
+    bitmap HD pris directement dans la mémoire relue, puis partage de l'image
+    avec l'affichage (bgfx) pour supprimer la relecture.

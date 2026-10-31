@@ -15,10 +15,7 @@
 #include "emu.h"
 #include "vk3d.h"
 
-#include "modules/lib/osdlib.h"
-
-#define VK_NO_PROTOTYPES
-#include "bgfx/3rdparty/khronos/vulkan-local/vulkan.h"
+#include "vk3d_context.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -49,94 +46,8 @@ constexpr u32 MAX_TEXTURES = 256;
 } // anonymous namespace
 
 
-#define VK3D_INSTANCE_FUNCTIONS(X) \
-	X(vkDestroyInstance) \
-	X(vkEnumeratePhysicalDevices) \
-	X(vkGetPhysicalDeviceProperties) \
-	X(vkGetPhysicalDeviceQueueFamilyProperties) \
-	X(vkGetPhysicalDeviceMemoryProperties) \
-	X(vkCreateDevice) \
-	X(vkGetDeviceProcAddr)
-
-#define VK3D_DEVICE_FUNCTIONS(X) \
-	X(vkDestroyDevice) \
-	X(vkDeviceWaitIdle) \
-	X(vkGetDeviceQueue) \
-	X(vkQueueSubmit) \
-	X(vkCreateCommandPool) \
-	X(vkDestroyCommandPool) \
-	X(vkAllocateCommandBuffers) \
-	X(vkResetCommandBuffer) \
-	X(vkBeginCommandBuffer) \
-	X(vkEndCommandBuffer) \
-	X(vkCreateFence) \
-	X(vkDestroyFence) \
-	X(vkWaitForFences) \
-	X(vkResetFences) \
-	X(vkAllocateMemory) \
-	X(vkFreeMemory) \
-	X(vkMapMemory) \
-	X(vkInvalidateMappedMemoryRanges) \
-	X(vkCreateBuffer) \
-	X(vkDestroyBuffer) \
-	X(vkGetBufferMemoryRequirements) \
-	X(vkBindBufferMemory) \
-	X(vkCreateImage) \
-	X(vkDestroyImage) \
-	X(vkGetImageMemoryRequirements) \
-	X(vkBindImageMemory) \
-	X(vkCreateImageView) \
-	X(vkDestroyImageView) \
-	X(vkCreateSampler) \
-	X(vkDestroySampler) \
-	X(vkCreateRenderPass) \
-	X(vkDestroyRenderPass) \
-	X(vkCreateFramebuffer) \
-	X(vkDestroyFramebuffer) \
-	X(vkCreateShaderModule) \
-	X(vkDestroyShaderModule) \
-	X(vkCreateDescriptorSetLayout) \
-	X(vkDestroyDescriptorSetLayout) \
-	X(vkCreateDescriptorPool) \
-	X(vkDestroyDescriptorPool) \
-	X(vkAllocateDescriptorSets) \
-	X(vkUpdateDescriptorSets) \
-	X(vkCreatePipelineLayout) \
-	X(vkDestroyPipelineLayout) \
-	X(vkCreateGraphicsPipelines) \
-	X(vkDestroyPipeline) \
-	X(vkCmdPipelineBarrier) \
-	X(vkCmdCopyBufferToImage) \
-	X(vkCmdCopyImageToBuffer) \
-	X(vkCmdBeginRenderPass) \
-	X(vkCmdEndRenderPass) \
-	X(vkCmdBindPipeline) \
-	X(vkCmdBindDescriptorSets) \
-	X(vkCmdBindVertexBuffers) \
-	X(vkCmdSetViewport) \
-	X(vkCmdSetScissor) \
-	X(vkCmdPushConstants) \
-	X(vkCmdDraw)
-
-
-struct vk3d_renderer::impl
+struct vk3d_renderer::impl : vk3d_context
 {
-	struct buffer
-	{
-		VkBuffer handle = VK_NULL_HANDLE;
-		VkDeviceMemory memory = VK_NULL_HANDLE;
-		void *mapped = nullptr;
-		VkDeviceSize size = 0;
-		bool coherent = true;
-	};
-
-	struct image
-	{
-		VkImage handle = VK_NULL_HANDLE;
-		VkDeviceMemory memory = VK_NULL_HANDLE;
-		VkImageView view = VK_NULL_HANDLE;
-	};
-
 	struct texture
 	{
 		image img;
@@ -157,24 +68,6 @@ struct vk3d_renderer::impl
 		u32 count;
 	};
 
-	osd::dynamic_module::ptr library;
-	PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr = nullptr;
-	PFN_vkCreateInstance vkCreateInstance = nullptr;
-#define VK3D_DECLARE(f) PFN_##f f = nullptr;
-	VK3D_INSTANCE_FUNCTIONS(VK3D_DECLARE)
-	VK3D_DEVICE_FUNCTIONS(VK3D_DECLARE)
-#undef VK3D_DECLARE
-
-	VkInstance instance = VK_NULL_HANDLE;
-	VkPhysicalDevice physical = VK_NULL_HANDLE;
-	VkPhysicalDeviceMemoryProperties memory_properties{};
-	std::string name;
-	VkDevice device = VK_NULL_HANDLE;
-	VkQueue queue = VK_NULL_HANDLE;
-	VkCommandPool command_pool = VK_NULL_HANDLE;
-	VkCommandBuffer command_buffer = VK_NULL_HANDLE;
-	VkFence fence = VK_NULL_HANDLE;
-
 	VkRenderPass render_pass = VK_NULL_HANDLE;
 	VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
 	VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
@@ -182,7 +75,6 @@ struct vk3d_renderer::impl
 	VkSampler sampler_nearest = VK_NULL_HANDLE;
 	VkSampler sampler_linear = VK_NULL_HANDLE;
 	VkShaderModule vertex_shared = VK_NULL_HANDLE;
-	std::vector<VkShaderModule> modules;
 	std::vector<VkPipeline> pipelines;
 	std::vector<texture> textures;
 	int dummy_texture = -1;
@@ -203,14 +95,6 @@ struct vk3d_renderer::impl
 	~impl();
 
 	bool init(std::string &error);
-	bool load_instance_functions();
-	bool load_device_functions();
-	int find_memory(u32 type_bits, VkMemoryPropertyFlags required, VkMemoryPropertyFlags preferred) const;
-	bool create_buffer(buffer &buf, VkDeviceSize size, VkBufferUsageFlags usage, bool readback_cached);
-	void destroy_buffer(buffer &buf);
-	bool create_image(image &img, int w, int h, VkFormat format, VkImageUsageFlags usage, VkImageAspectFlags aspect);
-	void destroy_image(image &img);
-	VkShaderModule create_module(u32 const *code, size_t size);
 	int create_pipeline(pipeline_desc const &desc);
 	bool create_target(int w, int h);
 	void destroy_target();
@@ -235,8 +119,6 @@ vk3d_renderer::impl::~impl()
 		}
 		for (VkPipeline pipeline : pipelines)
 			vkDestroyPipeline(device, pipeline, nullptr);
-		for (VkShaderModule module : modules)
-			vkDestroyShaderModule(device, module, nullptr);
 		if (sampler_nearest)
 			vkDestroySampler(device, sampler_nearest, nullptr);
 		if (sampler_linear)
@@ -249,141 +131,14 @@ vk3d_renderer::impl::~impl()
 			vkDestroyDescriptorSetLayout(device, set_layout, nullptr);
 		if (render_pass)
 			vkDestroyRenderPass(device, render_pass, nullptr);
-		if (fence)
-			vkDestroyFence(device, fence, nullptr);
-		if (command_pool)
-			vkDestroyCommandPool(device, command_pool, nullptr);
-		vkDestroyDevice(device, nullptr);
 	}
-	if (instance && vkDestroyInstance)
-		vkDestroyInstance(instance, nullptr);
-}
-
-
-bool vk3d_renderer::impl::load_instance_functions()
-{
-#define VK3D_LOAD(f) f = reinterpret_cast<PFN_##f>(vkGetInstanceProcAddr(instance, #f)); if (!f) return false;
-	VK3D_INSTANCE_FUNCTIONS(VK3D_LOAD)
-#undef VK3D_LOAD
-	return true;
-}
-
-
-bool vk3d_renderer::impl::load_device_functions()
-{
-#define VK3D_LOAD(f) f = reinterpret_cast<PFN_##f>(vkGetDeviceProcAddr(device, #f)); if (!f) return false;
-	VK3D_DEVICE_FUNCTIONS(VK3D_LOAD)
-#undef VK3D_LOAD
-	return true;
 }
 
 
 bool vk3d_renderer::impl::init(std::string &error)
 {
-	library = osd::dynamic_module::open({ "vulkan-1.dll", "libvulkan.so.1", "libvulkan.so", "libvulkan.1.dylib" });
-	vkGetInstanceProcAddr = library->bind<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
-	if (!vkGetInstanceProcAddr)
-	{
-		error = "Vulkan loader not found";
+	if (!init_device(error))
 		return false;
-	}
-	vkCreateInstance = reinterpret_cast<PFN_vkCreateInstance>(vkGetInstanceProcAddr(VK_NULL_HANDLE, "vkCreateInstance"));
-	if (!vkCreateInstance)
-	{
-		error = "vkCreateInstance not found";
-		return false;
-	}
-
-	VkApplicationInfo app{ VK_STRUCTURE_TYPE_APPLICATION_INFO };
-	app.pApplicationName = "mame3d";
-	app.pEngineName = "mame3d";
-	app.apiVersion = VK_API_VERSION_1_0;
-	VkInstanceCreateInfo instance_info{ VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
-	instance_info.pApplicationInfo = &app;
-	if (vkCreateInstance(&instance_info, nullptr, &instance) != VK_SUCCESS)
-	{
-		error = "vkCreateInstance failed";
-		return false;
-	}
-	if (!load_instance_functions())
-	{
-		error = "missing Vulkan instance functions";
-		return false;
-	}
-
-	// pick a device with a graphics queue, preferring a discrete GPU
-	u32 count = 0;
-	vkEnumeratePhysicalDevices(instance, &count, nullptr);
-	std::vector<VkPhysicalDevice> devices(count);
-	vkEnumeratePhysicalDevices(instance, &count, devices.data());
-	u32 queue_family = 0;
-	int best_score = -1;
-	for (VkPhysicalDevice candidate : devices)
-	{
-		u32 family_count = 0;
-		vkGetPhysicalDeviceQueueFamilyProperties(candidate, &family_count, nullptr);
-		std::vector<VkQueueFamilyProperties> families(family_count);
-		vkGetPhysicalDeviceQueueFamilyProperties(candidate, &family_count, families.data());
-		for (u32 i = 0; i < family_count; i++)
-		{
-			if (!(families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT))
-				continue;
-			VkPhysicalDeviceProperties properties;
-			vkGetPhysicalDeviceProperties(candidate, &properties);
-			int const score = (properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) ? 2 :
-					(properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) ? 1 : 0;
-			if (score > best_score)
-			{
-				best_score = score;
-				physical = candidate;
-				queue_family = i;
-				name = properties.deviceName;
-			}
-			break;
-		}
-	}
-	if (!physical)
-	{
-		error = "no Vulkan device with a graphics queue";
-		return false;
-	}
-	vkGetPhysicalDeviceMemoryProperties(physical, &memory_properties);
-
-	float const priority = 1.0f;
-	VkDeviceQueueCreateInfo queue_info{ VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO };
-	queue_info.queueFamilyIndex = queue_family;
-	queue_info.queueCount = 1;
-	queue_info.pQueuePriorities = &priority;
-	VkDeviceCreateInfo device_info{ VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
-	device_info.queueCreateInfoCount = 1;
-	device_info.pQueueCreateInfos = &queue_info;
-	if (vkCreateDevice(physical, &device_info, nullptr, &device) != VK_SUCCESS)
-	{
-		error = "vkCreateDevice failed";
-		return false;
-	}
-	if (!load_device_functions())
-	{
-		// the device can only be destroyed with every function loaded
-		if (vkDestroyDevice)
-			vkDestroyDevice(device, nullptr);
-		vkDestroyDevice = nullptr;
-		error = "missing Vulkan device functions";
-		return false;
-	}
-	vkGetDeviceQueue(device, queue_family, 0, &queue);
-
-	VkCommandPoolCreateInfo pool_info{ VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
-	pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-	pool_info.queueFamilyIndex = queue_family;
-	vkCreateCommandPool(device, &pool_info, nullptr, &command_pool);
-	VkCommandBufferAllocateInfo alloc_info{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
-	alloc_info.commandPool = command_pool;
-	alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-	alloc_info.commandBufferCount = 1;
-	vkAllocateCommandBuffers(device, &alloc_info, &command_buffer);
-	VkFenceCreateInfo fence_info{ VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
-	vkCreateFence(device, &fence_info, nullptr, &fence);
 
 	// render pass: colour kept for the copy-out, depth discarded
 	VkAttachmentDescription attachments[2]{};
@@ -509,126 +264,6 @@ bool vk3d_renderer::impl::init(std::string &error)
 		return false;
 	}
 	return true;
-}
-
-
-int vk3d_renderer::impl::find_memory(u32 type_bits, VkMemoryPropertyFlags required, VkMemoryPropertyFlags preferred) const
-{
-	int fallback = -1;
-	for (u32 i = 0; i < memory_properties.memoryTypeCount; i++)
-	{
-		VkMemoryPropertyFlags const flags = memory_properties.memoryTypes[i].propertyFlags;
-		if (!(type_bits & (1U << i)) || ((flags & required) != required))
-			continue;
-		if ((flags & preferred) == preferred)
-			return i;
-		if (fallback < 0)
-			fallback = i;
-	}
-	return fallback;
-}
-
-
-bool vk3d_renderer::impl::create_buffer(buffer &buf, VkDeviceSize size, VkBufferUsageFlags usage, bool readback_cached)
-{
-	VkBufferCreateInfo info{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
-	info.size = size;
-	info.usage = usage;
-	info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-	if (vkCreateBuffer(device, &info, nullptr, &buf.handle) != VK_SUCCESS)
-		return false;
-	VkMemoryRequirements requirements;
-	vkGetBufferMemoryRequirements(device, buf.handle, &requirements);
-
-	// host writes want coherent memory; the read-back is much faster cached
-	VkMemoryPropertyFlags const required = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
-	VkMemoryPropertyFlags const preferred = readback_cached
-			? (VK_MEMORY_PROPERTY_HOST_CACHED_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
-			: VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-	int const type = find_memory(requirements.memoryTypeBits, required, preferred);
-	if (type < 0)
-		return false;
-	buf.coherent = (memory_properties.memoryTypes[type].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
-	VkMemoryAllocateInfo alloc{ VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
-	alloc.allocationSize = requirements.size;
-	alloc.memoryTypeIndex = type;
-	if (vkAllocateMemory(device, &alloc, nullptr, &buf.memory) != VK_SUCCESS)
-		return false;
-	vkBindBufferMemory(device, buf.handle, buf.memory, 0);
-	if (vkMapMemory(device, buf.memory, 0, VK_WHOLE_SIZE, 0, &buf.mapped) != VK_SUCCESS)
-		return false;
-	buf.size = size;
-	return true;
-}
-
-
-void vk3d_renderer::impl::destroy_buffer(buffer &buf)
-{
-	if (buf.handle)
-		vkDestroyBuffer(device, buf.handle, nullptr);
-	if (buf.memory)
-		vkFreeMemory(device, buf.memory, nullptr); // unmaps it
-	buf = buffer();
-}
-
-
-bool vk3d_renderer::impl::create_image(image &img, int w, int h, VkFormat format, VkImageUsageFlags usage, VkImageAspectFlags aspect)
-{
-	VkImageCreateInfo info{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
-	info.imageType = VK_IMAGE_TYPE_2D;
-	info.format = format;
-	info.extent = { u32(w), u32(h), 1 };
-	info.mipLevels = 1;
-	info.arrayLayers = 1;
-	info.samples = VK_SAMPLE_COUNT_1_BIT;
-	info.tiling = VK_IMAGE_TILING_OPTIMAL;
-	info.usage = usage;
-	info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-	info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-	if (vkCreateImage(device, &info, nullptr, &img.handle) != VK_SUCCESS)
-		return false;
-	VkMemoryRequirements requirements;
-	vkGetImageMemoryRequirements(device, img.handle, &requirements);
-	int const type = find_memory(requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-	if (type < 0)
-		return false;
-	VkMemoryAllocateInfo alloc{ VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
-	alloc.allocationSize = requirements.size;
-	alloc.memoryTypeIndex = type;
-	if (vkAllocateMemory(device, &alloc, nullptr, &img.memory) != VK_SUCCESS)
-		return false;
-	vkBindImageMemory(device, img.handle, img.memory, 0);
-	VkImageViewCreateInfo view{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
-	view.image = img.handle;
-	view.viewType = VK_IMAGE_VIEW_TYPE_2D;
-	view.format = format;
-	view.subresourceRange = { aspect, 0, 1, 0, 1 };
-	return vkCreateImageView(device, &view, nullptr, &img.view) == VK_SUCCESS;
-}
-
-
-void vk3d_renderer::impl::destroy_image(image &img)
-{
-	if (img.view)
-		vkDestroyImageView(device, img.view, nullptr);
-	if (img.handle)
-		vkDestroyImage(device, img.handle, nullptr);
-	if (img.memory)
-		vkFreeMemory(device, img.memory, nullptr);
-	img = image();
-}
-
-
-VkShaderModule vk3d_renderer::impl::create_module(u32 const *code, size_t size)
-{
-	VkShaderModuleCreateInfo info{ VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
-	info.codeSize = size;
-	info.pCode = code;
-	VkShaderModule module = VK_NULL_HANDLE;
-	if (vkCreateShaderModule(device, &info, nullptr, &module) != VK_SUCCESS)
-		return VK_NULL_HANDLE;
-	modules.push_back(module);
-	return module;
 }
 
 
