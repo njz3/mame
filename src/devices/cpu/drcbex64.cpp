@@ -294,6 +294,13 @@ u32 float_register_map[REG_F_COUNT] =
 #endif
 };
 
+// bytes the entry point uses to preserve the XMM registers above
+#ifdef _WIN32
+constexpr int XMM_SAVE_SIZE = 10 * 16;
+#else
+constexpr int XMM_SAVE_SIZE = 0;
+#endif
+
 // condition mapping table
 const CondCode condition_map[uml::COND_MAX - uml::COND_Z] =
 {
@@ -1164,8 +1171,14 @@ drcbe_x64::drcbe_x64(drcuml_state &drcuml, device_t &device, drc_cache &cache, u
 	a.emit_prolog(frame);
 	a.emit_args_assignment(frame, args);
 
-	a.sub(rsp, 40);
+	a.sub(rsp, 40 + XMM_SAVE_SIZE);
 	a.mov(MABS(&m_near.stacksave), rsp);
+
+	// the UML float registers live in XMM6-XMM15 on Windows, which the
+	// calling convention requires to be preserved: save them above the
+	// scratch area (a multiple of 16 bytes, so the stack alignment holds)
+	for (int i = 0; i < XMM_SAVE_SIZE / 16; i++)
+		a.movdqu(ptr(rsp, 40 + 16 * i), xmm(6 + i));
 
 	// save MXCSR with flags masked out
 	a.stmxcsr(MABS(&m_near.ssemode));
@@ -1202,7 +1215,9 @@ drcbe_x64::drcbe_x64(drcuml_state &drcuml, device_t &device, drc_cache &cache, u
 	a.ldmxcsr(MABS(&m_near.ssemode));
 	a.bind(norestore);
 	a.mov(rsp, MABS(&m_near.stacksave));
-	a.add(rsp, 40);
+	for (int i = 0; i < XMM_SAVE_SIZE / 16; i++)
+		a.movdqu(xmm(6 + i), ptr(rsp, 40 + 16 * i));
+	a.add(rsp, 40 + XMM_SAVE_SIZE);
 	a.emit_epilog(frame);
 
 	// generate a no code point
