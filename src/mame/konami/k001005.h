@@ -33,13 +33,13 @@ class k001005_renderer : public poly_manager<float, k001005_polydata, 10>
 	friend class k001005_device;
 
 public:
-	k001005_renderer(device_t &parent, screen_device &screen, device_t *k001006);
+	k001005_renderer(device_t &parent, screen_device &screen, device_t *k001006, int scale);
 
 	void reset();
 	void push_data(uint32_t data);
 	void swap_buffers();
 	bool fifo_filled();
-	void draw(bitmap_rgb32 &bitmap, const rectangle &cliprect);
+	void draw(bitmap_rgb32 &bitmap, const rectangle &cliprect, int scale);
 
 	int parse_polygon(int index, uint32_t cmd);
 	void render_polygons();
@@ -59,10 +59,12 @@ public:
 	static constexpr int POLY_A = 9;
 
 private:
+	// the frame buffers are m_scale times the native 512x384 (-hires3d)
 	bitmap_rgb32 m_fb[2];
 	bitmap_ind32 m_zb;
 	rectangle m_cliprect;
 	int m_fb_page;
+	int m_scale;
 
 	std::unique_ptr<uint32_t []> m_3dfifo;
 	int m_3dfifo_ptr;
@@ -116,7 +118,9 @@ public:
 
 	template <typename T> void set_texel_tag(T &&tag) { m_k001006.set_tag(std::forward<T>(tag)); }
 
-	void draw(bitmap_rgb32 &bitmap, const rectangle &cliprect);
+	// scale is the resolution multiple of bitmap: 1 for the native screen,
+	// or the -hires3d factor for a high-resolution frame
+	void draw(bitmap_rgb32 &bitmap, const rectangle &cliprect, int scale = 1);
 	void swap_buffers();
 
 	uint32_t read(address_space &space, offs_t offset, uint32_t mem_mask = ~0);

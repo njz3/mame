@@ -13,6 +13,7 @@
 
 #include "emuopts.h"
 #include "fileio.h"
+#include "hires3d.h"
 #include "main.h"
 #include "render.h"
 #include "rendutil.h"
@@ -1269,7 +1270,9 @@ bool screen_device::video_output_update()
 				{
 					create_composited_bitmap();
 				}
-				m_texture[m_curbitmap]->set_bitmap(m_bitmap[m_curbitmap], m_visarea, m_bitmap[m_curbitmap].texformat());
+				// a driver drawing at a higher internal resolution replaces the native bitmap
+				if (!hires3d_output::update_texture(*this, *m_texture[m_curbitmap]))
+					m_texture[m_curbitmap]->set_bitmap(m_bitmap[m_curbitmap], m_visarea, m_bitmap[m_curbitmap].texformat());
 				m_curtexture = m_curbitmap;
 				m_curbitmap = 1 - m_curbitmap;
 			}

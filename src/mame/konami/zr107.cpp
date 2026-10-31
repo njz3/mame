@@ -188,6 +188,7 @@ Check drivers/gticlub.cpp for details on the bottom board.
 #include "sound/k056800.h"
 
 #include "emupal.h"
+#include "hires3d.h"
 #include "speaker.h"
 
 #define LOG_SYSREG (1 << 1)
@@ -260,6 +261,9 @@ protected:
 	required_device<k001005_device> m_k001005;
 	required_device<k001006_device> m_k001006_1;
 	required_device<screen_device> m_screen;
+
+	// -hires3d: the K001005 renders at a multiple of the native resolution
+	std::unique_ptr<hires3d_output> m_hires;
 	required_device<palette_device> m_palette;
 	required_shared_ptr<uint32_t> m_sharc_dataram;
 	required_device<konppc_device> m_konppc;
@@ -321,6 +325,21 @@ private:
 
 uint32_t jetwave_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect)
 {
+	if (m_hires->active())
+	{
+		// tilemaps drawn natively and magnified around the high-resolution 3D
+		bitmap_rgb32 &hires = m_hires->frame_bitmap();
+		bitmap.fill(m_palette->pen(0), cliprect);
+		m_k001604->draw_back_layer(screen, bitmap, cliprect);
+		m_hires->upscale(bitmap, hires, cliprect, false);
+		m_k001005->draw(hires, m_hires->scaled(cliprect), m_hires->scale());
+		bitmap.fill(0, cliprect);
+		m_k001604->draw_front_layer(screen, bitmap, cliprect);
+		m_hires->upscale(bitmap, hires, cliprect, true);
+		m_hires->frame_done(cliprect);
+		return 0;
+	}
+
 	bitmap.fill(m_palette->pen(0), cliprect);
 
 	m_k001604->draw_back_layer(screen, bitmap, cliprect);
@@ -352,6 +371,22 @@ void midnrun_state::video_start()
 
 uint32_t midnrun_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect)
 {
+	if (m_hires->active())
+	{
+		// tilemaps drawn natively and magnified around the high-resolution 3D
+		bitmap_rgb32 &hires = m_hires->frame_bitmap();
+		bitmap.fill(m_palette->pen(0), cliprect);
+		m_k056832->tilemap_draw_dj(screen, bitmap, cliprect, 1, 0, 0);
+		m_hires->upscale(bitmap, hires, cliprect, false);
+		if (m_konppc->output_3d_enabled())
+			m_k001005->draw(hires, m_hires->scaled(cliprect), m_hires->scale());
+		bitmap.fill(0, cliprect);
+		m_k056832->tilemap_draw_dj(screen, bitmap, cliprect, 0, 0, 0);
+		m_hires->upscale(bitmap, hires, cliprect, true);
+		m_hires->frame_done(cliprect);
+		return 0;
+	}
+
 	bitmap.fill(m_palette->pen(0), cliprect);
 
 	m_k056832->tilemap_draw_dj(screen, bitmap, cliprect, 1, 0, 0);
@@ -507,6 +542,8 @@ void zr107_state::machine_start()
 	m_maincpu->ppcdrc_add_fastram(0x00000000, 0x000fffff, false, m_workram);
 
 	m_ccu_vcth = m_ccu_vctl = 0;
+
+	m_hires = std::make_unique<hires3d_output>(*m_screen);
 
 	save_item(NAME(m_ccu_vcth));
 	save_item(NAME(m_ccu_vctl));

@@ -13,6 +13,8 @@
 
 #include "drivenum.h"
 #include "hashfile.h"
+#include "hires3d.h"
+#include "vk3d.h"
 #include "main.h"
 #include "softlist_dev.h"
 
@@ -109,6 +111,8 @@ const options_entry emu_options::s_option_entries[] =
 	{ OPTION_INTOVERSCAN ";ios",                         "0",         core_options::option_type::BOOLEAN,    "allow overscan on integer scaled targets"},
 	{ OPTION_INTSCALEX ";sx",                            "0",         core_options::option_type::INTEGER,    "set horizontal integer scale factor"},
 	{ OPTION_INTSCALEY ";sy",                            "0",         core_options::option_type::INTEGER,    "set vertical integer scale factor"},
+	{ OPTION_HIRES3D "(1-16)",                           "1",         core_options::option_type::INTEGER,    "internal resolution multiplier for emulated 3D hardware that supports it (1 = native)"},
+	{ OPTION_HIRES3D_RENDERER,                           "auto",      core_options::option_type::STRING,     "renderer for -hires3d: auto (Vulkan when available), vulkan or software"},
 
 	// rotation options
 	{ nullptr,                                           nullptr,     core_options::option_type::HEADER,     "CORE ROTATION OPTIONS" },

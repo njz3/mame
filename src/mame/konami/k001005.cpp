@@ -2,6 +2,9 @@
 // copyright-holders:David Haywood
 #include "emu.h"
 #include "k001005.h"
+
+#include "emuopts.h"
+#include "hires3d.h"
 #include "screen.h"
 
 #include "corefloat.h"
@@ -22,13 +25,14 @@
 
 */
 
-k001005_renderer::k001005_renderer(device_t &parent, screen_device &screen, device_t *k001006)
+k001005_renderer::k001005_renderer(device_t &parent, screen_device &screen, device_t *k001006, int scale)
 	: poly_manager<float, k001005_polydata, 10>(screen.machine())
+	, m_scale(scale)
 {
 	m_k001006 = k001006;
 
-	int const width = 512;
-	int const height = 384;
+	int const width = 512 * scale;
+	int const height = 384 * scale;
 
 	m_fb[0].allocate(width, height);
 	m_fb[1].allocate(width, height);
@@ -401,12 +405,16 @@ int k001005_renderer::parse_polygon(int index, uint32_t cmd)
 	render_delegate rd_scan_vertex_color_tex = render_delegate(&k001005_renderer::draw_scanline_generic<true, true>, this);
 	render_delegate rd_scan_color = render_delegate(&k001005_renderer::draw_scanline_generic<false, false>, this);
 
-	int const viewport_min_x = std::clamp(256 + m_viewport_min_x + m_viewport_center_x, m_cliprect.min_x, m_cliprect.max_x);
-	int const viewport_max_x = std::clamp(256 + m_viewport_max_x + m_viewport_center_x + 1, m_cliprect.min_x, m_cliprect.max_x);
-	int const viewport_min_y = std::clamp(200 + m_viewport_min_y - m_viewport_center_y, m_cliprect.min_y, m_cliprect.max_y);
-	int const viewport_max_y = std::clamp(200 + m_viewport_max_y - m_viewport_center_y + 1, m_cliprect.min_y, m_cliprect.max_y);
+	// viewport in native pixels, scaled below
+	int const native_max_x = m_cliprect.max_x / m_scale;
+	int const native_max_y = m_cliprect.max_y / m_scale;
+	int const viewport_min_x = std::clamp(256 + m_viewport_min_x + m_viewport_center_x, 0, native_max_x);
+	int const viewport_max_x = std::clamp(256 + m_viewport_max_x + m_viewport_center_x + 1, 0, native_max_x);
+	int const viewport_min_y = std::clamp(200 + m_viewport_min_y - m_viewport_center_y, 0, native_max_y);
+	int const viewport_max_y = std::clamp(200 + m_viewport_max_y - m_viewport_center_y + 1, 0, native_max_y);
 
-	rectangle cliprect(viewport_min_x, viewport_max_x, viewport_min_y, viewport_max_y);
+	rectangle cliprect(viewport_min_x * m_scale, viewport_max_x * m_scale + m_scale - 1, viewport_min_y * m_scale, viewport_max_y * m_scale + m_scale - 1);
+	cliprect &= m_cliprect;
 
 	int const start_index = index;
 
@@ -464,8 +472,8 @@ int k001005_renderer::parse_polygon(int index, uint32_t cmd)
 			int y = (fifo[index] >> 16) & 0x1fff;
 			y |= ((y & 0x1000) ? 0xffffe000 : 0);
 
-			m_vertexb[m_vertexb_ptr].x = ((float)(x) / 16.0f) + 256.0f;
-			m_vertexb[m_vertexb_ptr].y = ((float)(-y) / 16.0f) + 200.0f;
+			m_vertexb[m_vertexb_ptr].x = (((float)(x) / 16.0f) + 256.0f) * m_scale;
+			m_vertexb[m_vertexb_ptr].y = (((float)(-y) / 16.0f) + 200.0f) * m_scale;
 
 			is_quad = BIT(fifo[index], 14);
 			last_vertex = BIT(fifo[index], 15);
@@ -687,18 +695,28 @@ void k001005_renderer::render_polygons()
 }
 
 
-void k001005_renderer::draw(bitmap_rgb32 &bitmap, const rectangle &cliprect)
+void k001005_renderer::draw(bitmap_rgb32 &bitmap, const rectangle &cliprect, int scale)
 {
+	// the destination is either native (sample every m_scale pixels) or at
+	// the frame buffer resolution (copy one to one)
+	int const step = m_scale / scale;
+	rectangle const fbclip = m_fb[m_fb_page ^ 1].cliprect();
 	for (int j = cliprect.min_y; j <= cliprect.max_y; j++)
 	{
+		int const sy = (j - cliprect.min_y) * step;
+		if (sy > fbclip.max_y)
+			break;
 		uint32_t *const bmp = &bitmap.pix(j);
-		uint32_t const *const src = &m_fb[m_fb_page ^ 1].pix(j - cliprect.min_y);
+		uint32_t const *const src = &m_fb[m_fb_page ^ 1].pix(sy);
 
 		for (int i = cliprect.min_x; i <= cliprect.max_x; i++)
 		{
-			if (src[i - cliprect.min_x] & 0xff000000)
+			int const sx = (i - cliprect.min_x) * step;
+			if (sx > fbclip.max_x)
+				break;
+			if (src[sx] & 0xff000000)
 			{
-				bmp[i] = src[i - cliprect.min_x];
+				bmp[i] = src[sx];
 			}
 		}
 	}
@@ -733,7 +751,7 @@ void k001005_device::device_start()
 
 	m_fifo = std::make_unique<uint32_t[]>(0x800);
 
-	m_renderer = std::make_unique<k001005_renderer>(*this, screen(), m_k001006);
+	m_renderer = std::make_unique<k001005_renderer>(*this, screen(), m_k001006, std::clamp(machine().options().int_value(OPTION_HIRES3D), 1, 16));
 
 	save_pointer(NAME(m_ram[0]), 0x140000);
 	save_pointer(NAME(m_ram[1]), 0x140000);
@@ -964,7 +982,7 @@ void k001005_device::write(address_space &space, offs_t offset, uint32_t data, u
 
 }
 
-void k001005_device::draw(bitmap_rgb32 &bitmap, const rectangle &cliprect)
+void k001005_device::draw(bitmap_rgb32 &bitmap, const rectangle &cliprect, int scale)
 {
-	m_renderer->draw(bitmap, cliprect);
+	m_renderer->draw(bitmap, cliprect, scale);
 }

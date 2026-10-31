@@ -24,6 +24,7 @@
 #include "video/poly.h"
 
 #include "emupal.h"
+#include "hires3d.h"
 #include "screen.h"
 #include "tilemap.h"
 
@@ -154,7 +155,8 @@ class namcos22_renderer : public poly_manager<poly3d_t, namcos22_object_data, 4>
 public:
 	namcos22_renderer(namcos22_state &state);
 
-	void render_scene(screen_device &screen, bitmap_rgb32 &bitmap);
+	// scale > 1 draws at that multiple of the native resolution (-hires3d)
+	void render_scene(screen_device &screen, bitmap_rgb32 &bitmap, bitmap_ind8 &primap, int scale);
 	struct namcos22_scenenode *new_scenenode(running_machine &machine, u32 zsort, namcos22_scenenode_type type);
 
 	void init();
@@ -166,6 +168,10 @@ private:
 	struct namcos22_scenenode *m_scenenode_cur;
 	std::list<namcos22_scenenode> m_scenenode_alloc;
 	rectangle m_cliprect;
+	bitmap_ind8 *m_primap = nullptr;
+	int m_scale = 1;
+
+	rectangle scaled(const rectangle &r) const { return rectangle(r.left() * m_scale, (r.right() + 1) * m_scale - 1, r.top() * m_scale, (r.bottom() + 1) * m_scale - 1); }
 
 	static u8 nthbyte(const u32 *src, int n) { return util::big_endian_cast<u8>(src)[n]; }
 	static u16 nthword(const u32 *src, int n) { return util::big_endian_cast<u16>(src)[n]; }
@@ -396,12 +402,13 @@ protected:
 	void draw_polygons();
 	void draw_sprites();
 	void draw_sprite_group(const u32 *src, const u32 *attr, int num_sprites, int deltax, int deltay, bool y_lowres);
-	void namcos22_mix_text_layer(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect);
+	void namcos22_mix_text_layer(bitmap_rgb32 &bitmap, bitmap_ind8 &pri, const rectangle &clip, int scale);
 
 	void install_c74_speedup();
 
 	TILE_GET_INFO_MEMBER(get_text_tile_info);
-	virtual void draw_text_layer(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect);
+	virtual void draw_text_layer(screen_device &screen, bitmap_rgb32 &bitmap, bitmap_ind8 &pri, const rectangle &cliprect, int scale);
+	void merge_text_priority(screen_device &screen, bitmap_ind8 &pri, const rectangle &cliprect, int scale);
 	void update_text_rowscroll();
 	void apply_text_scroll();
 	u32 screen_update_namcos22(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect);
@@ -494,6 +501,12 @@ protected:
 	std::unique_ptr<u8[]> m_dirtypal;
 	std::unique_ptr<bitmap_ind16> m_mix_bitmap;
 
+	// -hires3d: polygons and sprites are drawn at a multiple of the native
+	// resolution with their own priority map, the text layer natively
+	std::unique_ptr<hires3d_output> m_hires;
+	bitmap_ind8 m_hires_pri;
+	int begin_screen_update(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect, bitmap_rgb32 *&dest, bitmap_ind8 *&pri, rectangle &clip);
+
 	tilemap_t *m_text_tilemap;
 	u16 m_tilemapattr[8] = { };
 	u16 m_rowscroll[480] = { };
@@ -549,13 +562,13 @@ protected:
 	virtual void machine_start() override ATTR_COLD;
 
 	virtual void init_tables() override;
-	virtual void draw_text_layer(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect) override;
+	virtual void draw_text_layer(screen_device &screen, bitmap_rgb32 &bitmap, bitmap_ind8 &pri, const rectangle &cliprect, int scale) override;
 
 	void install_130_speedup();
 	void install_141_speedup();
 
 	void recalc_czram();
-	void namcos22s_mix_text_layer(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect, int prival);
+	void namcos22s_mix_text_layer(bitmap_rgb32 &bitmap, bitmap_ind8 &pri, const rectangle &clip, int prival, int scale);
 	u32 screen_update_namcos22s(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect);
 
 	void namcos22s_czattr_w(offs_t offset, u16 data, u16 mem_mask = ~0);

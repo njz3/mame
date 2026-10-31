@@ -242,6 +242,7 @@ Hang Pilot (uses an unknown but similar video board)                12W         
 #include "video/voodoo.h"
 
 #include "emupal.h"
+#include "hires3d.h"
 #include "layout/generic.h"
 #include "speaker.h"
 
@@ -337,6 +338,8 @@ public:
 	void gticlub(machine_config &config) ATTR_COLD;
 
 protected:
+	virtual void video_start() override ATTR_COLD;
+
 	uint32_t screen_update(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect);
 
 	void gticlub_map(address_map &map) ATTR_COLD;
@@ -344,6 +347,9 @@ protected:
 
 	required_device<k001005_device> m_k001005;
 	required_device_array<k001006_device, 2> m_k001006;
+
+	// -hires3d: the K001005 renders at a multiple of the native resolution
+	std::unique_ptr<hires3d_output> m_hires;
 
 #if DEBUG_GTI
 	uint8_t m_tick = 0;
@@ -787,8 +793,28 @@ void gticlub_base_state::machine_reset()
 	m_sound_irq_enabled = false;
 }
 
+void gticlub_state::video_start()
+{
+	m_hires = std::make_unique<hires3d_output>(*subdevice<screen_device>("screen"));
+}
+
 uint32_t gticlub_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect)
 {
+	if (m_hires->active())
+	{
+		// tilemaps drawn natively and magnified around the high-resolution 3D
+		bitmap_rgb32 &hires = m_hires->frame_bitmap();
+		m_k001604[0]->draw_back_layer(screen, bitmap, cliprect);
+		m_hires->upscale(bitmap, hires, cliprect, false);
+		if (m_konppc[0].output_3d_enabled())
+			m_k001005->draw(hires, m_hires->scaled(cliprect), m_hires->scale());
+		bitmap.fill(0, cliprect);
+		m_k001604[0]->draw_front_layer(screen, bitmap, cliprect);
+		m_hires->upscale(bitmap, hires, cliprect, true);
+		m_hires->frame_done(cliprect);
+		return 0;
+	}
+
 	m_k001604[0]->draw_back_layer(screen, bitmap, cliprect);
 
 	if (m_konppc[0].output_3d_enabled())

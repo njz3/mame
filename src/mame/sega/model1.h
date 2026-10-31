@@ -21,11 +21,13 @@
 #include "machine/timer.h"
 
 #include "emupal.h"
+#include "hires3d.h"
 #include "screen.h"
 
 #include <glm/vec3.hpp>
 
 #include <functional>
+#include <vector>
 
 class model1_state : public driver_device
 {
@@ -70,6 +72,7 @@ public:
 	struct spoint_t
 	{
 		int32_t x = 0, y = 0;
+		float fx = 0, fy = 0; // unrounded screen position, for high-resolution rendering
 	};
 
 	struct point_t
@@ -356,10 +359,24 @@ protected:
 	// near-black); bright HUD features still occlude them.  Snapshot the HUD
 	// before the above-HUD pass and restore the feature pixels afterwards.
 	int m_overlay_stride = 0;
-	std::unique_ptr<uint8_t[]>  m_overlay_block;
-	std::unique_ptr<uint32_t[]> m_overlay_hud_snapshot;
+	std::vector<uint8_t>  m_overlay_block;
+	std::vector<uint32_t> m_overlay_hud_snapshot;
 	void build_overlay_mask(bitmap_rgb32 &bitmap, const rectangle &cliprect);
 	void apply_overlay_stencil(bitmap_rgb32 &bitmap, const rectangle &cliprect);
+
+	// high-resolution output (-hires3d): the 3D is rasterized at m_hires_scale
+	// times the native resolution, the tilemaps are drawn natively and magnified
+	std::unique_ptr<hires3d_output> m_hires;
+	int m_hires_scale = 1;
+	bool m_above_hud_seen = false;
+	void screen_update_hires(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect);
+
+	// with Vulkan, the below-HUD quads become GPU triangles and the tilemap
+	// layers GPU textures; the above-HUD pass stays in software on the result
+	vk3d_renderer *m_vk = nullptr; // owned by m_hires
+	bool m_vk_collect = false;
+	int m_vk_layer[2] = { -1, -1 };
+	void vk_draw_quad(const quad_t &q) const;
 
 	required_shared_ptr<uint16_t> m_paletteram16;
 	required_device<nvram_device> m_nvram;

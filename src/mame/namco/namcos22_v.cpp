@@ -302,6 +302,8 @@ void namcos22_renderer::poly3d_drawquad(screen_device &screen, bitmap_rgb32 &bit
 	const int cy = 240 + node->data.quad.vy;
 	m_cliprect.set(cx + node->data.quad.vl, cx - node->data.quad.vr - 1, cy + node->data.quad.vu, cy - node->data.quad.vd - 1);
 	m_cliprect &= screen.visible_area();
+	m_cliprect = scaled(m_cliprect);
+	const poly3d_t scale = m_scale;
 
 	// non-direct case: project and z-clip
 	if (!direct)
@@ -324,8 +326,8 @@ void namcos22_renderer::poly3d_drawquad(screen_device &screen, bitmap_rgb32 &bit
 		for (vertnum = 0; vertnum < clipverts; vertnum++)
 		{
 			const poly3d_t ooz = 1.0 / clipv[vertnum].p[0];
-			clipv[vertnum].x = cx + clipv[vertnum].x * ooz;
-			clipv[vertnum].y = cy - clipv[vertnum].y * ooz;
+			clipv[vertnum].x = (cx + clipv[vertnum].x * ooz) * scale;
+			clipv[vertnum].y = (cy - clipv[vertnum].y * ooz) * scale;
 			clipv[vertnum].p[0] = ooz;
 			clipv[vertnum].p[1] = (clipv[vertnum].p[1] + 0.5) * ooz; // u
 			clipv[vertnum].p[2] = (clipv[vertnum].p[2] + 0.5) * ooz; // v
@@ -340,8 +342,8 @@ void namcos22_renderer::poly3d_drawquad(screen_device &screen, bitmap_rgb32 &bit
 		for (vertnum = 0; vertnum < 4; vertnum++)
 		{
 			const poly3d_t ooz = node->data.quad.v[vertnum].z;
-			clipv[vertnum].x = cx + node->data.quad.v[vertnum].x;
-			clipv[vertnum].y = cy - node->data.quad.v[vertnum].y;
+			clipv[vertnum].x = (cx + node->data.quad.v[vertnum].x) * scale;
+			clipv[vertnum].y = (cy - node->data.quad.v[vertnum].y) * scale;
 			clipv[vertnum].p[0] = ooz;
 			clipv[vertnum].p[1] = (node->data.quad.v[vertnum].u + 0.5) * ooz;
 			clipv[vertnum].p[2] = (node->data.quad.v[vertnum].v + 0.5) * ooz;
@@ -366,7 +368,7 @@ void namcos22_renderer::poly3d_drawquad(screen_device &screen, bitmap_rgb32 &bit
 	extra.fogfactor = 0;
 
 	extra.pens = &m_state.m_palette->pen((color & 0x7f) << 8);
-	extra.primap = &screen.priority();
+	extra.primap = m_primap;
 	extra.bn = node->data.quad.texturebank;
 	extra.cmode = node->data.quad.cmode;
 	extra.prioverchar = ((node->data.quad.cmode & 7) == 1) ? 1 : 0;
@@ -472,12 +474,13 @@ void namcos22_renderer::poly3d_drawsprite(
 	const int sprite_screen_width = (scalex * gfx->width() + 0x8000) >> 16;
 	if (sprite_screen_width && sprite_screen_height)
 	{
-		const poly3d_t fsx = sx;
-		const poly3d_t fsy = sy;
+		const poly3d_t scale = m_scale;
+		const poly3d_t fsx = sx * scale;
+		const poly3d_t fsy = sy * scale;
 		const poly3d_t fwidth = gfx->width();
 		const poly3d_t fheight = gfx->height();
-		const poly3d_t fsw = sprite_screen_width;
-		const poly3d_t fsh = sprite_screen_height;
+		const poly3d_t fsw = sprite_screen_width * scale;
+		const poly3d_t fsh = sprite_screen_height * scale;
 
 		namcos22_object_data &extra = object_data().next();
 		vertex_t vert[4];
@@ -490,7 +493,7 @@ void namcos22_renderer::poly3d_drawsprite(
 		extra.flipx = flipx;
 		extra.flipy = flipy;
 		extra.pens = &m_state.m_palette->pen(gfx->colorbase() + gfx->granularity() * (color & 0x7f));
-		extra.primap = &screen.priority();
+		extra.primap = m_primap;
 		extra.source = gfx->get_data(code % gfx->elements());
 
 		vert[0].x = fsx;
@@ -537,6 +540,7 @@ void namcos22_renderer::render_sprite(screen_device &screen, bitmap_rgb32 &bitma
 	// scene clip
 	m_cliprect.set(node->data.sprite.cx_min, node->data.sprite.cx_max, node->data.sprite.cy_min, node->data.sprite.cy_max);
 	m_cliprect &= screen.visible_area();
+	m_cliprect = scaled(m_cliprect);
 
 	int offset = 0;
 
@@ -672,8 +676,11 @@ void namcos22_renderer::render_scene_nodes(screen_device &screen, bitmap_rgb32 &
 	}
 }
 
-void namcos22_renderer::render_scene(screen_device &screen, bitmap_rgb32 &bitmap)
+void namcos22_renderer::render_scene(screen_device &screen, bitmap_rgb32 &bitmap, bitmap_ind8 &primap, int scale)
 {
+	m_primap = &primap;
+	m_scale = scale;
+
 	struct namcos22_scenenode *node = &m_scenenode_root;
 	for (int i = NAMCOS22_RADIX_BUCKETS - 1; i >= 0; i--)
 	{
@@ -2048,7 +2055,7 @@ void namcos22s_state::spotram_w(offs_t offset, u16 data, u16 mem_mask)
 	}
 }
 
-void namcos22s_state::namcos22s_mix_text_layer(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect, int prival)
+void namcos22s_state::namcos22s_mix_text_layer(bitmap_rgb32 &bitmap, bitmap_ind8 &pri, const rectangle &clip, int prival, int scale)
 {
 	const pen_t *pens = m_palette->pens();
 	u8 pen = 0;
@@ -2070,21 +2077,24 @@ void namcos22s_state::namcos22s_mix_text_layer(screen_device &screen, bitmap_rgb
 	const int fade_factor = 0xff - m_screen_fade_factor;
 	rgbaint_t fade_color(0, m_screen_fade_r, m_screen_fade_g, m_screen_fade_b);
 
-	// mix textlayer with poly/sprites
-	for (int y = cliprect.top(); y <= cliprect.bottom(); y++)
+	// mix textlayer with poly/sprites (the text layer is native, the
+	// destination and its priority map may be at a higher resolution)
+	for (int y = clip.top(); y <= clip.bottom(); y++)
 	{
-		u16 const *const src = &m_mix_bitmap->pix(y);
+		u16 const *const src = &m_mix_bitmap->pix(y / scale);
 		u32 *const dest = &bitmap.pix(y);
-		u8 const *const pri = &screen.priority().pix(y);
-		for (int x = cliprect.left(); x <= cliprect.right(); x++)
+		u8 const *const prirow = &pri.pix(y);
+		for (int x = clip.left(); x <= clip.right(); x++)
 		{
+			const u16 text = src[x / scale];
+
 			// skip if transparent or under poly/sprite
-			if (pri[x] == prival)
+			if (prirow[x] == prival)
 			{
 				if (spot_enabled)
 				{
 					// remap pen
-					pen = m_spotram[(src[x] << 2 | spot_palbase) & 0x3ff];
+					pen = m_spotram[(text << 2 | spot_palbase) & 0x3ff];
 					if (pen < 0x80)
 						rgb.set(pens[pen | m_text_palbase]);
 					else if (prival != 6)
@@ -2092,8 +2102,8 @@ void namcos22s_state::namcos22s_mix_text_layer(screen_device &screen, bitmap_rgb
 				}
 				else
 				{
-					rgb.set(pens[src[x]]);
-					pen = src[x];
+					rgb.set(pens[text]);
+					pen = text;
 				}
 
 				// spot pen becomes brightness factor
@@ -2120,7 +2130,7 @@ void namcos22s_state::namcos22s_mix_text_layer(screen_device &screen, bitmap_rgb
 	}
 }
 
-void namcos22_state::namcos22_mix_text_layer(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect)
+void namcos22_state::namcos22_mix_text_layer(bitmap_rgb32 &bitmap, bitmap_ind8 &pri, const rectangle &clip, int scale)
 {
 	const pen_t *pens = m_palette->pens();
 	const u8 *rlut = &m_gamma_proms[0x000];
@@ -2143,21 +2153,23 @@ void namcos22_state::namcos22_mix_text_layer(screen_device &screen, bitmap_rgb32
 		rgbaint_t(0, nthbyte(m_mixer, 0x0e), nthbyte(m_mixer, 0x0f), nthbyte(m_mixer, 0x10))  // pen e
 	};
 
-	// mix textlayer with polys + do final mix
-	for (int y = cliprect.top(); y <= cliprect.bottom(); y++)
+	// mix textlayer with polys + do final mix (the text layer is native, the
+	// destination and its priority map may be at a higher resolution)
+	for (int y = clip.top(); y <= clip.bottom(); y++)
 	{
-		u16 const *const src = &m_mix_bitmap->pix(y);
+		u16 const *const src = &m_mix_bitmap->pix(y / scale);
 		u32 *const dest = &bitmap.pix(y);
-		u8 const *const pri = &screen.priority().pix(y);
-		for (int x = cliprect.left(); x <= cliprect.right(); x++)
+		u8 const *const prirow = &pri.pix(y);
+		for (int x = clip.left(); x <= clip.right(); x++)
 		{
 			u32 pixel = dest[x];
+			const u16 text = src[x / scale];
 
 			// skip if transparent or under poly
-			if (pri[x] == 2)
+			if (prirow[x] == 2)
 			{
 				// apply shadow
-				u8 pen = src[x];
+				u8 pen = text;
 				if (shadow_enabled && pen >= 0xfc && pen <= 0xfe)
 				{
 					rgbaint_t rgb(pixel);
@@ -2165,7 +2177,7 @@ void namcos22_state::namcos22_mix_text_layer(screen_device &screen, bitmap_rgb32
 					pixel = rgb.to_rgba();
 				}
 				else
-					pixel = pens[src[x]];
+					pixel = pens[text];
 			}
 
 			// apply global fade
@@ -2221,22 +2233,45 @@ void namcos22_state::apply_text_scroll()
 		m_text_tilemap->set_scrollx((i + scroll_y + 4) & 0x3ff, m_rowscroll[i]);
 }
 
-void namcos22_state::draw_text_layer(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect)
+static rectangle scale_rect(const rectangle &r, int scale)
+{
+	return rectangle(r.left() * scale, (r.right() + 1) * scale - 1, r.top() * scale, (r.bottom() + 1) * scale - 1);
+}
+
+// The text tilemap always marks the native priority map; at a higher
+// resolution, copy its marks into the high-resolution map.
+void namcos22_state::merge_text_priority(screen_device &screen, bitmap_ind8 &pri, const rectangle &cliprect, int scale)
+{
+	if (scale == 1)
+		return;
+	const rectangle clip = scale_rect(cliprect, scale);
+	for (int y = clip.top(); y <= clip.bottom(); y++)
+	{
+		u8 const *const src = &screen.priority().pix(y / scale);
+		u8 *const dest = &pri.pix(y);
+		for (int x = clip.left(); x <= clip.right(); x++)
+			dest[x] |= src[x / scale];
+	}
+}
+
+void namcos22_state::draw_text_layer(screen_device &screen, bitmap_rgb32 &bitmap, bitmap_ind8 &pri, const rectangle &cliprect, int scale)
 {
 	apply_text_scroll();
 	m_text_tilemap->set_palette_offset(m_text_palbase);
 
 	m_text_tilemap->draw(screen, *m_mix_bitmap, cliprect, 0, 2, 3);
-	namcos22_mix_text_layer(screen, bitmap, cliprect);
+	merge_text_priority(screen, pri, cliprect, scale);
+	namcos22_mix_text_layer(bitmap, pri, scale_rect(cliprect, scale), scale);
 }
 
-void namcos22s_state::draw_text_layer(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect)
+void namcos22s_state::draw_text_layer(screen_device &screen, bitmap_rgb32 &bitmap, bitmap_ind8 &pri, const rectangle &cliprect, int scale)
 {
 	apply_text_scroll();
 	m_text_tilemap->set_palette_offset(m_text_palbase);
 
 	m_text_tilemap->draw(screen, *m_mix_bitmap, cliprect, 0, 4, 4);
-	namcos22s_mix_text_layer(screen, bitmap, cliprect, 4);
+	merge_text_priority(screen, pri, cliprect, scale);
+	namcos22s_mix_text_layer(bitmap, pri, scale_rect(cliprect, scale), 4, scale);
 }
 
 
@@ -2528,13 +2563,40 @@ void namcos22_state::update_mixer()
 
 /*********************************************************************************************/
 
+// Pick the destination: the screen bitmap, or with -hires3d a bitmap at a
+// multiple of the native resolution and its own priority map.  Returns the
+// scale factor.
+int namcos22_state::begin_screen_update(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect, bitmap_rgb32 *&dest, bitmap_ind8 *&pri, rectangle &clip)
+{
+	screen.priority().fill(0, cliprect);
+	if (!m_hires->active())
+	{
+		dest = &bitmap;
+		pri = &screen.priority();
+		clip = cliprect;
+		return 1;
+	}
+
+	dest = &m_hires->frame_bitmap();
+	if ((m_hires_pri.width() != dest->width()) || (m_hires_pri.height() != dest->height()))
+		m_hires_pri.allocate(dest->width(), dest->height());
+	pri = &m_hires_pri;
+	clip = m_hires->scaled(cliprect);
+	pri->fill(0, clip);
+	return m_hires->scale();
+}
+
 u32 namcos22s_state::screen_update_namcos22s(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect)
 {
 	render_frame_active();
 	update_mixer();
 	update_palette();
 	recalc_czram();
-	screen.priority().fill(0, cliprect);
+
+	bitmap_rgb32 *dest;
+	bitmap_ind8 *pri;
+	rectangle clip;
+	const int scale = begin_screen_update(screen, bitmap, cliprect, dest, pri, clip);
 
 	// background color
 	rgbaint_t bg_color(0, nthbyte(m_mixer, 0x08), nthbyte(m_mixer, 0x09), nthbyte(m_mixer, 0x0a));
@@ -2543,33 +2605,35 @@ u32 namcos22s_state::screen_update_namcos22s(screen_device &screen, bitmap_rgb32
 		rgbaint_t fade_color(0, m_screen_fade_r, m_screen_fade_g, m_screen_fade_b);
 		bg_color.blend(fade_color, 0xff - m_screen_fade_factor);
 	}
-	bitmap.fill(bg_color.to_rgba(), cliprect);
+	dest->fill(bg_color.to_rgba(), clip);
 
 	// layers
 	const u8 layer = nthbyte(m_mixer, 0x1f);
-	if (BIT(layer, 2)) draw_text_layer(screen, bitmap, cliprect);
+	if (BIT(layer, 2)) draw_text_layer(screen, *dest, *pri, cliprect, scale);
 	if (BIT(layer, 1)) draw_sprites();
 	if (BIT(layer, 0)) draw_polygons();
-	m_poly->render_scene(screen, bitmap);
-	if (BIT(layer, 2)) namcos22s_mix_text_layer(screen, bitmap, cliprect, 6);
+	m_poly->render_scene(screen, *dest, *pri, scale);
+	if (BIT(layer, 2)) namcos22s_mix_text_layer(*dest, *pri, clip, 6, scale);
 
 	// apply gamma
 	const u8 *rlut = (const u8 *)&m_mixer[0x100/4];
 	const u8 *glut = (const u8 *)&m_mixer[0x200/4];
 	const u8 *blut = (const u8 *)&m_mixer[0x300/4];
-	for (int y = cliprect.top(); y <= cliprect.bottom(); y++)
+	for (int y = clip.top(); y <= clip.bottom(); y++)
 	{
-		u32 *const dest = &bitmap.pix(y);
-		for (int x = cliprect.left(); x <= cliprect.right(); x++)
+		u32 *const row = &dest->pix(y);
+		for (int x = clip.left(); x <= clip.right(); x++)
 		{
-			const u32 rgb = dest[x];
+			const u32 rgb = row[x];
 			const u8 r = rlut[NATIVE_ENDIAN_VALUE_LE_BE(3, 0) ^ (rgb >> 16 & 0xff)];
 			const u8 g = glut[NATIVE_ENDIAN_VALUE_LE_BE(3, 0) ^ (rgb >> 8 & 0xff)];
 			const u8 b = blut[NATIVE_ENDIAN_VALUE_LE_BE(3, 0) ^ (rgb & 0xff)];
-			dest[x] = (r << 16) | (g << 8) | b;
+			row[x] = (r << 16) | (g << 8) | b;
 		}
 	}
 
+	if (scale > 1)
+		m_hires->frame_done(cliprect);
 	return 0;
 }
 
@@ -2578,17 +2642,23 @@ u32 namcos22_state::screen_update_namcos22(screen_device &screen, bitmap_rgb32 &
 	render_frame_active();
 	update_mixer();
 	update_palette();
-	screen.priority().fill(0, cliprect);
+
+	bitmap_rgb32 *dest;
+	bitmap_ind8 *pri;
+	rectangle clip;
+	const int scale = begin_screen_update(screen, bitmap, cliprect, dest, pri, clip);
 
 	// background color
 	const int bg_color = m_bg_palbase | 0xff;
-	bitmap.fill(m_palette->pen(bg_color), cliprect);
+	dest->fill(m_palette->pen(bg_color), clip);
 
 	// layers
 	draw_polygons();
-	m_poly->render_scene(screen, bitmap);
-	draw_text_layer(screen, bitmap, cliprect); // text layer + final mix
+	m_poly->render_scene(screen, *dest, *pri, scale);
+	draw_text_layer(screen, *dest, *pri, cliprect, scale); // text layer + final mix
 
+	if (scale > 1)
+		m_hires->frame_done(cliprect);
 	return 0;
 }
 
@@ -2736,4 +2806,5 @@ void namcos22_state::video_start()
 	m_gfxdecode->gfx(0)->set_source((u8 *)m_cgram.target());
 
 	m_poly = std::make_unique<namcos22_renderer>(*this);
+	m_hires = std::make_unique<hires3d_output>(*m_screen);
 }

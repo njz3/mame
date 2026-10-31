@@ -21,12 +21,16 @@
 #include "video/poly.h"
 
 #include "emupal.h"
+#include "hires3d.h"
 #include "screen.h"
+
+#include <vector>
 
 
 struct midvunit_object_data
 {
 	uint16_t *    destbase = nullptr;
+	int           stride = 512;
 	uint8_t *     texbase = 0;
 	uint16_t      pixdata = 0;
 	uint8_t       dither = 0;
@@ -60,6 +64,14 @@ public:
 	memory_share_creator<uint16_t> m_videoram;
 	required_shared_ptr<uint32_t> m_textureram;
 	required_device<screen_device> m_screen;
+
+	// -hires3d: a copy of both video RAM pages at m_hires_scale times the
+	// native resolution; the quads are drawn into both, CPU writes are
+	// magnified into it, and the display reads it
+	std::unique_ptr<hires3d_output> m_hires;
+	int m_hires_scale = 1;
+	std::vector<uint16_t> m_hires_vram;
+	uint16_t *hires_page(int page) { return &m_hires_vram[size_t(page) * 512 * 512 * m_hires_scale * m_hires_scale]; }
 
 protected:
 	static inline constexpr XTAL MIDVUNIT_VIDEO_CLOCK = 33.333333_MHz_XTAL;

@@ -63,6 +63,11 @@ void midvunit_base_state::video_start()
 
 	m_poly = std::make_unique<midvunit_renderer>(*this);
 
+	m_hires = std::make_unique<hires3d_output>(*m_screen);
+	m_hires_scale = m_hires->scale();
+	if (m_hires_scale > 1)
+		m_hires_vram.resize(size_t(2) * 512 * 512 * m_hires_scale * m_hires_scale);
+
 	save_item(NAME(m_video_regs));
 	save_item(NAME(m_dma_data));
 	save_item(NAME(m_dma_data_index));
@@ -87,7 +92,7 @@ void midvunit_renderer::render_flat(int32_t scanline, const extent_t &extent, co
 {
 	uint16_t const pixdata = objectdata.pixdata;
 	int const xstep = objectdata.dither + 1;
-	uint16_t *dest = objectdata.destbase + scanline * 512;
+	uint16_t *dest = objectdata.destbase + scanline * objectdata.stride;
 	int startx = extent.startx;
 
 	// if dithering, ensure that we start on an appropriate pixel
@@ -118,7 +123,7 @@ void midvunit_renderer::render_tex(int32_t scanline, const extent_t &extent, con
 	uint16_t const pixdata = objectdata.pixdata;
 	uint8_t const *const texbase = objectdata.texbase;
 	int const xstep = objectdata.dither + 1;
-	uint16_t *const dest = objectdata.destbase + scanline * 512;
+	uint16_t *const dest = objectdata.destbase + scanline * objectdata.stride;
 	int startx = extent.startx;
 	int const stopx = extent.stopx;
 	int32_t u = extent.param[0].start;
@@ -154,7 +159,7 @@ void midvunit_renderer::render_textrans(int32_t scanline, const extent_t &extent
 	uint16_t const pixdata = objectdata.pixdata;
 	uint8_t const *const texbase = objectdata.texbase;
 	int const xstep = objectdata.dither + 1;
-	uint16_t *const dest = objectdata.destbase + scanline * 512;
+	uint16_t *const dest = objectdata.destbase + scanline * objectdata.stride;
 	int startx = extent.startx;
 	int const stopx = extent.stopx;
 	int32_t u = extent.param[0].start;
@@ -192,7 +197,7 @@ void midvunit_renderer::render_textransmask(int32_t scanline, const extent_t &ex
 	uint16_t const pixdata = objectdata.pixdata;
 	uint8_t const *const texbase = objectdata.texbase;
 	int const xstep = objectdata.dither + 1;
-	uint16_t *const dest = objectdata.destbase + scanline * 512;
+	uint16_t *const dest = objectdata.destbase + scanline * objectdata.stride;
 	int startx = extent.startx;
 	int const stopx = extent.stopx;
 	int32_t u = extent.param[0].start;
@@ -359,6 +364,30 @@ void midvunit_renderer::process_dma_queue()
 		render_polygon<4, 2>(m_state.m_screen->visible_area(), callback, vert);
 	else
 		render_polygon<4, 0>(m_state.m_screen->visible_area(), callback, vert);
+
+	// and again into the high-resolution copy; native pixel centres map to
+	// the centres of their magnified blocks, the texture coordinates and the
+	// checkerboard are evaluated per high-resolution pixel
+	int const scale = m_state.m_hires_scale;
+	if (scale > 1)
+	{
+		for (int i = 0; i < 4; i++)
+		{
+			vert[i].x *= scale;
+			vert[i].y *= scale;
+		}
+		rectangle const &vis = m_state.m_screen->visible_area();
+		rectangle const clip(vis.left() * scale, (vis.right() + 1) * scale - 1, vis.top() * scale, (vis.bottom() + 1) * scale - 1);
+
+		midvunit_object_data &hiresdata = object_data().next();
+		hiresdata = objectdata;
+		hiresdata.destbase = m_state.hires_page((m_state.m_page_control & 4) ? 1 : 0);
+		hiresdata.stride = 512 * scale;
+		if (textured)
+			render_polygon<4, 2>(clip, callback, vert);
+		else
+			render_polygon<4, 0>(clip, callback, vert);
+	}
 }
 
 
@@ -484,6 +513,18 @@ void midvunit_base_state::videoram_w(offs_t offset, uint32_t data, uint32_t mem_
 			m_video_changed = true;
 	}
 	COMBINE_DATA(&m_videoram[offset]);
+
+	// magnify the pixel into the high-resolution copy
+	if (m_hires_scale > 1)
+	{
+		int const scale = m_hires_scale;
+		int const stride = 512 * scale;
+		int const x = offset & 0x1ff;
+		int const y = (offset >> 9) & 0x1ff;
+		uint16_t *dest = hires_page(BIT(offset, 18)) + size_t(y * scale) * stride + x * scale;
+		for (int row = 0; row < scale; row++, dest += stride)
+			std::fill_n(dest, scale, m_videoram[offset]);
+	}
 }
 
 
@@ -547,9 +588,35 @@ uint32_t midvunit_base_state::screen_update(screen_device &screen, bitmap_ind16 
 
 	m_poly->wait("Refresh Time");
 
-	// if the video didn't change, indicate as much
+	// high-resolution frame from the magnified copy of the displayed page;
+	// every update converts its rows through the current palette, since the
+	// game fades by changing the palette alone (the native indexed bitmap
+	// gets the palette applied when it is displayed)
+	bool const hires_active = (m_hires_scale > 1) && m_hires->active();
+	if (hires_active)
+	{
+		int const scale = m_hires_scale;
+		int const stride = 512 * scale;
+		bitmap_rgb32 &hires = m_hires->frame_bitmap();
+		rectangle const hclip = m_hires->scaled(cliprect);
+		uint16_t const *const page = hires_page((m_page_control & 1) ? 1 : 0);
+		// an indexed screen gets its colours when displayed: use the adjusted palette
+		rgb_t const *const pens = m_palette->palette()->entry_list_adjusted();
+		int const yoffs = screen.visible_area().min_y * scale;
+		for (int y = hclip.min_y; y <= hclip.max_y; y++)
+		{
+			uint16_t const *src = page + size_t(y - yoffs) * stride;
+			uint32_t *dest = &hires.pix(y);
+			for (int x = hclip.min_x; x <= hclip.max_x; x++)
+				dest[x] = pens[src[x] & 0x7fff];
+		}
+		m_hires->frame_done(cliprect);
+	}
+
+	// if the video didn't change, indicate as much (the high-resolution frame
+	// is always new)
 	if (!m_video_changed)
-		return UPDATE_HAS_NOT_CHANGED;
+		return hires_active ? 0 : UPDATE_HAS_NOT_CHANGED;
 	m_video_changed = false;
 
 	// determine the base of the videoram

@@ -7,6 +7,7 @@
 #include "cpu/mb86233/mb86233.h"
 
 #include "corefloat.h"
+#include "vk3d.h"
 
 #include <glm/geometric.hpp>
 
@@ -80,16 +81,31 @@ void model1_state::view_t::project_point(point_t *p) const
 {
 	p->xx = p->x / p->z;
 	p->yy = p->y / p->z;
-	p->s.x = xc + (p->xx * zoomx + viewx);
-	p->s.y = yc - (p->yy * zoomy + viewy);
+	p->s.fx = xc + (p->xx * zoomx + viewx);
+	p->s.fy = yc - (p->yy * zoomy + viewy);
+	p->s.x = p->s.fx;
+	p->s.y = p->s.fy;
 }
 
 void model1_state::view_t::project_point_direct(point_t *p) const
 {
 	p->xx = p->x /*/ p->z*/;
 	p->yy = p->y /*/ p->z*/;
-	p->s.x = xc + p->xx;
-	p->s.y = yc - p->yy;
+	p->s.fx = xc + p->xx;
+	p->s.fy = yc - p->yy;
+	p->s.x = p->s.fx;
+	p->s.y = p->s.fy;
+}
+
+// Screen coordinate at a higher resolution, truncated like the native
+// projection and kept in the range the 16.16 scanline filler can hold.
+static int32_t hires_coord(float f)
+{
+	if (!(f > -32768.0f))
+		return -32768;
+	if (!(f < 32767.0f))
+		return 32767;
+	return int32_t(f);
 }
 
 void model1_state::draw_hline(bitmap_rgb32 &bitmap, int x1, int x2, int y, int color)
@@ -224,7 +240,7 @@ void model1_state::fill_line(bitmap_rgb32 &bitmap, view_t *view, int color, int3
 // into INT32_MIN on x86 hosts), so clip the segment to the viewport first,
 // like fill_slope() does for the filler - unclipped, wingwar hung during boot
 // walking a ~2^31-pixel line.
-static void draw_wireframe_line(bitmap_rgb32 &bitmap, const rectangle &clip, int x1, int y1, int x2, int y2, uint32_t color, bool moire)
+static void draw_wireframe_segment(bitmap_rgb32 &bitmap, const rectangle &clip, int x1, int y1, int x2, int y2, uint32_t color, bool moire)
 {
 	// Liang-Barsky clip against the viewport rectangle (doubles hold every
 	// int32 exactly, so in-range endpoints pass through unchanged)
@@ -279,6 +295,19 @@ static void draw_wireframe_line(bitmap_rgb32 &bitmap, const rectangle &clip, int
 	}
 }
 
+// At a higher resolution the line is repeated along its minor axis so that it
+// keeps the thickness of a native pixel.
+static void draw_wireframe_line(bitmap_rgb32 &bitmap, const rectangle &clip, int x1, int y1, int x2, int y2, uint32_t color, bool moire, int width)
+{
+	bool const steep = std::abs(y2 - y1) > std::abs(x2 - x1);
+	for (int w = 0; w < width; w++)
+	{
+		int const ox = steep ? w : 0;
+		int const oy = steep ? 0 : w;
+		draw_wireframe_segment(bitmap, clip, x1 + ox, y1 + oy, x2 + ox, y2 + oy, color, moire);
+	}
+}
+
 void model1_state::fill_quad(bitmap_rgb32 &bitmap, view_t *view, const quad_t& q) const
 {
 	spoint_t p[8];
@@ -320,7 +349,7 @@ void model1_state::fill_quad(bitmap_rgb32 &bitmap, view_t *view, const quad_t& q
 		if (ndist == 2)
 		{
 			// clip to the viewport, exactly like the scanline filler below does
-			draw_wireframe_line(bitmap, rectangle(view->x1, view->x2, view->y1, view->y2), ax, ay, bx, by, color & ~MOIRE, (color & MOIRE) != 0);
+			draw_wireframe_line(bitmap, rectangle(view->x1, view->x2, view->y1, view->y2), ax, ay, bx, by, color & ~MOIRE, (color & MOIRE) != 0, m_hires_scale);
 			return;
 		}
 	}
@@ -571,20 +600,45 @@ void model1_state::draw_quads(bitmap_rgb32 &bitmap, const rectangle &cliprect)
 {
 	view_t *view = m_view.get();
 	int count = m_quadpt - &m_quaddb[0];
+	int const scale = m_hires_scale;
 
-	/* clip to the cliprect */
+	/* clip to the cliprect (the viewport is in native pixels) */
 	int save_x1 = view->x1;
 	int save_x2 = view->x2;
 	int save_y1 = view->y1;
 	int save_y2 = view->y2;
-	view->x1 = std::max(view->x1, cliprect.left());
-	view->x2 = std::min(view->x2, cliprect.right());
-	view->y1 = std::max(view->y1, cliprect.top());
-	view->y2 = std::min(view->y2, cliprect.bottom());
+	view->x1 = std::max(view->x1 * scale, cliprect.left());
+	view->x2 = std::min(view->x2 * scale + scale - 1, cliprect.right());
+	view->y1 = std::max(view->y1 * scale, cliprect.top());
+	view->y2 = std::min(view->y2 * scale + scale - 1, cliprect.bottom());
+
+	if (m_vk_collect)
+		m_vk->set_scissor(rectangle(view->x1, view->x2, view->y1, view->y2));
 
 	for (int i = 0; i < count; i++)
 	{
-		fill_quad(bitmap, view, *m_quadind[i]);
+		if (m_vk_collect)
+		{
+			vk_draw_quad(*m_quadind[i]);
+		}
+		else if (scale == 1)
+		{
+			fill_quad(bitmap, view, *m_quadind[i]);
+		}
+		else
+		{
+			// rasterize from the unrounded projected positions
+			quad_t q = *m_quadind[i];
+			point_t p[4];
+			for (int j = 0; j < 4; j++)
+			{
+				p[j] = *q.p[j];
+				p[j].s.x = hires_coord(p[j].s.fx * scale);
+				p[j].s.y = hires_coord(p[j].s.fy * scale);
+				q.p[j] = &p[j];
+			}
+			fill_quad(bitmap, view, q);
+		}
 #if 0
 		quad_t *q = m_quadind[i];
 		draw_line(bitmap, m_palette->black_pen(), q.p[0]->s.x, q.p[0]->s.y, q.p[1]->s.x, q.p[1]->s.y);
@@ -599,6 +653,86 @@ void model1_state::draw_quads(bitmap_rgb32 &bitmap, const rectangle &cliprect)
 	view->y1 = save_y1;
 	view->y2 = save_y2;
 }
+// Queue one quad for the GPU, from the unrounded projected positions.  Quads
+// are flat and drawn in the sorted order, as triangle pairs; wireframes (two
+// distinct native vertices, see fill_quad) become bars one native pixel wide.
+void model1_state::vk_draw_quad(const quad_t &q) const
+{
+	int color = q.col;
+	if (color < 0)
+		color = -1 - color;
+	float const scale = m_hires_scale;
+	float const r = ((color >> 16) & 0xff) / 255.0f;
+	float const g = ((color >> 8) & 0xff) / 255.0f;
+	float const b = (color & 0xff) / 255.0f;
+	int const pipeline = (color & MOIRE) ? vk3d_renderer::PIPE_COLOR_STIPPLE : vk3d_renderer::PIPE_COLOR;
+
+	auto const make = [&] (float x, float y) { return vk3d_renderer::vertex{ x, y, 0, 1, r, g, b, 1, 0, 0, 1, 0 }; };
+
+	// same wireframe test as the software path, on the high-resolution
+	// positions: distant quads that collapse natively are still polygons
+	int32_t hx[4], hy[4];
+	for (int i = 0; i < 4; i++)
+	{
+		hx[i] = hires_coord(q.p[i]->s.fx * scale);
+		hy[i] = hires_coord(q.p[i]->s.fy * scale);
+	}
+	int ndist = 1;
+	int bi = 0;
+	for (int i = 1; i < 4 && ndist < 3; i++)
+	{
+		if (hx[i] == hx[0] && hy[i] == hy[0])
+			continue;
+		if (ndist == 1)
+		{
+			bi = i;
+			ndist = 2;
+		}
+		else if (hx[i] != hx[bi] || hy[i] != hy[bi])
+		{
+			ndist = 3;
+		}
+	}
+
+	vk3d_renderer::vertex v[6];
+	if (ndist == 3)
+	{
+		vk3d_renderer::vertex p[4];
+		for (int i = 0; i < 4; i++)
+			p[i] = make(q.p[i]->s.fx * scale, q.p[i]->s.fy * scale);
+		v[0] = p[0]; v[1] = p[1]; v[2] = p[2];
+		v[3] = p[0]; v[4] = p[2]; v[5] = p[3];
+	}
+	else
+	{
+		// bar from A to B, widened by half a native pixel on every side
+		float const ax = q.p[0]->s.fx * scale, ay = q.p[0]->s.fy * scale;
+		float const bx = q.p[bi]->s.fx * scale, by = q.p[bi]->s.fy * scale;
+		float dx = bx - ax, dy = by - ay;
+		float const len = std::sqrt(dx * dx + dy * dy);
+		if (!(len > 0.001f) || !(len < 100000.0f))
+		{
+			dx = 1.0f;
+			dy = 0.0f;
+		}
+		else
+		{
+			dx /= len;
+			dy /= len;
+		}
+		float const h = 0.5f * scale;
+		float const ex = dx * h, ey = dy * h; // along the bar
+		float const nx = -dy * h, ny = dx * h; // across it
+		vk3d_renderer::vertex const p0 = make(ax - ex + nx, ay - ey + ny);
+		vk3d_renderer::vertex const p1 = make(bx + ex + nx, by + ey + ny);
+		vk3d_renderer::vertex const p2 = make(bx + ex - nx, by + ey - ny);
+		vk3d_renderer::vertex const p3 = make(ax - ex - nx, ay - ey - ny);
+		v[0] = p0; v[1] = p1; v[2] = p2;
+		v[3] = p0; v[4] = p2; v[5] = p3;
+	}
+	m_vk->draw(pipeline, -1, v, 6);
+}
+
 #if 0
 uint16_t model1_state::scale_color(uint16_t color, float level) const
 {
@@ -914,7 +1048,7 @@ void model1_state::push_object(uint32_t tex_adr, uint32_t poly_adr, uint32_t siz
 	}
 	else
 	{
-		old_p0->s.x = old_p0->s.y = 0;
+		old_p0->s = spoint_t();
 	}
 
 	if (old_p1->z > 0)
@@ -923,7 +1057,7 @@ void model1_state::push_object(uint32_t tex_adr, uint32_t poly_adr, uint32_t siz
 	}
 	else
 	{
-		old_p1->s.x = old_p1->s.y = 0;
+		old_p1->s = spoint_t();
 	}
 
 	poly_adr += 6;
@@ -982,7 +1116,7 @@ void model1_state::push_object(uint32_t tex_adr, uint32_t poly_adr, uint32_t siz
 		}
 		else
 		{
-			p0->s.x = p0->s.y = 0;
+			p0->s = spoint_t();
 		}
 
 		if (p1->z > 0)
@@ -991,7 +1125,7 @@ void model1_state::push_object(uint32_t tex_adr, uint32_t poly_adr, uint32_t siz
 		}
 		else
 		{
-			p1->s.x = p1->s.y = 0;
+			p1->s = spoint_t();
 		}
 
 #if 0
@@ -1478,6 +1612,7 @@ void model1_state::tgp_render(bitmap_rgb32 &bitmap, const rectangle &cliprect, r
 				// command 0x41 = object drawn above the HUD (e.g. SWA radar blips)
 				if (pass == RENDER_ABOVE_HUD)
 					push_object(readi(list_offset + 2), readi(list_offset + 4), readi(list_offset + 6), old_z);
+				m_above_hud_seen = true;
 				list_offset += 8;
 				break;
 			case 2:
@@ -1728,10 +1863,7 @@ void model1_state::video_start()
 	m_pointdb = std::make_unique<point_t[]>(1000000*2);
 	m_quaddb  = std::make_unique<quad_t[]>(1000000);
 	m_quadind = make_unique_clear<quad_t *[]>(1000000);
-	m_overlay_stride = m_screen->width();
-	int overlay_pixels = m_overlay_stride * m_screen->height();
-	m_overlay_block = std::make_unique<uint8_t[]>(overlay_pixels);
-	m_overlay_hud_snapshot = std::make_unique<uint32_t[]>(overlay_pixels);
+	m_hires = std::make_unique<hires3d_output>(*m_screen);
 
 	m_pointpt = &m_pointdb[0];
 	m_quadpt = &m_quaddb[0];
@@ -1757,6 +1889,16 @@ void model1_state::video_start()
 void model1_state::build_overlay_mask(bitmap_rgb32 &bitmap, const rectangle &cliprect)
 {
 	constexpr int feature_level = 8; // anything darker counts as HUD background
+
+	// sized for the bitmap being drawn (native or high resolution)
+	m_overlay_stride = bitmap.width();
+	size_t const overlay_pixels = size_t(m_overlay_stride) * bitmap.height();
+	if (m_overlay_block.size() != overlay_pixels)
+	{
+		m_overlay_block.resize(overlay_pixels);
+		m_overlay_hud_snapshot.resize(overlay_pixels);
+	}
+
 	for (int y = cliprect.top(); y <= cliprect.bottom(); y++)
 	{
 		uint32_t const *const src = &bitmap.pix(y);
@@ -1845,6 +1987,12 @@ uint32_t model1_state::screen_update_model1(screen_device &screen, bitmap_rgb32 
 	view->ayyc = cos(view->ayy);
 	view->ayys = sin(view->ayy);
 
+	if (m_hires->active())
+	{
+		screen_update_hires(screen, bitmap, cliprect);
+		return 0;
+	}
+
 	screen.priority().fill(0);
 	bitmap.fill(m_palette->pen(0), cliprect);
 
@@ -1872,6 +2020,86 @@ uint32_t model1_state::screen_update_model1(screen_device &screen, bitmap_rgb32 
 	apply_overlay_stencil(bitmap, cliprect);
 
 	return 0;
+}
+
+// Same layering as screen_update_model1, with the 3D rasterized directly at the
+// high resolution and the tilemaps drawn natively (in the screen bitmap, which
+// is not displayed) then magnified.
+void model1_state::screen_update_hires(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect)
+{
+	bitmap_rgb32 &hires = m_hires->frame_bitmap();
+	rectangle const hclip = m_hires->scaled(cliprect);
+	float const hwidth = hires.width(), hheight = hires.height();
+
+	m_vk = m_hires->vulkan();
+	if (m_vk && (m_vk_layer[0] < 0))
+	{
+		m_vk_layer[0] = m_vk->create_texture(bitmap.width(), bitmap.height());
+		m_vk_layer[1] = m_vk->create_texture(bitmap.width(), bitmap.height());
+	}
+
+	screen.priority().fill(0);
+	bitmap.fill(m_palette->pen(0), cliprect);
+	m_tiles->draw(screen, bitmap, cliprect, 6, 0, TILEMAP_DRAW_OPAQUE);
+	m_tiles->draw(screen, bitmap, cliprect, 4, 0, TILEMAP_DRAW_OPAQUE);
+	m_tiles->draw(screen, bitmap, cliprect, 2, 0, 0);
+	m_tiles->draw(screen, bitmap, cliprect, 0, 0, 0);
+	if (m_vk)
+	{
+		m_vk->update_texture(m_vk_layer[0], bitmap, cliprect);
+		m_vk->begin_frame(hires.width(), hires.height(), rgb_t::black());
+		m_vk->set_scissor(hclip);
+		m_vk->draw_rect(vk3d_renderer::PIPE_TEXTURE_KEY, m_vk_layer[0], 0, 0, hwidth, hheight, rgb_t::white());
+	}
+	else
+	{
+		m_hires->upscale(bitmap, hires, cliprect, false);
+	}
+
+	m_hires_scale = m_hires->scale();
+	m_vk_collect = m_vk != nullptr;
+	m_above_hud_seen = false;
+	tgp_render(hires, hclip, RENDER_BELOW_HUD);
+	m_vk_collect = false;
+
+	// HUD tilemaps on a transparent layer (palette pens are opaque)
+	bitmap.fill(0, cliprect);
+	m_tiles->draw(screen, bitmap, cliprect, 7, 0, 0);
+	m_tiles->draw(screen, bitmap, cliprect, 5, 0, 0);
+	m_tiles->draw(screen, bitmap, cliprect, 3, 0, 0);
+	m_tiles->draw(screen, bitmap, cliprect, 1, 0, 0);
+	if (m_vk)
+	{
+		m_vk->update_texture(m_vk_layer[1], bitmap, cliprect);
+		m_vk->set_scissor(hclip);
+		m_vk->draw_rect(vk3d_renderer::PIPE_TEXTURE_KEY, m_vk_layer[1], 0, 0, hwidth, hheight, rgb_t::white());
+		if (!m_vk->end_frame(hires, hclip))
+		{
+			// draw this frame again in software
+			m_hires->disable_vulkan("frame submission failed");
+			m_vk = nullptr;
+			m_vk_layer[0] = m_vk_layer[1] = -1;
+			m_hires_scale = 1;
+			screen_update_hires(screen, bitmap, cliprect);
+			return;
+		}
+	}
+	else
+	{
+		m_hires->upscale(bitmap, hires, cliprect, true);
+	}
+
+	// the HUD snapshot is costly at high resolution, only take it when the
+	// list has above-HUD objects (the first pass already did the uploads)
+	if (m_above_hud_seen)
+	{
+		build_overlay_mask(hires, hclip);
+		tgp_render(hires, hclip, RENDER_ABOVE_HUD);
+		apply_overlay_stencil(hires, hclip);
+	}
+	m_hires_scale = 1;
+
+	m_hires->frame_done(cliprect);
 }
 
 void model1_state::screen_vblank_model1(int state)
