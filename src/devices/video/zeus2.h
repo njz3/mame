@@ -15,6 +15,8 @@
 
 #include "video/rgbutil.h"
 
+#include "hires3d.h"
+
 #include "endianness.h"
 
 #include <bit>
@@ -49,9 +51,11 @@ struct zeus2_poly_extra_data
 	uint32_t        ctrl_word;
 	uint32_t        ucode_src;
 	uint32_t        tex_src;
-	// Render window latched here because rendering is deferred and mwskins moves it mid-frame
-	uint32_t        frame_base;
-	uint32_t        frame_shift;
+	// Render window latched here because rendering is deferred and mwskins moves it mid-frame:
+	// first pixel of the window in the colour and depth buffers, and their row length
+	uint32_t *      color_base;
+	int32_t *       depth_base;
+	uint32_t        row_pixels;
 	bool            texture_alpha;
 	bool            texture_rgb555;
 	bool            solid_enable;
@@ -128,6 +132,35 @@ public:
 	std::unique_ptr<uint32_t[]> m_waveram;
 	std::unique_ptr<uint32_t[]> m_frameColor;
 	std::unique_ptr<int32_t[]> m_frameDepth;
+
+	// -hires3d: a copy of the frame buffer at m_hires_scale times the native
+	// resolution, with the same row layout; the polygons are drawn into both,
+	// the fills and host writes are magnified into it, and the display reads it
+	std::unique_ptr<hires3d_output> m_hires;
+	int m_hires_scale = 1;
+	std::unique_ptr<uint32_t[]> m_hiresColor;
+	std::unique_ptr<int32_t[]> m_hiresDepth;
+	size_t hires_index(uint32_t addr, int suby, int subx) const
+	{
+		addr &= WAVERAM1_WIDTH * WAVERAM1_HEIGHT * 2 - 1;
+		uint32_t const shift = frame_row_shift();
+		uint32_t const row = addr >> shift;
+		uint32_t const col = addr & ((1 << shift) - 1);
+		size_t const rowpixels = (size_t(1) << shift) * m_hires_scale;
+		return (size_t(row) * m_hires_scale + suby) * rowpixels + size_t(col) * m_hires_scale + subx;
+	}
+	void hires_write(uint32_t addr, uint32_t color, bool write_depth, int32_t depth)
+	{
+		if (m_hires_scale == 1)
+			return;
+		for (int sub = 0; sub < m_hires_scale; sub++)
+		{
+			size_t const index = hires_index(addr, sub, 0);
+			std::fill_n(&m_hiresColor[index], m_hires_scale, color);
+			if (write_depth)
+				std::fill_n(&m_hiresDepth[index], m_hires_scale, depth);
+		}
+	}
 	uint32_t m_pal_table[0x100];
 	uint32_t m_ucode[0x200];
 	float m_interpFactor;
@@ -314,6 +347,8 @@ public:
 			if (m_zeusbase[0x57] & 0x10)
 				*(uint32_t*)&m_frameDepth[addr] = m_zeusbase[0x5a];
 		}
+		hires_write(addr, m_frameColor[addr], true, m_frameDepth[addr]);
+		hires_write(addr + 1, m_frameColor[addr + 1], false, 0);
 
 		if (m_zeusbase[0x5e] & 0x40)
 		{

@@ -23,7 +23,7 @@ Matériel visé, dans l'ordre :
 | 3 | Konami K001005 | gticlub, midnrun, windheat, jetwave | OK (gticlub, midnrun ×2) | à faire |
 | 4 | 3dfx Voodoo 1/2 | sfrush, sfrushrk, calspeed, hyprdriv, vaportrx, roadburn, thrilld, racingj | à faire | à faire |
 | 5 | Midway V-Unit | crusnusa, crusnwld, offroadc | 2D OK (crusnusa ×2) ; 3D à vérifier en démo (sommets entiers : bords natifs, textures HD) | à faire |
-| 6 | Midway Zeus 2 | crusnexo | à faire | à faire |
+| 6 | Midway Zeus 2 | crusnexo | OK (crusnexo ×2, mode démo) | à faire |
 | 7 | Namco System 21 | winrun, driveyes | OK (winrun, driveyes ×2) | à faire |
 | 8 | Taito JC (TC0780FPA) | sidebs, sidebs2, dangcurv | OK (sidebs, sidebs2 ×2) | à faire |
 | 9 | Gaelco 3D | speedup, surfplnt, radikalb | OK (speedup, radikalb ×2) | à faire |
@@ -204,3 +204,14 @@ l'écraser.
   - Les images sans 3D (écran coupé, transitions) sont publiées agrandies.
   - `hng64.zip` (BIOS) remplacé par celui du partage, qui ajoute trois PROM
     de configuration (mêmes CRC pour le reste).
+- 2026-10-31 : **Midway Zeus 2** en logiciel HD.
+  - Copie HD du tampon couleur et profondeur, avec la même structure de lignes
+    (512 ou 1024 pixels selon `m_yScale`) × N.
+  - Le rastériseur écrit par pointeur de début de fenêtre et longueur de
+    ligne, ce qui sert au tampon natif comme au tampon HD.
+  - Polygones dessinés dans les deux, sommets et découpage × N.
+  - Remplissage rapide et `frame_write` recopiés en blocs ; l'affichage HD lit
+    la copie.
+  - Test : Cruis'n Exotica, calibration passée par script (5 appuis sur
+    « Service Mode »), mode démo 3D correct en ×2.
+  - ROMs copiées : crusnexo, tms320c32.

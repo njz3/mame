@@ -89,6 +89,15 @@ void zeus2_device::device_start()
 	m_frameColor = std::make_unique<uint32_t[]>(WAVERAM1_WIDTH * WAVERAM1_HEIGHT * 2);
 	m_frameDepth = std::make_unique<int32_t[]>(WAVERAM1_WIDTH * WAVERAM1_HEIGHT * 2);
 
+	m_hires = std::make_unique<hires3d_output>(screen());
+	m_hires_scale = m_hires->scale();
+	if (m_hires_scale > 1)
+	{
+		size_t const pixels = size_t(WAVERAM1_WIDTH) * WAVERAM1_HEIGHT * 2 * m_hires_scale * m_hires_scale;
+		m_hiresColor = std::make_unique<uint32_t[]>(pixels);
+		m_hiresDepth = std::make_unique<int32_t[]>(pixels);
+	}
+
 	/* initialize polygon engine */
 	poly = std::make_unique<zeus2_renderer>(this);
 
@@ -239,6 +248,20 @@ uint32_t zeus2_device::screen_update(screen_device &screen, bitmap_rgb32 &bitmap
 		{
 			uint32_t *colorptr = &m_frameColor[frame_addr_from_xy(0, y, false)];
 			std::copy(colorptr + cliprect.left(), colorptr + cliprect.right() + 1, &bitmap.pix(y, cliprect.left()));
+		}
+
+		// high-resolution frame from the magnified copy
+		if ((m_hires_scale > 1) && m_hires->active())
+		{
+			int const scale = m_hires_scale;
+			bitmap_rgb32 &hires = m_hires->frame_bitmap();
+			rectangle const hclip = m_hires->scaled(cliprect);
+			for (y = hclip.top(); y <= hclip.bottom(); y++)
+			{
+				uint32_t const *const colorptr = &m_hiresColor[hires_index(frame_addr_from_xy(0, y / scale, false), y % scale, 0)];
+				std::copy(colorptr + hclip.left(), colorptr + hclip.right() + 1, &hires.pix(y, hclip.left()));
+			}
+			m_hires->frame_done(cliprect);
 		}
 	}
 	else
@@ -868,6 +891,7 @@ void zeus2_device::zeus2_register_update(offs_t offset, uint32_t oldval, int log
 					// Crusn wraps the frame buffer during fill so need to mask address
 					m_frameColor[(addr + count) & (WAVERAM1_WIDTH * WAVERAM1_HEIGHT * 2 - 1)] = m_fill_color;
 					m_frameDepth[(addr + count) & (WAVERAM1_WIDTH * WAVERAM1_HEIGHT * 2 - 1)] = m_fill_depth;
+					hires_write(addr + count, m_fill_color, true, m_fill_depth);
 				}
 			}
 			break;
@@ -1811,8 +1835,10 @@ void zeus2_renderer::zeus2_render_poly(vertex_t *vert, int numverts, uint32_t te
 
 	extra.ucode_src = m_state->m_curUCodeSrc;
 	extra.tex_src = m_state->zeus_texbase;
-	extra.frame_base = m_state->frame_addr_from_xy(0, 0, true);
-	extra.frame_shift = m_state->frame_row_shift();
+	uint32_t const frame_base = m_state->frame_addr_from_xy(0, 0, true);
+	extra.color_base = &m_state->m_frameColor[frame_base];
+	extra.depth_base = &m_state->m_frameDepth[frame_base];
+	extra.row_pixels = 1 << m_state->frame_row_shift();
 	int texmode = texdata & 0xffff;
 	extra.texwidth = 0x20 << ((texmode >> 2) & 3);
 	// Solid fill takes its color from render reg 0x06.  Host reg 0x00 is Zeus 1's source and
@@ -1867,6 +1893,29 @@ void zeus2_renderer::zeus2_render_poly(vertex_t *vert, int numverts, uint32_t te
 	}
 
 	render_triangle_fan<4>(m_state->zeus_cliprect, render_delegate(&zeus2_renderer::render_poly_8bit, this), numverts, clipvert);
+
+	// and again into the high-resolution copy
+	int const scale = m_state->m_hires_scale;
+	if (scale > 1)
+	{
+		vertex_t hiresvert[std::size(clipvert)];
+		for (int i = 0; i < numverts; i++)
+		{
+			hiresvert[i] = clipvert[i];
+			hiresvert[i].x *= scale;
+			hiresvert[i].y *= scale;
+		}
+		rectangle const &clip = m_state->zeus_cliprect;
+		rectangle const hclip(clip.left() * scale, (clip.right() + 1) * scale - 1, clip.top() * scale, (clip.bottom() + 1) * scale - 1);
+
+		zeus2_poly_extra_data &hiresextra = this->object_data().next();
+		hiresextra = extra;
+		size_t const index = m_state->hires_index(frame_base, 0, 0);
+		hiresextra.color_base = &m_state->m_hiresColor[index];
+		hiresextra.depth_base = &m_state->m_hiresDepth[index];
+		hiresextra.row_pixels = extra.row_pixels * scale;
+		render_triangle_fan<4>(hclip, render_delegate(&zeus2_renderer::render_poly_8bit, this), numverts, hiresvert);
+	}
 }
 
 
@@ -1918,9 +1967,8 @@ void zeus2_renderer::render_poly_8bit(int32_t scanline, const extent_t &extent, 
 	uint32_t solidColor = ((object.solidcolor & 0x7c00) << 9) | ((object.solidcolor & 0x3e0) << 6) | ((object.solidcolor & 0x1f) << 3);
 	int x;
 
-	uint32_t addr = object.frame_base + (scanline << object.frame_shift);
-	int32_t *depthptr = &m_state->m_frameDepth[addr];
-	uint32_t *colorptr = &m_state->m_frameColor[addr];
+	int32_t *depthptr = object.depth_base + size_t(scanline) * object.row_pixels;
+	uint32_t *colorptr = object.color_base + size_t(scanline) * object.row_pixels;
 	int32_t curDepthVal;
 
 	for (x = extent.startx; x < extent.stopx; x++)
