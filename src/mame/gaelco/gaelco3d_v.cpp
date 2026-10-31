@@ -13,6 +13,7 @@
 
 #include "cpu/tms320c3x/tms320c3x.h"
 
+#include "emuopts.h"
 #include "video.h"
 
 #include <iterator>
@@ -31,8 +32,9 @@ constexpr bool IS_POLYEND(uint32_t x) { return BIT(x ^ (x >> 1), 14); }
 gaelco3d_state::gaelco3d_renderer::gaelco3d_renderer(gaelco3d_state &state) :
 	poly_manager<float, gaelco3d_object_data, 1>(state.machine()),
 	m_state(state),
-	m_screenbits(state.m_screen->width(), state.m_screen->height()),
-	m_zbuffer(state.m_screen->width(), state.m_screen->height()),
+	m_scale(std::clamp(state.machine().options().int_value(OPTION_HIRES3D), 1, 16)),
+	m_screenbits(state.m_screen->width() * m_scale, state.m_screen->height() * m_scale),
+	m_zbuffer(state.m_screen->width() * m_scale, state.m_screen->height() * m_scale),
 	m_polygons(0),
 	m_texture_size(state.memregion("texture")->bytes()),
 	m_texmask_size(state.memregion("texmask")->bytes() * 8),
@@ -72,6 +74,7 @@ gaelco3d_state::gaelco3d_renderer::gaelco3d_renderer(gaelco3d_state &state) :
 void gaelco3d_state::video_start()
 {
 	m_poly = std::make_unique<gaelco3d_renderer>(*this);
+	m_hires = std::make_unique<hires3d_output>(*m_screen);
 
 	m_palette = std::make_unique<rgb_t[]>(32768);
 	m_polydata_buffer = std::make_unique<uint32_t[]>(MAX_POLYDATA);
@@ -115,6 +118,9 @@ void gaelco3d_state::video_start()
 
 void gaelco3d_state::gaelco3d_renderer::render_poly(screen_device &screen, uint32_t *polydata)
 {
+	// the plane equations are per native pixel; at a higher resolution the
+	// gradients are divided by the scale and the vertices multiplied by it
+	float const scale = m_scale;
 	float const midx = screen.width() / 2;
 	float const midy = screen.height() / 2;
 	float const z0 = tms320c3x_device::fp_to_float(polydata[0]);
@@ -158,14 +164,14 @@ void gaelco3d_state::gaelco3d_renderer::render_poly(screen_device &screen, uint3
 	/* fill in object data */
 	object.tex = polydata[11];
 	object.color = color;
-	object.ooz_dx = ooz_dx;
-	object.ooz_dy = ooz_dy;
+	object.ooz_dx = ooz_dx / scale;
+	object.ooz_dy = ooz_dy / scale;
 	object.ooz_base = ooz_base;
-	object.uoz_dx = uoz_dx;
-	object.uoz_dy = uoz_dy;
+	object.uoz_dx = uoz_dx / scale;
+	object.uoz_dy = uoz_dy / scale;
 	object.uoz_base = uoz_base;
-	object.voz_dx = voz_dx;
-	object.voz_dy = voz_dy;
+	object.voz_dx = voz_dx / scale;
+	object.voz_dy = voz_dy / scale;
 	object.voz_base = voz_base;
 	object.z0 = z0;
 
@@ -176,25 +182,26 @@ void gaelco3d_state::gaelco3d_renderer::render_poly(screen_device &screen, uint3
 	{
 		/* extract vertex data */
 		data = polydata[13 + vertnum * 2];
-		vert[vertnum].x = midx + (float)((int32_t)data >> 16) + 0.5f;
-		vert[vertnum].y = midy + (float)((int32_t)(data << 18) >> 18) + 0.5f;
+		vert[vertnum].x = (midx + (float)((int32_t)data >> 16) + 0.5f) * scale;
+		vert[vertnum].y = (midy + (float)((int32_t)(data << 18) >> 18) + 0.5f) * scale;
 	}
 
 	/* if we have a valid number of verts, render them */
 	if (vertnum >= 3)
 	{
 		/* Prevent poly.h down-rounding from discarding the outermost vert coord */
-		float const maxx = float(screen.width());
-		float const maxy = float(screen.height());
+		float const maxx = float(screen.width()) * scale;
+		float const maxy = float(screen.height()) * scale;
 		for (int i = 0; i < vertnum; i++)
 		{
-			if (vert[i].x > maxx - 1.0f && vert[i].x < maxx)
+			if (vert[i].x > maxx - scale && vert[i].x < maxx)
 				vert[i].x = maxx;
-			if (vert[i].y > maxy - 1.0f && vert[i].y < maxy)
+			if (vert[i].y > maxy - scale && vert[i].y < maxy)
 				vert[i].y = maxy;
 		}
 
-		const rectangle &visarea = screen.visible_area();
+		const rectangle &vis = screen.visible_area();
+		const rectangle visarea(vis.left() * m_scale, (vis.right() + 1) * m_scale - 1, vis.top() * m_scale, (vis.bottom() + 1) * m_scale - 1);
 
 		/* special case: no Z buffering and no perspective correction */
 		if (color != 0x7f00 && z0 < 0 && ooz_dx == 0 && ooz_dy == 0)
@@ -460,7 +467,30 @@ uint32_t gaelco3d_state::screen_update(screen_device &screen, bitmap_rgb32 &bitm
 		return UPDATE_HAS_NOT_CHANGED;
 
 	m_poly->wait("Screen update");
-	copybitmap(bitmap, m_poly->screenbits(), 0, 1, 0, 0, cliprect);
+	bitmap_rgb32 &screenbits = m_poly->screenbits();
+	int const scale = m_poly->scale();
+	if (scale == 1)
+	{
+		copybitmap(bitmap, screenbits, 0, 1, 0, 0, cliprect);
+	}
+	else
+	{
+		// the frame buffer is stored upside down: flip it while copying it
+		// to the high-resolution frame, and sample it for the native screen
+		if (m_hires->active())
+		{
+			copybitmap(m_hires->frame_bitmap(), screenbits, 0, 1, 0, 0, m_hires->scaled(cliprect));
+			m_hires->frame_done(cliprect);
+		}
+		int const height = screenbits.height();
+		for (int y = cliprect.top(); y <= cliprect.bottom(); y++)
+		{
+			uint32_t const *const src = &screenbits.pix(height - 1 - y * scale);
+			uint32_t *const dst = &bitmap.pix(y);
+			for (int x = cliprect.left(); x <= cliprect.right(); x++)
+				dst[x] = src[x * scale];
+		}
+	}
 	m_video_changed = false;
 	return 0;
 }

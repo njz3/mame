@@ -21,6 +21,7 @@
 #include "machine/timer.h"
 #include "sound/dmadac.h"
 #include "video/poly.h"
+#include "hires3d.h"
 #include "screen.h"
 
 
@@ -84,6 +85,7 @@ private:
 		~gaelco3d_renderer() {}
 
 		bitmap_rgb32 &screenbits() { return m_screenbits; }
+		int scale() const { return m_scale; }
 		uint32_t polygons() { uint32_t result = m_polygons; m_polygons = 0; return result; }
 
 		void render_poly(screen_device &screen, uint32_t *polydata);
@@ -92,6 +94,8 @@ private:
 		gaelco3d_state &m_state;
 
 	private:
+		// the frame and depth buffers are m_scale times the screen (-hires3d)
+		int m_scale;
 		bitmap_rgb32 m_screenbits;
 		bitmap_ind16 m_zbuffer;
 		uint32_t m_polygons = 0;
@@ -106,6 +110,8 @@ private:
 		void render_normal(int32_t scanline, const extent_t &extent, const gaelco3d_object_data &extra, int threadid);
 		void render_alphablend(int32_t scanline, const extent_t &extent, const gaelco3d_object_data &extra, int threadid);
 	};
+
+	std::unique_ptr<hires3d_output> m_hires;
 
 	required_shared_ptr<uint32_t> m_adsp_ram_base;
 	optional_shared_ptr<uint16_t> m_m68k_ram_base16;

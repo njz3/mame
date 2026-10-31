@@ -26,7 +26,7 @@ Matériel visé, dans l'ordre :
 | 6 | Midway Zeus 2 | crusnexo | à faire | à faire |
 | 7 | Namco System 21 | winrun, driveyes | OK (winrun, driveyes ×2) | à faire |
 | 8 | Taito JC (TC0780FPA) | sidebs, sidebs2, dangcurv | OK (sidebs, sidebs2 ×2) | à faire |
-| 9 | Gaelco 3D | speedup, surfplnt, radikalb | à faire | à faire |
+| 9 | Gaelco 3D | speedup, surfplnt, radikalb | OK (speedup, radikalb ×2) | à faire |
 | 10 | SNK HNG64 | roadedge, xrally | à faire | à faire |
 | — | Namco System 23 | motoxgo, raceon, finfurl | quand l'émulation de base marchera | |
 
@@ -189,3 +189,8 @@ l'écraser.
   - Horloge du 68040 × 1,5 : 30 images/s stables (une image sur deux).
   - Idle skip sur la boucle d'attente du 68040, qui scrute le mot d'état du
     DSP : vitesse non limitée de 102 % à 144 % (sidebs) sur le portable.
+- 2026-10-31 : **Gaelco 3D** en logiciel HD. Le DSP fournit des équations de
+  plan par pixel (u/z, v/z, 1/z) : leurs gradients sont divisés par N, les
+  sommets multipliés par N, le tampon image et le z-buffer sont agrandis × N.
+  Le tampon est rangé tête en bas, il est retourné en copiant vers l'image HD
+  et échantillonné pour l'écran natif.
