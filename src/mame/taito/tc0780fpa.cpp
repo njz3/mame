@@ -5,17 +5,21 @@
 
 #include "emu.h"
 #include "tc0780fpa.h"
+
+#include "emuopts.h"
+#include "hires3d.h"
 #include "screen.h"
 
 
 static constexpr unsigned POLY_FIFO_SIZE = 32;
 
 
-tc0780fpa_renderer::tc0780fpa_renderer(device_t &parent, screen_device &screen, const uint8_t *texture_ram)
+tc0780fpa_renderer::tc0780fpa_renderer(device_t &parent, screen_device &screen, const uint8_t *texture_ram, int scale)
 	: poly_manager<float, tc0780fpa_polydata, 6>(screen.machine())
+	, m_scale(scale)
 {
-	int const width = screen.width();
-	int const height = screen.height();
+	int const width = screen.width() * scale;
+	int const height = screen.height() * scale;
 
 	m_fb[0].allocate(width, height);
 	m_fb[1].allocate(width, height);
@@ -23,7 +27,8 @@ tc0780fpa_renderer::tc0780fpa_renderer(device_t &parent, screen_device &screen, 
 
 	m_texture = texture_ram;
 
-	m_cliprect = screen.cliprect();
+	rectangle const &clip = screen.cliprect();
+	m_cliprect.set(clip.left() * scale, (clip.right() + 1) * scale - 1, clip.top() * scale, (clip.bottom() + 1) * scale - 1);
 
 	m_current_fb = 0;
 
@@ -43,9 +48,28 @@ void tc0780fpa_renderer::swap_buffers()
 	m_zb.fill(0xffff, m_cliprect);
 }
 
-void tc0780fpa_renderer::draw(bitmap_ind16 &bitmap, const rectangle &cliprect)
+void tc0780fpa_renderer::draw(bitmap_ind16 &bitmap, const rectangle &cliprect, int scale)
 {
-	copybitmap_trans(bitmap, m_fb[m_current_fb ^ 1], 0, 0, 0, 0, cliprect, 0);
+	if (scale == m_scale)
+	{
+		copybitmap_trans(bitmap, m_fb[m_current_fb ^ 1], 0, 0, 0, 0, cliprect, 0);
+		return;
+	}
+
+	// native destination: sample the larger frame buffer
+	int const step = m_scale / scale;
+	bitmap_ind16 const &fb = m_fb[m_current_fb ^ 1];
+	for (int y = cliprect.top(); y <= cliprect.bottom(); y++)
+	{
+		uint16_t const *const src = &fb.pix(y * step);
+		uint16_t *const dst = &bitmap.pix(y);
+		for (int x = cliprect.left(); x <= cliprect.right(); x++)
+		{
+			uint16_t const pen = src[x * step];
+			if (pen)
+				dst[x] = pen;
+		}
+	}
 }
 
 void tc0780fpa_renderer::render_solid_scan(int32_t scanline, const extent_t &extent, const tc0780fpa_polydata &extradata, int threadid)
@@ -206,8 +230,8 @@ void tc0780fpa_renderer::render(uint16_t *polygon_fifo, int length)
 			for (int i = 0; i < 3; i++)
 			{
 				vert[i].p[1] = polygon_fifo[ptr++];
-				vert[i].y =  (int16_t)(polygon_fifo[ptr++]);
-				vert[i].x =  (int16_t)(polygon_fifo[ptr++]);
+				vert[i].y =  (int16_t)(polygon_fifo[ptr++]) * m_scale;
+				vert[i].x =  (int16_t)(polygon_fifo[ptr++]) * m_scale;
 				vert[i].p[0] = (uint16_t)(polygon_fifo[ptr++]);
 			}
 
@@ -265,8 +289,8 @@ void tc0780fpa_renderer::render(uint16_t *polygon_fifo, int length)
 				vert[i].p[3] = polygon_fifo[ptr++] + 0.5; // palette
 				vert[i].p[2] = (int16_t)(polygon_fifo[ptr++]);
 				vert[i].p[1] = (int16_t)(polygon_fifo[ptr++]);
-				vert[i].y =  (int16_t)(polygon_fifo[ptr++]);
-				vert[i].x =  (int16_t)(polygon_fifo[ptr++]);
+				vert[i].y =  (int16_t)(polygon_fifo[ptr++]) * m_scale;
+				vert[i].x =  (int16_t)(polygon_fifo[ptr++]) * m_scale;
 				vert[i].p[0] = (uint16_t)(polygon_fifo[ptr++]);
 			}
 
@@ -301,8 +325,8 @@ void tc0780fpa_renderer::render(uint16_t *polygon_fifo, int length)
 			for (int i = 0; i < 4; i++)
 			{
 				vert[i].p[1] = polygon_fifo[ptr++];
-				vert[i].y =  (int16_t)(polygon_fifo[ptr++]);
-				vert[i].x =  (int16_t)(polygon_fifo[ptr++]);
+				vert[i].y =  (int16_t)(polygon_fifo[ptr++]) * m_scale;
+				vert[i].x =  (int16_t)(polygon_fifo[ptr++]) * m_scale;
 				vert[i].p[0] = (uint16_t)(polygon_fifo[ptr++]);
 			}
 
@@ -367,8 +391,8 @@ void tc0780fpa_renderer::render(uint16_t *polygon_fifo, int length)
 				vert[i].p[3] = polygon_fifo[ptr++] + 0.5; // palette
 				vert[i].p[2] = (int16_t)(polygon_fifo[ptr++]);
 				vert[i].p[1] = (int16_t)(polygon_fifo[ptr++]);
-				vert[i].y =  (int16_t)(polygon_fifo[ptr++]);
-				vert[i].x =  (int16_t)(polygon_fifo[ptr++]);
+				vert[i].y =  (int16_t)(polygon_fifo[ptr++]) * m_scale;
+				vert[i].x =  (int16_t)(polygon_fifo[ptr++]) * m_scale;
 				vert[i].p[0] = (uint16_t)(polygon_fifo[ptr++]);
 			}
 
@@ -404,7 +428,7 @@ void tc0780fpa_device::device_start()
 	m_texture = std::make_unique<uint8_t[]>(0x400000);
 	m_poly_fifo = std::make_unique<uint16_t[]>(POLY_FIFO_SIZE);
 
-	m_renderer = std::make_unique<tc0780fpa_renderer>(*this, screen(), m_texture.get());
+	m_renderer = std::make_unique<tc0780fpa_renderer>(*this, screen(), m_texture.get(), std::clamp(machine().options().int_value(OPTION_HIRES3D), 1, 16));
 
 	save_pointer(NAME(m_texture), 0x400000);
 	save_pointer(NAME(m_poly_fifo), POLY_FIFO_SIZE);
@@ -483,7 +507,7 @@ void tc0780fpa_device::render_w(uint16_t data)
 {
 }
 
-void tc0780fpa_device::draw(bitmap_ind16 &bitmap, const rectangle &cliprect)
+void tc0780fpa_device::draw(bitmap_ind16 &bitmap, const rectangle &cliprect, int scale)
 {
-	m_renderer->draw(bitmap, cliprect);
+	m_renderer->draw(bitmap, cliprect, scale);
 }

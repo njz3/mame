@@ -21,17 +21,18 @@ struct tc0780fpa_polydata
 class tc0780fpa_renderer : public poly_manager<float, tc0780fpa_polydata, 6>
 {
 public:
-	tc0780fpa_renderer(device_t &parent, screen_device &screen, const uint8_t *texture_ram);
+	tc0780fpa_renderer(device_t &parent, screen_device &screen, const uint8_t *texture_ram, int scale);
 
 	void render_solid_scan(int32_t scanline, const extent_t &extent, const tc0780fpa_polydata &extradata, int threadid);
 	void render_shade_scan(int32_t scanline, const extent_t &extent, const tc0780fpa_polydata &extradata, int threadid);
 	void render_texture_scan(int32_t scanline, const extent_t &extent, const tc0780fpa_polydata &extradata, int threadid);
 
 	void render(uint16_t *polygon_fifo, int length);
-	void draw(bitmap_ind16 &bitmap, const rectangle &cliprect);
+	void draw(bitmap_ind16 &bitmap, const rectangle &cliprect, int scale);
 	void swap_buffers();
 
 private:
+	// the frame buffers are m_scale times the screen size (-hires3d)
 	bitmap_ind16 m_fb[2];
 	bitmap_ind16 m_zb;
 	const uint8_t *m_texture;
@@ -39,6 +40,7 @@ private:
 	rectangle m_cliprect;
 
 	int m_current_fb;
+	int m_scale;
 };
 
 
@@ -47,7 +49,9 @@ class tc0780fpa_device : public device_t, public device_video_interface
 public:
 	tc0780fpa_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock = 0);
 
-	void draw(bitmap_ind16 &bitmap, const rectangle &cliprect);
+	// scale is the resolution multiple of bitmap: 1 for the native screen,
+	// or the -hires3d factor for a high-resolution frame
+	void draw(bitmap_ind16 &bitmap, const rectangle &cliprect, int scale = 1);
 
 	uint16_t tex_addr_r();
 	void tex_addr_w(uint16_t data);

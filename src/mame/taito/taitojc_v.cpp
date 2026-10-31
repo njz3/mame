@@ -263,12 +263,44 @@ void taitojc_state::video_start()
 
 	m_tilemap->set_transparent_pen(0);
 
+	m_hires = std::make_unique<hires3d_output>(*m_screen);
+
 	/* create the char set (gfx will then be updated dynamically from RAM) */
 	m_gfxdecode->set_gfx(0, std::make_unique<gfx_element>(m_palette, char_layout, (uint8_t *)&m_char_ram[0], 0, m_palette->entries() / 16, 0));
 }
 
 uint32_t taitojc_state::screen_update(screen_device &screen, bitmap_ind16 &bitmap, const rectangle &cliprect)
 {
+	if (m_hires->active())
+	{
+		// objects and text drawn natively and magnified around the 3D; the
+		// top layers start from a pen no layer draws, to spot their pixels
+		constexpr uint16_t EMPTY = 0xffff;
+		int const scale = m_hires->scale();
+		rectangle const hclip = m_hires->scaled(cliprect);
+		if ((m_hires_ind.width() != screen.width() * scale) || (m_hires_ind.height() != screen.height() * scale))
+			m_hires_ind.allocate(screen.width() * scale, screen.height() * scale);
+
+		bitmap.fill(0, cliprect);
+		draw_object_bank(bitmap, cliprect, 0, 0);
+		draw_object_bank(bitmap, cliprect, 1, 0);
+		draw_object_bank(bitmap, cliprect, 2, 0);
+		m_hires->upscale(bitmap, m_hires_ind, cliprect);
+
+		m_tc0780fpa->draw(m_hires_ind, hclip, scale);
+
+		bitmap.fill(EMPTY, cliprect);
+		draw_object_bank(bitmap, cliprect, 0, 1);
+		draw_object_bank(bitmap, cliprect, 1, 1);
+		draw_object_bank(bitmap, cliprect, 2, 1);
+		if (BIT(m_objlist[0xfc4/4], 16))
+			m_tilemap->draw(screen, bitmap, cliprect, 0, 0);
+		m_hires->upscale(bitmap, m_hires_ind, cliprect, EMPTY);
+
+		m_hires->indexed_to_frame(m_hires_ind, hclip, *m_palette);
+		m_hires->frame_done(cliprect);
+	}
+
 	bitmap.fill(0, cliprect);
 
 	// low priority objects

@@ -14,6 +14,7 @@
 #include "tc0780fpa.h"
 
 #include "emupal.h"
+#include "hires3d.h"
 #include "screen.h"
 #include "tilemap.h"
 
@@ -61,6 +62,11 @@ protected:
 	required_device<gfxdecode_device> m_gfxdecode;
 	required_device<screen_device> m_screen;
 	required_device<palette_device> m_palette;
+
+	// -hires3d: the frame is mixed in an indexed bitmap at a multiple of the
+	// native resolution, around the polygons drawn at that resolution
+	std::unique_ptr<hires3d_output> m_hires;
+	bitmap_ind16 m_hires_ind;
 
 	required_region_ptr<uint16_t> m_dspgfx;
 

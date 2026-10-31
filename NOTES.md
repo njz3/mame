@@ -25,7 +25,7 @@ Matériel visé, dans l'ordre :
 | 5 | Midway V-Unit | crusnusa, crusnwld, offroadc | 2D OK (crusnusa ×2) ; 3D à vérifier en démo (sommets entiers : bords natifs, textures HD) | à faire |
 | 6 | Midway Zeus 2 | crusnexo | à faire | à faire |
 | 7 | Namco System 21 | winrun, driveyes | OK (winrun, driveyes ×2) | à faire |
-| 8 | Taito JC (TC0780FPA) | sidebs, sidebs2, dangcurv | à faire | à faire |
+| 8 | Taito JC (TC0780FPA) | sidebs, sidebs2, dangcurv | OK (sidebs, sidebs2 ×2) | à faire |
 | 9 | Gaelco 3D | speedup, surfplnt, radikalb | à faire | à faire |
 | 10 | SNK HNG64 | roadedge, xrally | à faire | à faire |
 | — | Namco System 23 | motoxgo, raceon, finfurl | quand l'émulation de base marchera | |
@@ -178,3 +178,14 @@ l'écraser.
     pixels que les sprites de priorité 15 modifient (ombres sur la 3D) sont
     reportés en blocs.
   - ROMs copiées : winrun, driveyes, namcoc65, namcoc68.
+- 2026-10-31 : **Taito JC** en logiciel HD : tampons du TC0780FPA × N, sommets
+  (entiers) mis à l'échelle. Mélange en index : objets du fond agrandis, 3D
+  HD, objets du dessus et texte agrandis avec la valeur sentinelle 0xffff
+  comme transparence.
+- 2026-10-31 : **vitesse de Side by Side**, corrigée sur `dev/ffdedition`
+  (efc1acdba1e, ba474f170be) puis fusionnée ici.
+  - Avant : la course de démo tournait à 8-10 images 3D/s.
+  - Durées FPU propres au 68040 dans le cœur 68k : environ 20 images/s.
+  - Horloge du 68040 × 1,5 : 30 images/s stables (une image sur deux).
+  - Idle skip sur la boucle d'attente du 68040, qui scrute le mot d'état du
+    DSP : vitesse non limitée de 102 % à 144 % (sidebs) sur le portable.
