@@ -61,6 +61,10 @@ public:
 	// when it is not negative
 	void upscale(const bitmap_ind16 &source, bitmap_ind16 &dest, const rectangle &cliprect, int transparent_pen = -1) const;
 
+	// magnify into the frame bitmap the pixels of after that differ from
+	// before (both native), such as the 2D layers drawn over the 3D
+	void magnify_changes(const bitmap_rgb32 &before, const bitmap_rgb32 &after, const rectangle &cliprect);
+
 	// convert the hclip area of a high-resolution indexed bitmap into the
 	// frame bitmap through the palette, as the renderer does for an
 	// indexed screen

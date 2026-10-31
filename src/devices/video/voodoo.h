@@ -13,6 +13,7 @@
 
 #pragma once
 
+#include "hires3d.h"
 #include "screen.h"
 
 
@@ -416,6 +417,10 @@ public:
 	// video update
 	virtual int update(bitmap_rgb32 &bitmap, const rectangle &cliprect) = 0;
 
+	// -hires3d: the high-resolution output when update() draws one, so that
+	// the driver can magnify the 2D it draws over the 3D into it
+	virtual hires3d_output *hires() { return nullptr; }
+
 protected:
 	// internal construction
 	generic_voodoo_device(const machine_config &mconfig, device_type type, const char *tag, device_t *owner, u32 clock, voodoo::voodoo_model model);
@@ -499,6 +504,7 @@ public:
 
 	// video update
 	virtual int update(bitmap_rgb32 &bitmap, const rectangle &cliprect) override;
+	virtual hires3d_output *hires() override { return ((m_hires_scale > 1) && m_hires->active()) ? m_hires.get() : nullptr; }
 
 protected:
 	// device-level overrides
@@ -604,6 +610,18 @@ protected:
 	voodoo::voodoo_renderer &renderer() { return *m_renderer; }
 	s32 triangle();
 
+	// -hires3d (Voodoo 1 and 2): a copy of the frame buffer memory at
+	// m_hires_scale times the resolution, each row of rowpixels pixels
+	// becoming m_hires_scale rows of rowpixels * m_hires_scale pixels; the
+	// triangles and fast fills are drawn in both, the LFB writes and blits
+	// are magnified into it, and the display reads it
+	u16 *hires_buffer(u16 const *buffer) const;
+	bool hires_fits(u16 const *buffer, s32 left, s32 right, s32 top, s32 bottom) const;
+	void hires_triangle(voodoo::poly_data const &poly, voodoo::voodoo_renderer::vertex_t const *vert);
+	void hires_fastfill(voodoo::poly_data const &poly);
+	void hires_pixel(u16 const *buffer, s32 x, s32 scry);
+	void hires_fill_rows(u16 const *buffer, u32 first, u32 count, u16 value);
+
 	// statistics
 	void accumulate_statistics(const voodoo::thread_stats_block &block);
 	void update_statistics(bool accumulate);
@@ -643,6 +661,13 @@ protected:
 	std::unique_ptr<u8[]> m_memory;          // allocated framebuffer/texture memory
 	std::unique_ptr<voodoo::shared_tables> m_shared; // shared tables
 	std::unique_ptr<voodoo::voodoo_renderer> m_renderer; // rendering helper
+
+	// high-resolution copy of the frame buffer (-hires3d)
+	std::unique_ptr<hires3d_output> m_hires; // output, when there is a screen
+	int m_hires_scale = 1;                   // resolution multiplier (1 = off)
+	size_t m_hires_guard = 0;                // pixels before the copy of address 0
+	size_t m_hires_size = 0;                 // pixels allocated
+	std::unique_ptr<u16[]> m_hires_fb;       // the copy
 
 	// video buffer configuration
 	u32 m_rgboffs[3];                        // word offset to 3 RGB buffers

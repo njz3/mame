@@ -5,6 +5,12 @@ course 1990-2010 à n'importe quelle résolution, d'abord en logiciel puis sur l
 carte graphique (Vulkan), en gardant l'émulation MAME de tout le reste : CPU,
 DSP, géométrie, son, I/O, link et 2D.
 
+Le rendu Vulkan n'est pas un bonus : le but est aussi de faire travailler la
+carte graphique pour soulager le CPU de la machine qui fait tourner MAME. Pour
+chaque puce, on traduit donc ses commandes 3D (triangles, états de mélange,
+profondeur, textures) en appels Vulkan. Le rendu logiciel HD sert de référence
+pour vérifier l'image, et de repli sans Vulkan ou pour les cas non traduits.
+
 ## Périmètre
 
 Exclus, car déjà rendus nativement en 3D par d'autres émulateurs :
@@ -21,7 +27,7 @@ Matériel visé, dans l'ordre :
 | 1 | Sega Model 1 | vr, vformula | OK (vr ×2, ×4) | OK (vr ×2, ×4) ; relecture lente |
 | 2 | Namco System 22 / Super 22 | ridgerac, ridgera2, raverace, acedrive, victlap, cybrcycc, dirtdash, alpinerd | OK (ridgerac, dirtdash ×2) | à faire |
 | 3 | Konami K001005 | gticlub, midnrun, windheat, jetwave | OK (gticlub, midnrun ×2) | à faire |
-| 4 | 3dfx Voodoo 1/2 | sfrush, sfrushrk, calspeed, hyprdriv, vaportrx, roadburn, thrilld, racingj | à faire | à faire |
+| 4 | 3dfx Voodoo 1/2 | sfrush, sfrushrk, calspeed, hyprdriv, vaportrx, roadburn, thrilld, racingj | OK (sfrush ×2 ×4, racingj ×2, roadburn ×2) ; coûteux en CPU | à faire (prochaine étape) |
 | 5 | Midway V-Unit | crusnusa, crusnwld, offroadc | 2D OK (crusnusa ×2) ; 3D à vérifier en démo (sommets entiers : bords natifs, textures HD) | à faire |
 | 6 | Midway Zeus 2 | crusnexo | OK (crusnexo ×2, mode démo) | à faire |
 | 7 | Namco System 21 | winrun, driveyes | OK (winrun, driveyes ×2) | à faire |
@@ -215,3 +221,25 @@ l'écraser.
   - Test : Cruis'n Exotica, calibration passée par script (5 appuis sur
     « Service Mode »), mode démo 3D correct en ×2.
   - ROMs copiées : crusnexo, tms320c32.
+- 2026-10-31 : **3dfx Voodoo 1/2** en logiciel HD (Banshee et Voodoo 3 non
+  concernés).
+  - Copie HD de toute la mémoire image : une ligne de `rowpixels` pixels
+    natifs devient N lignes de `rowpixels` × N pixels, avec une marge de chaque
+    côté. Les tampons couleur et profondeur y gardent leur adresse.
+  - Longueur de ligne et origine Y passées par polygone (`poly_data`) au lieu
+    de l'état global du rastériseur, pour dessiner chaque triangle une seconde
+    fois dans la copie HD.
+  - Triangle HD : sommets et découpage × N, gradients ÷ N, valeurs de départ
+    recentrées sur le pixel HD quand l'ajustement sous-pixel est actif. Un
+    triangle qui sortirait de la copie HD n'y est pas dessiné.
+  - Remplissages rapides refaits en HD. Écritures LFB (brutes ou par le
+    pipeline) et remplissage par blit du Voodoo 2 recopiés en blocs.
+  - Affichage HD lu dans la copie du tampon avant. `hires()` permet au driver
+    de reporter les pixels que sa 2D change : NWK-TR et Hang Pilot (K001604)
+    le font, avec la nouvelle `hires3d_output::magnify_changes()`.
+  - Tests : sfrush ×2 et ×4, racingj ×2 (texte K001604 par-dessus), roadburn
+    ×2 (Voodoo 2) : images correctes.
+  - Coût CPU élevé : 110 s émulées de racingj en 109 s en natif et 210 s en
+    ×2, 80 s de roadburn en 85 s en natif et 232 s en ×2. D'où la priorité au
+    rendu Vulkan pour cette puce.
+  - ROMs copiées : sfrush (+ CHD), racingj, roadburn (+ CHD).

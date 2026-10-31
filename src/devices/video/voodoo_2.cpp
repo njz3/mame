@@ -1157,6 +1157,7 @@ u32 voodoo_2_device::reg_blt_fill_w(u32 chipmask, u32 regnum, u32 data)
 	u64 const end = u64(page + pages) * 4096;
 	u64 const tile_bytes = u64(rowpixels) * 64;
 	unsigned matches = 0;
+	u32 target = 0;
 	for (unsigned i = 0; i < buffers.size(); ++i)
 	{
 		u32 const base = buffers[i];
@@ -1182,6 +1183,7 @@ u32 voodoo_2_device::reg_blt_fill_w(u32 chipmask, u32 regnum, u32 data)
 		if (i == m_frontbuf)
 			return reg_unimplemented_w(chipmask, regnum, data);
 		++matches;
+		target = base;
 	}
 	if (matches != 1)
 		return reg_unimplemented_w(chipmask, regnum, data);
@@ -1189,6 +1191,8 @@ u32 voodoo_2_device::reg_blt_fill_w(u32 chipmask, u32 regnum, u32 data)
 	// The renderer accesses framebuffer storage as native u16 pixels.
 	u16 *const dest = reinterpret_cast<u16 *>(m_fbram + begin);
 	std::fill_n(dest, (end - begin) / sizeof(*dest), u16(m_reg.read(voodoo_regs::reg_bltColor)));
+	if (m_hires_scale > 1)
+		hires_fill_rows(reinterpret_cast<u16 *>(m_fbram + target), (begin - target) / 2 / rowpixels, (end - begin) / 2 / rowpixels, u16(m_reg.read(voodoo_regs::reg_bltColor)));
 	m_video_changed = true;
 	return 0;
 }

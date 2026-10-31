@@ -399,6 +399,7 @@ private:
 	template <unsigned Board> void hangplt_sharc_map(address_map &map) ATTR_COLD;
 
 	required_device_array<generic_voodoo_device, 2> m_voodoo;
+	bitmap_rgb32 m_below[2]; // -hires3d: the frames before the 2D layer
 };
 
 
@@ -885,7 +886,18 @@ uint32_t hangplt_state::screen_update(screen_device &screen, bitmap_rgb32 &bitma
 	// FIXME: service mode cross hatch comes from this layer (which somehow also disables 3d render)
 //  m_k001604[Which]->draw_back_layer(screen, bitmap, cliprect);
 	m_voodoo[Which]->update(bitmap, cliprect);
+
+	// with -hires3d, the pixels the 2D layer changes are magnified over the 3D
+	hires3d_output *const hires = m_voodoo[Which]->hires();
+	if (hires)
+	{
+		if ((m_below[Which].width() != bitmap.width()) || (m_below[Which].height() != bitmap.height()))
+			m_below[Which].allocate(bitmap.width(), bitmap.height());
+		copybitmap(m_below[Which], bitmap, 0, 0, 0, 0, cliprect);
+	}
 	m_k001604[Which]->draw_front_layer(screen, bitmap, cliprect);
+	if (hires)
+		hires->magnify_changes(m_below[Which], bitmap, cliprect);
 
 	return 0;
 }

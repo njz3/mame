@@ -298,6 +298,7 @@ private:
 	required_device<konppc_device> m_konppc;
 	required_device<adc12138_device> m_adc12138;
 	required_device_array<generic_voodoo_device, 2> m_voodoo;
+	bitmap_rgb32 m_below; // -hires3d: the frame before the 2D layer
 	required_device_array<palette_device, 2> m_palette;
 	optional_shared_ptr_array<uint32_t, 2> m_sharc_dataram;
 	required_device<konppc_jvs_host_device> m_jvs_host;
@@ -336,7 +337,18 @@ uint32_t nwktr_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap,
 	int const board = m_exrgb ? 1 : 0;
 
 	m_voodoo[board]->update(bitmap, cliprect);
+
+	// with -hires3d, the pixels the 2D layer changes are magnified over the 3D
+	hires3d_output *const hires = m_voodoo[board]->hires();
+	if (hires)
+	{
+		if ((m_below.width() != bitmap.width()) || (m_below.height() != bitmap.height()))
+			m_below.allocate(bitmap.width(), bitmap.height());
+		copybitmap(m_below, bitmap, 0, 0, 0, 0, cliprect);
+	}
 	m_k001604[0]->draw_front_layer(screen, bitmap, cliprect); // K001604 on slave board doesn't seem to output anything. Bug or intended?
+	if (hires)
+		hires->magnify_changes(m_below, bitmap, cliprect);
 
 	return 0;
 }

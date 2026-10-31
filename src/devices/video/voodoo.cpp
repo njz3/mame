@@ -1008,6 +1008,21 @@ void voodoo_1_device::device_start()
 	// create the renderer
 	m_renderer = std::make_unique<voodoo_renderer>(machine(), tmu_config, m_shared->rgb565, m_reg, &m_tmu[0].regs(), BIT(m_chipmask, 2) ? &m_tmu[1].regs() : nullptr);
 
+	// -hires3d: Voodoo 1 and 2 also draw into a magnified copy of the frame
+	// buffer, with a guard as large as the widest row on each side
+	if (has_screen() && (model() == voodoo_model::VOODOO_1 || model() == voodoo_model::VOODOO_2))
+	{
+		m_hires = std::make_unique<hires3d_output>(screen());
+		if (m_hires->scale() > 1)
+		{
+			m_hires_scale = m_hires->scale();
+			size_t const block = size_t(2048) * m_hires_scale * m_hires_scale;
+			m_hires_guard = block;
+			m_hires_size = (size_t(m_fbmask) + 1) / 2 * m_hires_scale * m_hires_scale + 3 * block;
+			m_hires_fb = std::make_unique<u16[]>(m_hires_size);
+		}
+	}
+
 	// set up the PCI FIFO
 	m_pci_fifo.configure(m_pci_fifo_mem, 64*2);
 	m_stall_state = NOT_STALLED;
@@ -1627,6 +1642,8 @@ void voodoo_1_device::internal_lfb_w(offs_t offset, u32 data, u32 mem_mask)
 			scry = m_renderer->yorigin() - y;
 
 		// advance pointers to the proper row
+		u16 const *const destbuf = dest;
+		u16 const *const depthbuf = depth;
 		dest += scry * m_renderer->rowpixels() + x;
 		if (depth != nullptr)
 			depth += scry * m_renderer->rowpixels() + x;
@@ -1644,7 +1661,11 @@ void voodoo_1_device::internal_lfb_w(offs_t offset, u32 data, u32 mem_mask)
 				// write to the RGB buffer
 				rgb_t pixel = src_color[pix];
 				if ((mask & LFB_RGB_PRESENT_0) != 0 && dest + pix < end)
+				{
 					dest[pix] = dither.pixel(x, pixel.r(), pixel.g(), pixel.b());
+					if (m_hires_scale > 1)
+						hires_pixel(destbuf, x, scry);
+				}
 
 				// make sure we have an aux buffer to write to
 				if (depth != nullptr && depth + pix < end)
@@ -1661,6 +1682,8 @@ void voodoo_1_device::internal_lfb_w(offs_t offset, u32 data, u32 mem_mask)
 						if ((mask & (LFB_DEPTH_PRESENT_0 | LFB_DEPTH_PRESENT_MSW_0)) != 0)
 							depth[pix] = src_depth[pix];
 					}
+					if (m_hires_scale > 1)
+						hires_pixel(depthbuf, x, scry);
 				}
 
 				// track pixel writes to the frame buffer regardless of mask
@@ -1685,6 +1708,8 @@ void voodoo_1_device::internal_lfb_w(offs_t offset, u32 data, u32 mem_mask)
 			scry = m_renderer->yorigin() - y;
 
 		// advance pointers to the proper row
+		u16 const *const destbuf = dest;
+		u16 const *const depthbuf = depth;
 		dest += scry * m_renderer->rowpixels();
 		if (depth != nullptr)
 			depth += scry * m_renderer->rowpixels();
@@ -1698,9 +1723,20 @@ void voodoo_1_device::internal_lfb_w(offs_t offset, u32 data, u32 mem_mask)
 		rgbaint_t iterargb(0);
 		for (int pix = 0; mask != 0; pix++)
 		{
-			// make sure we care about this pixel
+			// make sure we care about this pixel; with -hires3d, magnify the
+			// pixels it changes
 			if ((mask & LFB_PIXEL0_MASK) != 0)
+			{
+				bool const hires = (m_hires_scale > 1) && (dest + x < end);
+				bool const hires_depth = hires && (depth != nullptr) && (depth + x < end);
+				u16 const oldcolor = hires ? dest[x] : 0;
+				u16 const olddepth = hires_depth ? depth[x] : 0;
 				m_renderer->pixel_pipeline(threadstats, dest, depth, x, y, src_color[pix], src_depth[pix]);
+				if (hires && dest[x] != oldcolor)
+					hires_pixel(destbuf, x, scry);
+				if (hires_depth && depth[x] != olddepth)
+					hires_pixel(depthbuf, x, scry);
+			}
 
 			// advance our pointers
 			x++;
@@ -2323,7 +2359,10 @@ u32 voodoo_1_device::reg_fastfill_w(u32 chipmask, u32 regnum, u32 data)
 	poly.zacolor = m_reg.za_color();
 
 	// 2 pixels per clock
-	return m_renderer->enqueue_fastfill(poly) / 2;
+	u32 const pixels = m_renderer->enqueue_fastfill(poly);
+	if (m_hires_scale > 1)
+		hires_fastfill(poly);
+	return pixels / 2;
 }
 
 
@@ -2719,6 +2758,37 @@ int voodoo_1_device::update_common(bitmap_rgb32 &bitmap, const rectangle &clipre
 			dst[x] = pens[src[x]];
 	}
 
+	// high-resolution frame from the magnified copy (the rows above the
+	// display start keep what the driver drew)
+	if ((m_hires_scale > 1) && m_hires->active() && (rowpixels != 0))
+	{
+		s32 const scale = m_hires_scale;
+		bitmap_rgb32 &hires = m_hires->frame_bitmap();
+		rectangle const hclip = m_hires->scaled(cliprect);
+		ptrdiff_t const hrow = ptrdiff_t(rowpixels) * scale;
+		ptrdiff_t const hbase = hires_buffer(buffer_base) - &m_hires_fb[0] - ptrdiff_t(m_xoffs) * scale;
+		for (s32 y = hclip.top(); y <= hclip.bottom(); y++)
+		{
+			u32 *const dst = &hires.pix(y);
+			ptrdiff_t const row = hbase + (y - ptrdiff_t(m_yoffs) * scale) * hrow;
+			if (y < s32(m_yoffs) * scale)
+			{
+				u32 const *const src = &bitmap.pix(y / scale);
+				for (s32 x = hclip.left(); x <= hclip.right(); x++)
+					dst[x] = src[x / scale];
+			}
+			else if ((row + hclip.left() >= 0) && (row + hclip.right() < ptrdiff_t(m_hires_size)))
+			{
+				u16 const *const src = &m_hires_fb[row];
+				for (s32 x = hclip.left(); x <= hclip.right(); x++)
+					dst[x] = pens[src[x]];
+			}
+			else
+				std::fill_n(&dst[hclip.left()], hclip.width(), rgb_t::black());
+		}
+		m_hires->frame_done(cliprect);
+	}
+
 	// update stats display
 	if (DEBUG_STATS && m_stats.update_display_state(machine().input().code_pressed(KEYCODE_BACKSLASH)))
 		popmessage(m_stats.string(), 0, 0);
@@ -3013,6 +3083,8 @@ s32 voodoo_1_device::triangle()
 
 	// enqueue a triangle
 	s32 pixels = m_renderer->enqueue_triangle(poly, vert);
+	if (m_hires_scale > 1)
+		hires_triangle(poly, vert);
 
 	// update stats
 	m_reg.add(voodoo_regs::reg_fbiTrianglesOut, 1);
@@ -3026,6 +3098,213 @@ s32 voodoo_1_device::triangle()
 
 	// 1 pixel per clock, plus some setup time
 	return TRIANGLE_SETUP_CLOCKS + pixels;
+}
+
+
+//-------------------------------------------------
+//  hires_buffer - the high-resolution copy of a
+//  buffer: native address A, in rows of rowpixels
+//  pixels, becomes row A / rowpixels * scale and
+//  column A % rowpixels * scale
+//-------------------------------------------------
+
+u16 *voodoo_1_device::hires_buffer(u16 const *buffer) const
+{
+	size_t const rowpixels = m_renderer->rowpixels();
+	size_t const scale = m_hires_scale;
+	size_t const offset = (reinterpret_cast<u8 const *>(buffer) - m_fbram) / 2;
+	return &m_hires_fb[m_hires_guard + (offset / rowpixels) * scale * rowpixels * scale + (offset % rowpixels) * scale];
+}
+
+
+//-------------------------------------------------
+//  hires_fits - true if the high-resolution
+//  pixels left-right, top-bottom (screen Y) of a
+//  buffer are inside the copy
+//-------------------------------------------------
+
+bool voodoo_1_device::hires_fits(u16 const *buffer, s32 left, s32 right, s32 top, s32 bottom) const
+{
+	if ((buffer == nullptr) || (m_renderer->rowpixels() == 0))
+		return false;
+	ptrdiff_t const base = hires_buffer(buffer) - &m_hires_fb[0];
+	ptrdiff_t const row = ptrdiff_t(m_renderer->rowpixels()) * m_hires_scale;
+	return (base + top * row + left >= 0) && (base + bottom * row + right < ptrdiff_t(m_hires_size));
+}
+
+
+//-------------------------------------------------
+//  hires_triangle - draw a triangle again into
+//  the high-resolution copy
+//-------------------------------------------------
+
+void voodoo_1_device::hires_triangle(poly_data const &poly, voodoo_renderer::vertex_t const *vert)
+{
+	s32 const scale = m_hires_scale;
+	auto const fbzmode = poly.raster.fbzmode();
+
+	// magnified vertices, and the pixels they can cover
+	voodoo_renderer::vertex_t hvert[3];
+	float minx = vert[0].x * scale, maxx = minx;
+	float miny = vert[0].y * scale, maxy = miny;
+	for (int i = 0; i < 3; i++)
+	{
+		hvert[i].x = vert[i].x * scale;
+		hvert[i].y = vert[i].y * scale;
+		minx = std::min(minx, hvert[i].x);
+		maxx = std::max(maxx, hvert[i].x);
+		miny = std::min(miny, hvert[i].y);
+		maxy = std::max(maxy, hvert[i].y);
+	}
+	s32 left = s32(floorf(minx)) - 1;
+	s32 right = s32(ceilf(maxx)) + 1;
+	s32 top = s32(floorf(miny)) - 1;
+	s32 bottom = s32(ceilf(maxy)) + 1;
+	s32 const yorigin = (poly.yorigin + 1) * scale - 1;
+	if (fbzmode.y_origin())
+	{
+		s32 const flipped = yorigin - bottom;
+		bottom = yorigin - top;
+		top = flipped;
+	}
+	if (fbzmode.enable_clipping())
+	{
+		left = std::max<s32>(left, poly.clipleft * scale);
+		right = std::min<s32>(right, poly.clipright * scale - 1);
+		top = std::max<s32>(top, poly.cliptop * scale);
+		bottom = std::min<s32>(bottom, poly.clipbottom * scale - 1);
+	}
+	if ((left > right) || (top > bottom))
+		return;
+	if (!hires_fits(poly.destbase, left, right, top, bottom))
+		return;
+	if ((poly.depthbase != nullptr) && !hires_fits(poly.depthbase, left, right, top, bottom))
+		return;
+
+	poly_data &hpoly = m_renderer->alloc_poly();
+	hpoly = poly;
+	hpoly.destbase = hires_buffer(poly.destbase);
+	hpoly.depthbase = (poly.depthbase != nullptr) ? hires_buffer(poly.depthbase) : nullptr;
+	hpoly.rowpixels = poly.rowpixels * scale;
+	hpoly.yorigin = yorigin;
+	hpoly.clipleft = poly.clipleft * scale;
+	hpoly.clipright = poly.clipright * scale;
+	hpoly.cliptop = poly.cliptop * scale;
+	hpoly.clipbottom = poly.clipbottom * scale;
+	hpoly.ax = poly.ax * scale;
+	hpoly.ay = poly.ay * scale;
+
+	// the gradients are per native pixel; with the subpixel adjustment, the
+	// start values are moved from the centre of the native pixel holding
+	// vertex A to the centre of its high-resolution pixel (offsets in 1/16
+	// of a high-resolution pixel)
+	s64 ddx = 0, ddy = 0;
+	if (m_reg.fbz_colorpath().cca_subpixel_adjust())
+	{
+		ddx = (8 - (hpoly.ax & 15)) - (8 - (poly.ax & 15)) * scale;
+		ddy = (8 - (hpoly.ay & 15)) - (8 - (poly.ay & 15)) * scale;
+	}
+	auto const adjust = [ddx, ddy, scale] (auto &start, auto &dx, auto &dy)
+	{
+		using start_t = std::remove_reference_t<decltype(start)>;
+		start += start_t((ddx * dx + ddy * dy) / (16 * scale));
+		dx /= scale;
+		dy /= scale;
+	};
+	adjust(hpoly.startr, hpoly.drdx, hpoly.drdy);
+	adjust(hpoly.startg, hpoly.dgdx, hpoly.dgdy);
+	adjust(hpoly.startb, hpoly.dbdx, hpoly.dbdy);
+	adjust(hpoly.starta, hpoly.dadx, hpoly.dady);
+	adjust(hpoly.startz, hpoly.dzdx, hpoly.dzdy);
+	adjust(hpoly.startw, hpoly.dwdx, hpoly.dwdy);
+	if (hpoly.tex0 != nullptr)
+	{
+		adjust(hpoly.starts0, hpoly.ds0dx, hpoly.ds0dy);
+		adjust(hpoly.startt0, hpoly.dt0dx, hpoly.dt0dy);
+		adjust(hpoly.startw0, hpoly.dw0dx, hpoly.dw0dy);
+	}
+	if (hpoly.tex1 != nullptr)
+	{
+		adjust(hpoly.starts1, hpoly.ds1dx, hpoly.ds1dy);
+		adjust(hpoly.startt1, hpoly.dt1dx, hpoly.dt1dy);
+		adjust(hpoly.startw1, hpoly.dw1dx, hpoly.dw1dy);
+	}
+
+	m_renderer->enqueue_triangle(hpoly, hvert);
+}
+
+
+//-------------------------------------------------
+//  hires_fastfill - do a fast fill again into the
+//  high-resolution copy
+//-------------------------------------------------
+
+void voodoo_1_device::hires_fastfill(poly_data const &poly)
+{
+	s32 const scale = m_hires_scale;
+	auto const fbzmode = poly.raster.fbzmode();
+	s32 const yorigin = (poly.yorigin + 1) * scale - 1;
+	s32 const left = poly.clipleft * scale;
+	s32 const right = poly.clipright * scale - 1;
+	s32 top = poly.cliptop * scale;
+	s32 bottom = poly.clipbottom * scale - 1;
+	if (fbzmode.y_origin())
+	{
+		s32 const flipped = yorigin - bottom;
+		bottom = yorigin - top;
+		top = flipped;
+	}
+	if ((left > right) || (top > bottom))
+		return;
+	if (fbzmode.rgb_buffer_mask() && !hires_fits(poly.destbase, left, right, top, bottom))
+		return;
+	if (fbzmode.aux_buffer_mask() && (poly.depthbase != nullptr) && !hires_fits(poly.depthbase, left, right, top, bottom))
+		return;
+
+	poly_data &hpoly = m_renderer->alloc_poly();
+	hpoly = poly;
+	hpoly.destbase = hires_buffer(poly.destbase);
+	hpoly.depthbase = (poly.depthbase != nullptr) ? hires_buffer(poly.depthbase) : nullptr;
+	hpoly.rowpixels = poly.rowpixels * scale;
+	hpoly.yorigin = yorigin;
+	hpoly.clipleft = poly.clipleft * scale;
+	hpoly.clipright = poly.clipright * scale;
+	hpoly.cliptop = poly.cliptop * scale;
+	hpoly.clipbottom = poly.clipbottom * scale;
+	m_renderer->enqueue_fastfill(hpoly);
+}
+
+
+//-------------------------------------------------
+//  hires_pixel - magnify a native pixel of a
+//  buffer into the high-resolution copy
+//-------------------------------------------------
+
+void voodoo_1_device::hires_pixel(u16 const *buffer, s32 x, s32 scry)
+{
+	s32 const scale = m_hires_scale;
+	if (!hires_fits(buffer, x * scale, x * scale + scale - 1, scry * scale, scry * scale + scale - 1))
+		return;
+	ptrdiff_t const rowpixels = m_renderer->rowpixels();
+	u16 const value = buffer[scry * rowpixels + x];
+	u16 *dest = hires_buffer(buffer) + scry * scale * rowpixels * scale + x * scale;
+	for (int sub = 0; sub < scale; sub++, dest += rowpixels * scale)
+		std::fill_n(dest, scale, value);
+}
+
+
+//-------------------------------------------------
+//  hires_fill_rows - fill whole rows of a buffer
+//  in the high-resolution copy
+//-------------------------------------------------
+
+void voodoo_1_device::hires_fill_rows(u16 const *buffer, u32 first, u32 count, u16 value)
+{
+	s32 const scale = m_hires_scale;
+	s32 const row = m_renderer->rowpixels() * scale;
+	if ((count == 0) || !hires_fits(buffer, 0, row - 1, first * scale, (first + count) * scale - 1))
+		return;
+	std::fill_n(hires_buffer(buffer) + size_t(first) * scale * row, size_t(count) * scale * row, value);
 }
 
 

@@ -1288,6 +1288,8 @@ poly_data &voodoo_renderer::alloc_poly()
 	// allocate poly data and compute the rasterization parameters
 	poly_data &poly = object_data().next();
 	poly.raster.compute(m_fbi_reg, m_tmu0_reg, m_tmu1_reg);
+	poly.rowpixels = m_rowpixels;
+	poly.yorigin = m_yorigin;
 	return poly;
 }
 
@@ -2235,7 +2237,7 @@ void voodoo_renderer::rasterizer(s32 y, const voodoo_renderer::extent_t &extent,
 	// determine the screen Y
 	s32 scry = y;
 	if (fbzmode.y_origin())
-		scry = m_yorigin - y;
+		scry = poly.yorigin - y;
 
 	// pre-increment the pixels_in unconditionally
 	s32 startx = extent.startx;
@@ -2279,8 +2281,8 @@ void voodoo_renderer::rasterizer(s32 y, const voodoo_renderer::extent_t &extent,
 	}
 
 	// get pointers to the target buffer and depth buffer
-	u16 *dest = poly.destbase + scry * m_rowpixels;
-	u16 *depth = poly.depthbase + scry * m_rowpixels;
+	u16 *dest = poly.destbase + scry * poly.rowpixels;
+	u16 *depth = poly.depthbase + scry * poly.rowpixels;
 
 	// compute the starting parameters
 	s32 dx = startx - (poly.ax >> 4);
@@ -2429,14 +2431,14 @@ void voodoo_renderer::rasterizer_fastfill(s32 y, const voodoo_renderer::extent_t
 	// determine the screen Y
 	s32 scry = y;
 	if (fbzmode.y_origin())
-		scry = m_yorigin - y;
+		scry = poly.yorigin - y;
 
 	// fill this RGB row
 	if (fbzmode.rgb_buffer_mask())
 	{
 		const u16 *ditherow = &poly.dither[(y & 3) * 4];
 		u64 expanded = *(u64 *)ditherow;
-		u16 *dest = poly.destbase + scry * m_rowpixels;
+		u16 *dest = poly.destbase + scry * poly.rowpixels;
 
 		for (x = startx; x < stopx && (x & 3) != 0; x++)
 			dest[x] = ditherow[x & 3];
@@ -2452,7 +2454,7 @@ void voodoo_renderer::rasterizer_fastfill(s32 y, const voodoo_renderer::extent_t
 	{
 		u16 depth = poly.zacolor;
 		u64 expanded = (u64(depth) << 48) | (u64(depth) << 32) | (u64(depth) << 16) | u64(depth);
-		u16 *dest = poly.depthbase + scry * m_rowpixels;
+		u16 *dest = poly.depthbase + scry * poly.rowpixels;
 
 		for (x = startx; x < stopx && (x & 3) != 0; x++)
 			dest[x] = depth;

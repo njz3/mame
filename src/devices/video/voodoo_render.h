@@ -415,8 +415,10 @@ struct poly_data
 	rasterizer_texture *tex1;   // texture 1 information
 	u16 clipleft, clipright;    // x clipping
 	u16 cliptop, clipbottom;    // y clipping
+	u32 rowpixels;              // pixels per row of the buffers
+	s32 yorigin;                // Y origin, when the y_origin mode is on
 
-	s16 ax, ay;                 // vertex A x,y (12.4)
+	s32 ax, ay;                 // vertex A x,y (12.4)
 	s32 startr, startg, startb, starta; // starting R,G,B,A (12.12)
 	s32 startz;                 // starting Z (20.12)
 	s64 startw;                 // starting W (16.32)

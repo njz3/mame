@@ -126,6 +126,26 @@ void hires3d_output::upscale(const bitmap_rgb32 &source, bitmap_rgb32 &dest, con
 }
 
 
+void hires3d_output::magnify_changes(const bitmap_rgb32 &before, const bitmap_rgb32 &after, const rectangle &cliprect)
+{
+	int const scale = m_scale;
+	bitmap_rgb32 &frame = frame_bitmap();
+	for (int y = cliprect.top(); y <= cliprect.bottom(); y++)
+	{
+		u32 const *const old = &before.pix(y);
+		u32 const *const now = &after.pix(y);
+		for (int x = cliprect.left(); x <= cliprect.right(); x++)
+		{
+			if (now[x] != old[x])
+			{
+				for (int sub = 0; sub < scale; sub++)
+					std::fill_n(&frame.pix(y * scale + sub, x * scale), scale, now[x]);
+			}
+		}
+	}
+}
+
+
 void hires3d_output::upscale(const bitmap_ind16 &source, bitmap_ind16 &dest, const rectangle &cliprect, int transparent_pen) const
 {
 	int const scale = m_scale;
