@@ -147,9 +147,15 @@ l'écraser.
     - Cruis'n USA démarre sur la calibration et la NVRAM est vide ; il faudra
       une NVRAM calibrée pour vérifier la 3D en démo.
   - Bug sans lien avec mame3d, présent aussi dans le `mame.exe` de
-    `dev/ffdedition` : midnrun et windheat (driver zr107) plantent à la sortie
-    après plus de 10 s. `m_new_driver_pending` est écrasé, sans doute par le
-    K056230 (link SailorSat, multi-thread). GTI Club n'est pas touché.
+    `dev/ffdedition` : midnrun et windheat (driver zr107) plantaient à la
+    sortie après plus de 10 s. **Corrigé** par le commit 60f3007783b sur
+    `dev/ffdedition`, fusionné dans `dev/mame3d`.
+    - Cause : sous Windows, le DRC x64 range ses registres flottants UML dans
+      XMM6-XMM15 mais ne les sauvegardait pas au point d'entrée.
+    - MSVC garde une constante dans XMM6 pendant `machine.run()` ; elle
+      revenait corrompue, d'où une chaîne vide invalide dans
+      `set_system_name("")`.
+    - Le bug existe aussi dans MAME upstream.
 
 ## Prochaines étapes
 
