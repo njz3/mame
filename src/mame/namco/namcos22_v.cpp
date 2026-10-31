@@ -9,6 +9,9 @@
 #include "emu.h"
 #include "namcos22.h"
 
+#include "emuopts.h"
+#include "vk3d.h"
+
 #include "video.h"
 
 
@@ -357,7 +360,8 @@ void namcos22_renderer::poly3d_drawquad(screen_device &screen, bitmap_rgb32 &bit
 	const int cz_adjust = node->data.quad.cz_adjust;
 	const int objectflags = node->data.quad.objectflags;
 
-	namcos22_object_data &extra = object_data().next();
+	namcos22_object_data local{};
+	namcos22_object_data &extra = m_vk ? local : object_data().next();
 
 	extra.destbase = &bitmap;
 	extra.pfade_enabled = false;
@@ -448,7 +452,9 @@ void namcos22_renderer::poly3d_drawquad(screen_device &screen, bitmap_rgb32 &bit
 		extra.fogfactor = 0;
 	}
 
-	if (m_state.m_is_ss22)
+	if (m_vk)
+		emit_vk(extra, m_state.m_is_ss22 ? namcos22_vk::KIND_POLY_SUPER : namcos22_vk::KIND_POLY, clipv, clipverts);
+	else if (m_state.m_is_ss22)
 		dispatch_scanline_poly(&namcos22_renderer::renderscanline_poly_ss22, clipverts, clipv);
 	else
 		dispatch_scanline_poly(&namcos22_renderer::renderscanline_poly, clipverts, clipv);
@@ -482,7 +488,8 @@ void namcos22_renderer::poly3d_drawsprite(
 		const poly3d_t fsw = sprite_screen_width * scale;
 		const poly3d_t fsh = sprite_screen_height * scale;
 
-		namcos22_object_data &extra = object_data().next();
+		namcos22_object_data local{};
+		namcos22_object_data &extra = m_vk ? local : object_data().next();
 		vertex_t vert[4];
 
 		extra.fadefactor = 0;
@@ -531,8 +538,74 @@ void namcos22_renderer::poly3d_drawsprite(
 		extra.alpha = alpha;
 		extra.alpha_enabled = (color & 0x7f) != m_state.m_poly_alpha_color;
 
-		render_polygon<4, 2>(m_cliprect, render_delegate(&namcos22_renderer::renderscanline_sprite, this), vert);
+		if (m_vk)
+			emit_vk(extra, namcos22_vk::KIND_SPRITE, vert, 4);
+		else
+			render_polygon<4, 2>(m_cliprect, render_delegate(&namcos22_renderer::renderscanline_sprite, this), vert);
 	}
+}
+
+
+// hand a polygon or sprite to the GPU renderer, with what the scanline
+// renderers read from the object data
+void namcos22_renderer::emit_vk(const namcos22_object_data &extra, int kind, const vertex_t *v, int count)
+{
+	namcos22_vk::draw d{};
+	d.kind = kind;
+	u32 penbase = u32(extra.pens - m_state.m_palette->pens());
+	d.penmask = 0xff;
+	d.penshift = 0;
+	if (kind != namcos22_vk::KIND_SPRITE)
+	{
+		if (extra.cmode & 4)
+		{
+			penbase += 0xec + ((extra.cmode & 8) << 1);
+			d.penmask = 0x03;
+			d.penshift = 2 * (~extra.cmode & 3);
+		}
+		else if (extra.cmode & 2)
+		{
+			penbase += 0xe0 + ((extra.cmode & 8) << 1);
+			d.penmask = 0x0f;
+			d.penshift = 4 * (~extra.cmode & 1);
+		}
+	}
+	d.penbase = penbase;
+	d.bank = extra.bn * 0x1000;
+	d.shade = extra.shade_enabled;
+	d.texture = extra.texture_enabled;
+	d.alpha_all = extra.alpha_enabled;
+	d.polyfade = extra.pfade_enabled;
+	d.fogfactor = 0xff - extra.fogfactor;
+	d.fogcolor = rgb_t(extra.fogcolor.get_r(), extra.fogcolor.get_g(), extra.fogcolor.get_b());
+	d.fadefactor = 0xff - extra.fadefactor;
+	d.fadecolor = rgb_t(extra.fadecolor.get_r(), extra.fadecolor.get_g(), extra.fadecolor.get_b());
+	d.polycolor = rgb_t(extra.polycolor.get_r(), extra.polycolor.get_g(), extra.polycolor.get_b());
+	if (kind == namcos22_vk::KIND_SPRITE)
+		d.alpha = extra.alpha;
+	else if (kind == namcos22_vk::KIND_POLY_SUPER)
+		d.alpha = 0xff - extra.alpha;
+	else
+		d.alpha = 0xff;
+	d.alphapen = m_state.m_poly_alpha_pen;
+	d.prio = extra.prioverchar;
+	if (kind == namcos22_vk::KIND_SPRITE)
+	{
+		d.source = u32(extra.source - m_state.m_gfxdecode->gfx(2)->get_data(0));
+		d.modulo = extra.line_modulo;
+		d.flipx = extra.flipx;
+		d.flipy = extra.flipy;
+	}
+
+	namcos22_vk::vertex vert[6];
+	for (int i = 0; i < count; i++)
+	{
+		vert[i].x = float(v[i].x);
+		vert[i].y = float(v[i].y);
+		for (int j = 0; j < 4; j++)
+			vert[i].p[j] = (kind == namcos22_vk::KIND_SPRITE && j >= 2) ? 0.0f : float(v[i].p[j]);
+	}
+	m_vk->polygon(d, vert, count, m_cliprect);
 }
 
 void namcos22_renderer::render_sprite(screen_device &screen, bitmap_rgb32 &bitmap, struct namcos22_scenenode *node)
@@ -674,6 +747,20 @@ void namcos22_renderer::render_scene_nodes(screen_device &screen, bitmap_rgb32 &
 			}
 		}
 	}
+}
+
+void namcos22_renderer::render_scene_vk(screen_device &screen, namcos22_vk &vk, int scale)
+{
+	m_vk = &vk;
+	m_scale = scale;
+
+	struct namcos22_scenenode *node = &m_scenenode_root;
+	for (int i = NAMCOS22_RADIX_BUCKETS - 1; i >= 0; i--)
+	{
+		render_scene_nodes(screen, m_vk_unused, node->data.nonleaf.next[i]);
+		node->data.nonleaf.next[i] = nullptr;
+	}
+	m_vk = nullptr;
 }
 
 void namcos22_renderer::render_scene(screen_device &screen, bitmap_rgb32 &bitmap, bitmap_ind8 &primap, int scale)
@@ -2586,12 +2673,117 @@ int namcos22_state::begin_screen_update(screen_device &screen, bitmap_rgb32 &bit
 	return m_hires->scale();
 }
 
+// The GPU renderer, created at the first high-resolution frame unless
+// -hires3d_renderer is software; nullptr draws in software.
+namcos22_vk *namcos22_state::vulkan()
+{
+	if (!m_vk_tried)
+	{
+		m_vk_tried = true;
+		if (strcmp(machine().options().value(OPTION_HIRES3D_RENDERER), "software") != 0)
+		{
+			std::string error;
+			m_vk = namcos22_vk::create(error);
+			if (m_vk)
+			{
+				// the sprites are Super System 22 only
+				gfx_element *const textures = m_gfxdecode->gfx(1);
+				gfx_element *const sprites = m_gfxdecode->gfx(2);
+				m_vk->set_texture_memory(m_texture_tilemap, m_texture_tileattr.get(), m_texture_ayx_to_pixel.get(), m_texture_tiledata, size_t(textures->elements()) * textures->rowbytes() * textures->height());
+				if (sprites)
+				{
+					sprites->decode_all();
+					m_vk->set_sprite_memory(sprites->get_data(0), size_t(sprites->elements()) * sprites->rowbytes() * sprites->height());
+				}
+				osd_printf_verbose("namcos22: hires3d drawn with Vulkan on %s\n", m_vk->device_name());
+			}
+			else
+				osd_printf_verbose("namcos22: hires3d drawn in software (%s)\n", error);
+		}
+	}
+	return m_vk.get();
+}
+
+// End a frame drawn on the GPU: mix the native text layer, and show the
+// result.  On failure, the GPU renderer is dropped for the next frames.
+bool namcos22_state::show_vk_frame(screen_device &screen, const rectangle &cliprect, const namcos22_vk::mix_params &mix)
+{
+	bitmap_rgb32 *const frame = m_vk->end_frame(m_palette->pens(), m_palette->entries(), *m_mix_bitmap, screen.priority(), mix);
+	if (!frame)
+	{
+		osd_printf_verbose("namcos22: Vulkan frame failed, drawing in software\n");
+		m_vk.reset();
+		return false;
+	}
+	m_hires->use_frame(*frame);
+	m_hires->frame_done(cliprect);
+	return true;
+}
+
 u32 namcos22s_state::screen_update_namcos22s(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect)
 {
 	render_frame_active();
 	update_mixer();
 	update_palette();
 	recalc_czram();
+
+	// -hires3d on the GPU: the scene and the final mix are drawn there,
+	// only the text layer natively
+	if (m_hires->active() && vulkan())
+	{
+		const int scale = m_hires->scale();
+		screen.priority().fill(0, cliprect);
+		rgbaint_t bg_color(0, nthbyte(m_mixer, 0x08), nthbyte(m_mixer, 0x09), nthbyte(m_mixer, 0x0a));
+		if (BIT(m_mixer_flags, 0) && m_screen_fade_factor)
+		{
+			rgbaint_t fade_color(0, m_screen_fade_r, m_screen_fade_g, m_screen_fade_b);
+			bg_color.blend(fade_color, 0xff - m_screen_fade_factor);
+		}
+		const rgb_t background = rgb_t(bg_color.get_r(), bg_color.get_g(), bg_color.get_b());
+		m_vk->begin_frame(screen.visible_area(), scale, background);
+
+		const u8 layer = nthbyte(m_mixer, 0x1f);
+		const bool text = BIT(layer, 2);
+		if (text)
+		{
+			apply_text_scroll();
+			m_text_tilemap->set_palette_offset(m_text_palbase);
+			m_text_tilemap->draw(screen, *m_mix_bitmap, cliprect, 0, 4, 4);
+		}
+		if (BIT(layer, 1)) draw_sprites();
+		if (BIT(layer, 0)) draw_polygons();
+		m_poly->render_scene_vk(screen, *m_vk, scale);
+
+		namcos22_vk::mix_params mix{};
+		mix.super = true;
+		mix.text_before = text;
+		mix.background = background;
+		mix.fade_on = BIT(m_mixer_flags, 1) && m_screen_fade_factor;
+		mix.fade_r = m_screen_fade_r;
+		mix.fade_g = m_screen_fade_g;
+		mix.fade_b = m_screen_fade_b;
+		mix.fade_factor = 0xff - m_screen_fade_factor;
+		mix.alpha_check12 = nthbyte(m_mixer, 0x12);
+		mix.alpha_check13 = nthbyte(m_mixer, 0x13);
+		mix.alpha_mask = nthbyte(m_mixer, 0x14) & 0xf;
+		mix.alpha_factor = nthbyte(m_mixer, 0x15);
+		mix.spot_on = BIT(m_spotram_enable, 0) && (m_chipselect & 0xc000);
+		mix.spot_factor = (m_spot_factor < 0x100) ? 0 : m_spot_factor & 0xff;
+		mix.spot_palbase = m_text_palbase >> 8 & 3;
+		mix.text_palbase = m_text_palbase;
+		mix.spotram = m_spotram.get();
+		const u8 *rlut = (const u8 *)&m_mixer[0x100/4];
+		const u8 *glut = (const u8 *)&m_mixer[0x200/4];
+		const u8 *blut = (const u8 *)&m_mixer[0x300/4];
+		for (int i = 0; i < 256; i++)
+		{
+			mix.gamma[0][i] = rlut[NATIVE_ENDIAN_VALUE_LE_BE(3, 0) ^ i];
+			mix.gamma[1][i] = glut[NATIVE_ENDIAN_VALUE_LE_BE(3, 0) ^ i];
+			mix.gamma[2][i] = blut[NATIVE_ENDIAN_VALUE_LE_BE(3, 0) ^ i];
+		}
+		show_vk_frame(screen, cliprect, mix);
+		return 0;
+	}
 
 	bitmap_rgb32 *dest;
 	bitmap_ind8 *pri;
@@ -2642,6 +2834,35 @@ u32 namcos22_state::screen_update_namcos22(screen_device &screen, bitmap_rgb32 &
 	render_frame_active();
 	update_mixer();
 	update_palette();
+
+	// -hires3d on the GPU: the scene and the final mix are drawn there,
+	// only the text layer natively
+	if (m_hires->active() && vulkan())
+	{
+		const int scale = m_hires->scale();
+		screen.priority().fill(0, cliprect);
+		m_vk->begin_frame(screen.visible_area(), scale, m_palette->pen(m_bg_palbase | 0xff));
+		draw_polygons();
+		m_poly->render_scene_vk(screen, *m_vk, scale);
+		apply_text_scroll();
+		m_text_tilemap->set_palette_offset(m_text_palbase);
+		m_text_tilemap->draw(screen, *m_mix_bitmap, cliprect, 0, 2, 3);
+
+		namcos22_vk::mix_params mix{};
+		mix.super = false;
+		mix.fade_on = (m_screen_fade_r != 0x100 || m_screen_fade_g != 0x100 || m_screen_fade_b != 0x100);
+		mix.fade_r = m_screen_fade_r;
+		mix.fade_g = m_screen_fade_g;
+		mix.fade_b = m_screen_fade_b;
+		mix.shadow_on = BIT(m_mixer_flags, 8);
+		for (int i = 0; i < 3; i++)
+			mix.mix[i] = rgb_t(nthbyte(m_mixer, 0x08 + 3 * i), nthbyte(m_mixer, 0x09 + 3 * i), nthbyte(m_mixer, 0x0a + 3 * i));
+		for (int c = 0; c < 3; c++)
+			for (int i = 0; i < 256; i++)
+				mix.gamma[c][i] = m_gamma_proms[c * 0x100 + i];
+		show_vk_frame(screen, cliprect, mix);
+		return 0;
+	}
 
 	bitmap_rgb32 *dest;
 	bitmap_ind8 *pri;

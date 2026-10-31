@@ -25,7 +25,7 @@ Matériel visé, dans l'ordre :
 | # | Matériel | Jeux | Rendu logiciel HD | Rendu Vulkan |
 |---|---|---|---|---|
 | 1 | Sega Model 1 | vr, vformula | OK (vr ×2, ×4) | OK (vr ×2, ×4) ; relecture lente |
-| 2 | Namco System 22 / Super 22 | ridgerac, ridgera2, raverace, acedrive, victlap, cybrcycc, dirtdash, alpinerd | OK (ridgerac, dirtdash ×2) | à faire |
+| 2 | Namco System 22 / Super 22 | ridgerac, ridgera2, raverace, acedrive, victlap, cybrcycc, dirtdash, alpinerd | OK (ridgerac, dirtdash ×2) | OK (5 jeux ×2) ; plus rapide que le natif |
 | 3 | Konami K001005 | gticlub, midnrun, windheat, jetwave | OK (gticlub, midnrun ×2) | à faire |
 | 4 | 3dfx Voodoo 1/2 | sfrush, sfrushrk, calspeed, hyprdriv, vaportrx, roadburn, thrilld, racingj | OK (sfrush ×2 ×4, racingj ×2, roadburn ×2) ; coûteux en CPU | OK (même image que le logiciel) ; au niveau du natif en ×2 sur roadburn |
 | 5 | Midway V-Unit | crusnusa, crusnwld, offroadc | 2D OK (crusnusa ×2) ; 3D à vérifier en démo (sommets entiers : bords natifs, textures HD) | à faire |
@@ -319,3 +319,35 @@ l'écraser.
     toutes les images montrées sans copie.
   - Reste : partager l'image avec l'affichage (bgfx) pour supprimer la
     relecture elle-même.
+- 2026-10-31 : **Namco System 22 / Super 22 sur Vulkan** (`namcos22_vk`), même
+  méthode que le Voodoo.
+  - Le parcours de la scène triée envoie chaque quad (éventail de 3 à 6
+    sommets après découpage en z) et chaque sprite au GPU, avec ce que les
+    fonctions de rendu par ligne lisent de leurs données : palette, mode de
+    couleur, banque de textures, ombrage, brouillard, fondus, alpha,
+    priorité. Le GPU les dessine dans l'ordre du tri, sans tampon de
+    profondeur, comme le matériel.
+  - `scene.frag` reprend ces fonctions (une pour le System 22, une pour le
+    Super 22, une pour les sprites). Il lit les textures (tilemap de
+    textures, attributs, tuiles) et les sprites dans les ROM, envoyées une
+    seule fois sur le GPU. Le mélange avec la destination passe par l'étage
+    fixe. Une seconde sortie (image de priorité R8) marque les pixels
+    couverts et le bit « au-dessus du texte » du dernier polygone.
+  - `mix.frag` reprend `namcos22_mix_text_layer` (ombres, fondu, gamma des
+    PROM) et `namcos22s_mix_text_layer` (spot, alpha du texte, fondu, gamma
+    du mixeur), avec la couche de texte et sa carte de priorité natives,
+    envoyées à chaque image. Sur le Super 22, le texte est aussi mélangé
+    au fond avant la scène, comme dans le rendu logiciel.
+  - Image relue et montrée sans copie (anneau de 3), comme le Voodoo. Le
+    rendu se fait au moment de l'affichage et on attend le GPU (pas
+    d'échange de tampons à anticiper sur ce matériel).
+  - Il faut `independentBlend` (couleur mélangée, priorité écrite telle quelle).
+  - Contrôle contre le logiciel HD, même image : ridgerac 2,5 % de pixels
+    au-delà de 24, dirtdash 0,14 %, raverace 3,9 %, acedrive 1,2 %,
+    alpinerd 1,6 %. Les écarts sont des bords de texels décalés d'un pixel
+    (interpolation en float sur le GPU, en double sur le CPU).
+  - Temps, ×2 : ridgerac 40 s émulées en 12,2 s (logiciel 42,9 s, natif
+    14,8 s) ; dirtdash 60 s en 25,4 s (logiciel 84,3 s, natif 34,3 s) ;
+    raverace 29,2 s (logiciel 101 s) ; acedrive 34,5 s (75 s) ; alpinerd
+    31 s (100 s). Le GPU fait mieux que le rendu natif, qui rastérise sur
+    le CPU.

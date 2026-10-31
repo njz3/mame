@@ -23,6 +23,8 @@
 #include "video/rgbutil.h"
 #include "video/poly.h"
 
+#include "namcos22_vk.h"
+
 #include "emupal.h"
 #include "hires3d.h"
 #include "screen.h"
@@ -157,6 +159,9 @@ public:
 
 	// scale > 1 draws at that multiple of the native resolution (-hires3d)
 	void render_scene(screen_device &screen, bitmap_rgb32 &bitmap, bitmap_ind8 &primap, int scale);
+
+	// same, handing the polygons and sprites to the GPU renderer
+	void render_scene_vk(screen_device &screen, namcos22_vk &vk, int scale);
 	struct namcos22_scenenode *new_scenenode(running_machine &machine, u32 zsort, namcos22_scenenode_type type);
 
 	void init();
@@ -170,6 +175,8 @@ private:
 	rectangle m_cliprect;
 	bitmap_ind8 *m_primap = nullptr;
 	int m_scale = 1;
+	namcos22_vk *m_vk = nullptr;            // GPU renderer of the current scene, if any
+	bitmap_rgb32 m_vk_unused;               // destination of the nodes drawn on the GPU
 
 	rectangle scaled(const rectangle &r) const { return rectangle(r.left() * m_scale, (r.right() + 1) * m_scale - 1, r.top() * m_scale, (r.bottom() + 1) * m_scale - 1); }
 
@@ -181,6 +188,7 @@ private:
 	void poly3d_drawquad(screen_device &screen, bitmap_rgb32 &bitmap, struct namcos22_scenenode *node);
 	void poly3d_drawsprite(screen_device &screen, bitmap_rgb32 &dest_bmp, u32 code, u32 color, int flipx, int flipy, int sx, int sy, int scalex, int scaley, int cz_factor, int prioverchar, bool fade_enabled, int alpha);
 
+	void emit_vk(const namcos22_object_data &extra, int kind, const vertex_t *v, int count);
 	void free_scenenode(struct namcos22_scenenode *node);
 	struct namcos22_scenenode *alloc_scenenode(running_machine &machine, struct namcos22_scenenode *node);
 
@@ -505,6 +513,12 @@ protected:
 	// resolution with their own priority map, the text layer natively
 	std::unique_ptr<hires3d_output> m_hires;
 	bitmap_ind8 m_hires_pri;
+
+	// with -hires3d on the GPU, the whole frame is drawn there
+	std::unique_ptr<namcos22_vk> m_vk;
+	bool m_vk_tried = false;
+	namcos22_vk *vulkan();
+	bool show_vk_frame(screen_device &screen, const rectangle &cliprect, const namcos22_vk::mix_params &mix);
 	int begin_screen_update(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect, bitmap_rgb32 *&dest, bitmap_ind8 *&pri, rectangle &clip);
 
 	tilemap_t *m_text_tilemap;
