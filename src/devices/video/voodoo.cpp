@@ -2713,6 +2713,11 @@ void voodoo_1_device::swap_buffers()
 	// rotate the buffers; implementation differs between models
 	rotate_buffers();
 
+	// the new front buffer is shown from the next frame: start reading it
+	// back from the GPU now
+	if (m_vk && hires_wanted())
+		m_vk->prefetch(m_frontbuf);
+
 	// decrement the pending count and reset our state
 	if (m_swaps_pending != 0)
 		m_swaps_pending--;
@@ -2793,11 +2798,13 @@ int voodoo_1_device::update_common(bitmap_rgb32 &bitmap, const rectangle &clipre
 	if (DEBUG_BACKBUF && machine().input().code_pressed(KEYCODE_L))
 		drawbuf = m_backbuf;
 
-	// copy from the current front buffer
+	// copy from the current front buffer (not when only the GPU draws and
+	// shows the frame: the native buffer is neither drawn nor shown)
 	u32 rowpixels = m_renderer->rowpixels();
 	u16 *buffer_base = draw_buffer(drawbuf);
 	if (LOG_VBLANK_SWAP) logerror("--- update_common %d-%d @ %d from %08X\n", cliprect.min_y, cliprect.max_y, screen().vpos(), u32((u8 *)buffer_base - m_fbram));
-	for (s32 y = cliprect.min_y; y <= cliprect.max_y; y++)
+	bool const native_hidden = (m_hires_scale > 1) && gpu_only() && !m_hires_overlaid && m_hires->active();
+	for (s32 y = cliprect.min_y; y <= cliprect.max_y && !native_hidden; y++)
 	{
 		if (y < m_yoffs)
 			continue;
@@ -2837,8 +2844,16 @@ int voodoo_1_device::update_common(bitmap_rgb32 &bitmap, const rectangle &clipre
 				lut[512 + value] = (low.b() * (8 - (value & 7)) + high.b() * (value & 7)) >> 3;
 				linear = linear && (lut[value] == value) && (lut[256 + value] == value) && (lut[512 + value] == value);
 			}
+			// the GPU applies the CLUT; show the read-back memory itself when
+			// the driver does not draw over it, otherwise copy it
+			m_vk->set_clut(linear ? nullptr : lut);
 			rectangle const area(hclip.left(), hclip.right(), ystart, hclip.bottom());
-			if (!m_vk->read(drawbuf, hires, area, s32(m_xoffs) * scale, s32(m_yoffs) * scale, linear ? nullptr : lut))
+			bitmap_rgb32 *const direct = (!m_hires_overlaid && (ystart == hclip.top()))
+					? m_vk->frame(drawbuf, m_hires->scaled(screen().visible_area()), s32(m_xoffs) * scale, s32(m_yoffs) * scale)
+					: nullptr;
+			if (direct)
+				m_hires->use_frame(*direct);
+			else if (!m_vk->read(drawbuf, hires, area, s32(m_xoffs) * scale, s32(m_yoffs) * scale, nullptr))
 				hires.fill(rgb_t::black(), area);
 		}
 		else if (ystart <= hclip.bottom())
@@ -3165,7 +3180,7 @@ s32 voodoo_1_device::triangle()
 	bool const hires = hires_wanted();
 	if (hires && gpu_only())
 	{
-		pixels = s32(fabsf((vert[1].x - vert[0].x) * (vert[2].y - vert[0].y) - (vert[2].x - vert[0].x) * (vert[1].y - vert[0].y)) * 0.5f);
+		pixels = estimated_pixels(poly, vert);
 		m_lfb_stats.pixels_in += pixels;
 		m_lfb_stats.pixels_out += pixels;
 		hires_triangle(poly, vert);
@@ -3448,6 +3463,67 @@ void voodoo_1_device::hires_fill_rows(u16 const *buffer, u32 first, u32 count, u
 	if ((count == 0) || !hires_fits(buffer, 0, row - 1, first * scale, (first + count) * scale - 1))
 		return;
 	std::fill_n(hires_buffer(buffer) + size_t(first) * scale * row, size_t(count) * scale * row, value);
+}
+
+
+//-------------------------------------------------
+//  estimated_pixels - the pixels of a triangle
+//  that only the GPU draws: its area inside the
+//  clip rectangle, for the chip timing
+//-------------------------------------------------
+
+s32 voodoo_1_device::estimated_pixels(poly_data const &poly, voodoo_renderer::vertex_t const *vert) const
+{
+	// polygon clipped against the rectangle (screen rows, flipped with the Y origin)
+	float px[8], py[8], qx[8], qy[8];
+	int count = 3;
+	for (int i = 0; i < 3; i++)
+	{
+		px[i] = vert[i].x;
+		py[i] = vert[i].y;
+	}
+	auto const fbzmode = poly.raster.fbzmode();
+	if (fbzmode.enable_clipping())
+	{
+		float const top = fbzmode.y_origin() ? float(poly.yorigin + 1 - poly.clipbottom) : float(poly.cliptop);
+		float const bottom = fbzmode.y_origin() ? float(poly.yorigin + 1 - poly.cliptop) : float(poly.clipbottom);
+		float const limit[4] = { float(poly.clipleft), float(poly.clipright), top, bottom };
+		for (int edge = 0; (edge < 4) && (count > 0); edge++)
+		{
+			// keep the side of the edge inside the rectangle
+			auto const inside = [&] (float x, float y) { return (edge == 0) ? (x >= limit[0]) : (edge == 1) ? (x <= limit[1]) : (edge == 2) ? (y >= limit[2]) : (y <= limit[3]); };
+			int out = 0;
+			for (int i = 0; i < count; i++)
+			{
+				int const j = (i + 1) % count;
+				bool const in_i = inside(px[i], py[i]);
+				bool const in_j = inside(px[j], py[j]);
+				if (in_i)
+				{
+					qx[out] = px[i];
+					qy[out] = py[i];
+					out++;
+				}
+				if (in_i != in_j)
+				{
+					float const t = (edge < 2) ? ((limit[edge] - px[i]) / (px[j] - px[i])) : ((limit[edge] - py[i]) / (py[j] - py[i]));
+					qx[out] = px[i] + t * (px[j] - px[i]);
+					qy[out] = py[i] + t * (py[j] - py[i]);
+					out++;
+				}
+			}
+			count = out;
+			std::copy_n(qx, count, px);
+			std::copy_n(qy, count, py);
+		}
+	}
+	float area = 0.0f;
+	for (int i = 0; i < count; i++)
+	{
+		int const j = (i + 1) % count;
+		area += px[i] * py[j] - px[j] * py[i];
+	}
+	return s32(fabsf(area) * 0.5f);
 }
 
 

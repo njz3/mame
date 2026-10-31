@@ -505,7 +505,12 @@ public:
 
 	// video update
 	virtual int update(bitmap_rgb32 &bitmap, const rectangle &cliprect) override;
-	virtual hires3d_output *hires() override { return ((m_hires_scale > 1) && m_hires->active()) ? m_hires.get() : nullptr; }
+	virtual hires3d_output *hires() override
+	{
+		// the driver draws over the frame: show copies, not the read-back memory
+		m_hires_overlaid = true;
+		return ((m_hires_scale > 1) && m_hires->active()) ? m_hires.get() : nullptr;
+	}
 
 protected:
 	// device-level overrides
@@ -625,6 +630,7 @@ protected:
 	void hires_fill_rows(u16 const *buffer, u32 first, u32 count, u16 value);
 	void hires_fbram_written(u32 byteoffs);
 	void recycle_renderer();
+	s32 estimated_pixels(voodoo::poly_data const &poly, voodoo::voodoo_renderer::vertex_t const *vert) const;
 
 	// statistics
 	void accumulate_statistics(const voodoo::thread_stats_block &block);
@@ -674,6 +680,7 @@ protected:
 	u64 m_hires_frame = 0;                   // last frame shown at the high resolution
 	u64 m_native_until = 0;                  // the CPU read the frame buffer: native rasterizer until this frame
 	u32 m_native_restarts = 0;               // statistics: reads that restarted the native rasterizer
+	bool m_hires_overlaid = false;           // the driver draws over the high-resolution frame
 
 	// the high-resolution output was shown lately (a Voodoo that is not
 	// displayed does not draw it)

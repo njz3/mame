@@ -46,6 +46,12 @@ u32 const s_lfb_vert[] = {
 u32 const s_lfb_frag[] = {
 #include "voodoo_vk_shaders/lfb.frag.spv.inc"
 };
+u32 const s_present_vert[] = {
+#include "voodoo_vk_shaders/present.vert.spv.inc"
+};
+u32 const s_present_frag[] = {
+#include "voodoo_vk_shaders/present.frag.spv.inc"
+};
 
 constexpr VkFormat COLOR_FORMAT = VK_FORMAT_B8G8R8A8_UNORM;
 constexpr VkFormat DEPTH_FORMAT = VK_FORMAT_D32_SFLOAT;
@@ -161,6 +167,20 @@ struct voodoo_vk::impl : vk3d_context
 	VkShaderModule lfb_frag = VK_NULL_HANDLE;
 	std::unordered_map<u32, VkPipeline> pipelines;
 
+	// CLUT pass: when the DAC table is not linear, the colour buffer is drawn
+	// through it into the display image, which is read back instead
+	VkRenderPass present_pass = VK_NULL_HANDLE;
+	VkDescriptorSetLayout present_set_layout = VK_NULL_HANDLE;
+	VkPipelineLayout present_layout = VK_NULL_HANDLE;
+	VkDescriptorPool present_pool = VK_NULL_HANDLE;
+	VkDescriptorSet present_sets[3]{};
+	VkSampler present_sampler = VK_NULL_HANDLE;
+	VkPipeline present_pipeline = VK_NULL_HANDLE;
+	image display;
+	VkFramebuffer display_framebuffer = VK_NULL_HANDLE;
+	buffer clut;                // 3 x 256 words
+	bool clut_linear = true;
+
 	// targets
 	u32 rowpixels = 0;
 	u32 rows = 0;
@@ -171,8 +191,23 @@ struct voodoo_vk::impl : vk3d_context
 	VkFramebuffer framebuffers[3]{};
 	bool color_ready[3]{};
 	bool depth_ready = false;
-	buffer readback;
-	int readback_buffer = -1;   // buffer whose current image is in readback
+	// read-backs: a ring of host copies of colour buffers, shown directly by
+	// the display (frame()) or copied (read()); the one shown last is kept
+	struct readback_entry
+	{
+		buffer host;
+		bitmap_rgb32 view;      // over host, for the display
+		int buffer = -1;        // colour buffer it holds, -1 if none
+		u32 version = 0;        // version of that buffer
+		int slot = -1;          // batch that copies it
+		bool ready = false;     // copied and visible to the CPU
+	};
+	static constexpr int READBACKS = 3;
+	readback_entry readback[READBACKS];
+	int next_readback = 0;
+	int last_readback = -1;     // entry of the last flush with a read-back
+	int shown_readback = -1;    // entry given to the display by frame()
+	u32 versions[3]{};          // bumped by every command that changes a colour buffer
 
 	// batch data: each batch copies its records, offsets, palettes and fog
 	// tables, and pixels from its own host buffers into the device buffers;
@@ -220,10 +255,14 @@ struct voodoo_vk::impl : vk3d_context
 	u32 flushes = 0;
 	u32 readbacks = 0;
 	u64 texture_bytes = 0;
+	u32 direct_frames = 0;
+	u32 copied_frames = 0;
+	u32 lut_frames = 0;
 
 	~impl();
 
 	bool init(std::string &error);
+	bool init_present(std::string &error);
 	VkPipeline pipeline(u32 key);
 	bool create_targets();
 	void destroy_targets();
@@ -233,6 +272,8 @@ struct voodoo_vk::impl : vk3d_context
 	void wait_slot(slot &target);
 	void wait_all();
 	void reset_batch();
+	void complete(readback_entry &entry);
+	int current_readback(int buffer);
 	u32 lookup_index(int tmu, rasterizer_texture const &tex);
 	u32 fog_table(u8 const *blend, u8 const *delta);
 	void texture_block(u32 *block, int tmu, rasterizer_texture const &tex, u32 texmode, s64 const *iter);
@@ -246,8 +287,8 @@ struct voodoo_vk::impl : vk3d_context
 voodoo_vk::impl::~impl()
 {
 	if (flushes)
-		osd_printf_verbose("voodoo_vk: %dx%d images, %u batches, %u read-backs, %.1f ms waiting for the GPU (%.2f ms per batch), %.1f MB of textures uploaded\n",
-				width, height, flushes, readbacks, wait_ticks * 1000.0 / osd_ticks_per_second(), wait_ticks * 1000.0 / osd_ticks_per_second() / flushes, texture_bytes / 1048576.0);
+		osd_printf_verbose("voodoo_vk: %dx%d images, %u batches, %u read-backs, %.1f ms waiting for the GPU (%.2f ms per batch), %.1f MB of textures uploaded, %u updates shown directly, %u copied, %u through the CLUT\n",
+				width, height, flushes, readbacks, wait_ticks * 1000.0 / osd_ticks_per_second(), wait_ticks * 1000.0 / osd_ticks_per_second() / flushes, texture_bytes / 1048576.0, direct_frames, copied_frames, lut_frames);
 	if (device && vkDestroyDevice)
 	{
 		vkDeviceWaitIdle(device);
@@ -268,6 +309,19 @@ voodoo_vk::impl::~impl()
 		}
 		for (auto const &entry : pipelines)
 			vkDestroyPipeline(device, entry.second, nullptr);
+		if (present_pipeline)
+			vkDestroyPipeline(device, present_pipeline, nullptr);
+		if (present_layout)
+			vkDestroyPipelineLayout(device, present_layout, nullptr);
+		if (present_pool)
+			vkDestroyDescriptorPool(device, present_pool, nullptr);
+		if (present_set_layout)
+			vkDestroyDescriptorSetLayout(device, present_set_layout, nullptr);
+		if (present_sampler)
+			vkDestroySampler(device, present_sampler, nullptr);
+		if (present_pass)
+			vkDestroyRenderPass(device, present_pass, nullptr);
+		destroy_buffer(clut);
 		if (descriptor_pool)
 			vkDestroyDescriptorPool(device, descriptor_pool, nullptr);
 		if (pipeline_layout)
@@ -406,6 +460,8 @@ bool voodoo_vk::impl::init(std::string &error)
 		error = "pipeline creation failed";
 		return false;
 	}
+	if (!init_present(error))
+		return false;
 
 	// command buffers and fences of the batches
 	for (slot &target : slots)
@@ -424,6 +480,151 @@ bool voodoo_vk::impl::init(std::string &error)
 	}
 
 	lookup_data.resize(VKL_STATIC_SIZE);
+	return true;
+}
+
+
+bool voodoo_vk::impl::init_present(std::string &error)
+{
+	// render pass into the display image, left ready for the copy
+	VkAttachmentDescription attachment{};
+	attachment.format = COLOR_FORMAT;
+	attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+	attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+	attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+	attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	attachment.finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+	VkAttachmentReference color_ref{ 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+	VkSubpassDescription subpass{};
+	subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+	subpass.colorAttachmentCount = 1;
+	subpass.pColorAttachments = &color_ref;
+	VkSubpassDependency dependencies[2]{};
+	dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+	dependencies[0].dstSubpass = 0;
+	dependencies[0].srcStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
+	dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	dependencies[0].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+	dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+	dependencies[1].srcSubpass = 0;
+	dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+	dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	dependencies[1].dstStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
+	dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+	dependencies[1].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+	VkRenderPassCreateInfo pass_info{ VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
+	pass_info.attachmentCount = 1;
+	pass_info.pAttachments = &attachment;
+	pass_info.subpassCount = 1;
+	pass_info.pSubpasses = &subpass;
+	pass_info.dependencyCount = 2;
+	pass_info.pDependencies = dependencies;
+	if (vkCreateRenderPass(device, &pass_info, nullptr, &present_pass) != VK_SUCCESS)
+	{
+		error = "vkCreateRenderPass failed";
+		return false;
+	}
+
+	// a colour buffer and the table, one set per colour buffer
+	VkSamplerCreateInfo sampler_info{ VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+	sampler_info.magFilter = VK_FILTER_NEAREST;
+	sampler_info.minFilter = VK_FILTER_NEAREST;
+	sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+	sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+	sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+	sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+	vkCreateSampler(device, &sampler_info, nullptr, &present_sampler);
+	VkDescriptorSetLayoutBinding bindings[2]{};
+	bindings[0].binding = 0;
+	bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+	bindings[0].descriptorCount = 1;
+	bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+	bindings[1].binding = 1;
+	bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	bindings[1].descriptorCount = 1;
+	bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+	VkDescriptorSetLayoutCreateInfo set_info{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+	set_info.bindingCount = 2;
+	set_info.pBindings = bindings;
+	vkCreateDescriptorSetLayout(device, &set_info, nullptr, &present_set_layout);
+	VkPipelineLayoutCreateInfo layout_info{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+	layout_info.setLayoutCount = 1;
+	layout_info.pSetLayouts = &present_set_layout;
+	vkCreatePipelineLayout(device, &layout_info, nullptr, &present_layout);
+	VkDescriptorPoolSize pool_sizes[2] = { { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3 }, { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3 } };
+	VkDescriptorPoolCreateInfo pool_info{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
+	pool_info.maxSets = 3;
+	pool_info.poolSizeCount = 2;
+	pool_info.pPoolSizes = pool_sizes;
+	vkCreateDescriptorPool(device, &pool_info, nullptr, &present_pool);
+	VkDescriptorSetLayout const set_layouts[3] = { present_set_layout, present_set_layout, present_set_layout };
+	VkDescriptorSetAllocateInfo alloc{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
+	alloc.descriptorPool = present_pool;
+	alloc.descriptorSetCount = 3;
+	alloc.pSetLayouts = set_layouts;
+	if ((vkAllocateDescriptorSets(device, &alloc, present_sets) != VK_SUCCESS) ||
+			!create_buffer(clut, 3 * 256 * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false))
+	{
+		error = "CLUT pass allocation failed";
+		return false;
+	}
+
+	VkShaderModule const vertex = create_module(s_present_vert, sizeof(s_present_vert));
+	VkShaderModule const fragment = create_module(s_present_frag, sizeof(s_present_frag));
+	if (!vertex || !fragment)
+	{
+		error = "shader rejected";
+		return false;
+	}
+	VkPipelineShaderStageCreateInfo stages[2]{};
+	stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+	stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+	stages[0].module = vertex;
+	stages[0].pName = "main";
+	stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+	stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+	stages[1].module = fragment;
+	stages[1].pName = "main";
+	VkPipelineVertexInputStateCreateInfo vertex_input{ VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
+	VkPipelineInputAssemblyStateCreateInfo assembly{ VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
+	assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+	VkPipelineViewportStateCreateInfo viewport{ VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
+	viewport.viewportCount = 1;
+	viewport.scissorCount = 1;
+	VkPipelineRasterizationStateCreateInfo raster{ VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
+	raster.polygonMode = VK_POLYGON_MODE_FILL;
+	raster.cullMode = VK_CULL_MODE_NONE;
+	raster.lineWidth = 1.0f;
+	VkPipelineMultisampleStateCreateInfo multisample{ VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
+	multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+	VkPipelineColorBlendAttachmentState blend{};
+	blend.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+	VkPipelineColorBlendStateCreateInfo blending{ VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
+	blending.attachmentCount = 1;
+	blending.pAttachments = &blend;
+	VkDynamicState const dynamic_states[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+	VkPipelineDynamicStateCreateInfo dynamic{ VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
+	dynamic.dynamicStateCount = 2;
+	dynamic.pDynamicStates = dynamic_states;
+	VkGraphicsPipelineCreateInfo info{ VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
+	info.stageCount = 2;
+	info.pStages = stages;
+	info.pVertexInputState = &vertex_input;
+	info.pInputAssemblyState = &assembly;
+	info.pViewportState = &viewport;
+	info.pRasterizationState = &raster;
+	info.pMultisampleState = &multisample;
+	info.pColorBlendState = &blending;
+	info.pDynamicState = &dynamic;
+	info.layout = present_layout;
+	info.renderPass = present_pass;
+	if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, &present_pipeline) != VK_SUCCESS)
+	{
+		error = "CLUT pipeline creation failed";
+		return false;
+	}
 	return true;
 }
 
@@ -528,7 +729,7 @@ bool voodoo_vk::impl::create_targets()
 {
 	for (int i = 0; i < 3; i++)
 	{
-		if (!create_image(color[i], width, height, COLOR_FORMAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT))
+		if (!create_image(color[i], width, height, COLOR_FORMAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT))
 			return false;
 		color_ready[i] = false;
 	}
@@ -548,8 +749,47 @@ bool voodoo_vk::impl::create_targets()
 		if (vkCreateFramebuffer(device, &info, nullptr, &framebuffers[i]) != VK_SUCCESS)
 			return false;
 	}
-	readback_buffer = -1;
-	return create_buffer(readback, VkDeviceSize(width) * height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
+	// the CLUT pass reads a colour buffer and writes the display image
+	if (!create_image(display, width, height, COLOR_FORMAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT))
+		return false;
+	VkFramebufferCreateInfo display_info{ VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
+	display_info.renderPass = present_pass;
+	display_info.attachmentCount = 1;
+	display_info.pAttachments = &display.view;
+	display_info.width = width;
+	display_info.height = height;
+	display_info.layers = 1;
+	if (vkCreateFramebuffer(device, &display_info, nullptr, &display_framebuffer) != VK_SUCCESS)
+		return false;
+	for (int i = 0; i < 3; i++)
+	{
+		VkDescriptorImageInfo image_info{ present_sampler, color[i].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+		VkDescriptorBufferInfo buffer_info{ clut.handle, 0, VK_WHOLE_SIZE };
+		VkWriteDescriptorSet writes[2]{ { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET }, { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET } };
+		writes[0].dstSet = present_sets[i];
+		writes[0].dstBinding = 0;
+		writes[0].descriptorCount = 1;
+		writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		writes[0].pImageInfo = &image_info;
+		writes[1].dstSet = present_sets[i];
+		writes[1].dstBinding = 1;
+		writes[1].descriptorCount = 1;
+		writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		writes[1].pBufferInfo = &buffer_info;
+		vkUpdateDescriptorSets(device, 2, writes, 0, nullptr);
+	}
+
+	for (readback_entry &entry : readback)
+	{
+		entry.buffer = -1;
+		entry.version = 0;
+		entry.slot = -1;
+		entry.ready = false;
+		if (!create_buffer(entry.host, VkDeviceSize(width) * height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true))
+			return false;
+	}
+	last_readback = shown_readback = -1;
+	return true;
 }
 
 
@@ -563,8 +803,16 @@ void voodoo_vk::impl::destroy_targets()
 		destroy_image(color[i]);
 	}
 	destroy_image(depth);
-	destroy_buffer(readback);
-	readback_buffer = -1;
+	if (display_framebuffer)
+		vkDestroyFramebuffer(device, display_framebuffer, nullptr);
+	display_framebuffer = VK_NULL_HANDLE;
+	destroy_image(display);
+	for (readback_entry &entry : readback)
+	{
+		destroy_buffer(entry.host);
+		entry.buffer = -1;
+	}
+	last_readback = shown_readback = -1;
 }
 
 
@@ -718,7 +966,8 @@ VkRect2D voodoo_vk::impl::clip(s32 left, s32 top, s32 right, s32 bottom) const
 
 void voodoo_vk::impl::add(command const &cmd)
 {
-	readback_buffer = -1;
+	if (cmd.type != CMD_LFB_DEPTH)
+		versions[cmd.buffer]++;
 
 	// extend the previous command when nothing changes in between
 	if (!commands.empty() && (cmd.type != CMD_CLEAR))
@@ -781,9 +1030,21 @@ bool voodoo_vk::impl::flush(int readback_index, bool wait)
 	}
 
 	// the slot's host buffers are reused once its last batch is done
-	slot &sl = slots[next_slot];
+	int const slot_index = next_slot;
+	slot &sl = slots[slot_index];
 	next_slot = (next_slot + 1) % SLOTS;
 	wait_slot(sl);
+
+	// the read-back goes to the oldest entry that is not on display
+	int rb = -1;
+	if (readback_index >= 0)
+	{
+		for (int i = 0; (i < READBACKS) && (rb < 0); i++)
+			if (((next_readback + i) % READBACKS) != shown_readback)
+				rb = (next_readback + i) % READBACKS;
+		next_readback = (rb + 1) % READBACKS;
+		readback[rb].buffer = -1;
+	}
 
 	// size the buffers (a new device lookup buffer gets the static tables again)
 	VkDeviceSize const bytes[DATA_COUNT] = {
@@ -955,30 +1216,60 @@ bool voodoo_vk::impl::flush(int readback_index, bool wait)
 			vkCmdEndRenderPass(cmd);
 		}
 		VkImageMemoryBarrier barrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
-		barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-		barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-		barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-		barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
 		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 		barrier.image = color[readback_index].handle;
 		barrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 		VkBufferImageCopy region{};
 		region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
 		region.imageExtent = { u32(width), u32(height), 1 };
-		vkCmdCopyImageToBuffer(cmd, color[readback_index].handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback.handle, 1, &region);
-		barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-		barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-		barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-		barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+		if (!clut_linear)
+		{
+			// through the CLUT into the display image, which is copied out
+			barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+			barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+			barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+			barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+			VkRenderPassBeginInfo pass{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+			pass.renderPass = present_pass;
+			pass.framebuffer = display_framebuffer;
+			pass.renderArea = { { 0, 0 }, { u32(width), u32(height) } };
+			vkCmdBeginRenderPass(cmd, &pass, VK_SUBPASS_CONTENTS_INLINE);
+			VkViewport const viewport{ 0.0f, 0.0f, float(width), float(height), 0.0f, 1.0f };
+			vkCmdSetViewport(cmd, 0, 1, &viewport);
+			vkCmdSetScissor(cmd, 0, 1, &pass.renderArea);
+			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, present_pipeline);
+			vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, present_layout, 0, 1, &present_sets[readback_index], 0, nullptr);
+			vkCmdDraw(cmd, 3, 1, 0, 0);
+			vkCmdEndRenderPass(cmd);
+			barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+			barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+			barrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+			vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+			vkCmdCopyImageToBuffer(cmd, display.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback[rb].host.handle, 1, &region);
+		}
+		else
+		{
+			barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+			barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+			barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+			barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+			vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+			vkCmdCopyImageToBuffer(cmd, color[readback_index].handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback[rb].host.handle, 1, &region);
+			barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+			barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+			barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+			barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+			vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+		}
 		VkBufferMemoryBarrier host{ VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER };
 		host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
 		host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
 		host.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 		host.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		host.buffer = readback.handle;
+		host.buffer = readback[rb].host.handle;
 		host.size = VK_WHOLE_SIZE;
 		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &host, 0, nullptr);
 	}
@@ -994,22 +1285,60 @@ bool voodoo_vk::impl::flush(int readback_index, bool wait)
 	if (!ok)
 		return false;
 
-	// the read-back needs the image
-	if ((readback_index >= 0) || wait)
-		wait_slot(sl);
+	// the read-back is ready once the batch is done
 	if (readback_index >= 0)
 	{
 		readbacks++;
-		if (!readback.coherent)
-		{
-			VkMappedMemoryRange range{ VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE };
-			range.memory = readback.memory;
-			range.size = VK_WHOLE_SIZE;
-			vkInvalidateMappedMemoryRanges(device, 1, &range);
-		}
-		readback_buffer = readback_index;
+		readback_entry &entry = readback[rb];
+		entry.buffer = readback_index;
+		entry.version = versions[readback_index];
+		entry.slot = slot_index;
+		entry.ready = false;
+		last_readback = rb;
 	}
+	if (wait)
+		wait_slot(sl);
 	return true;
+}
+
+
+void voodoo_vk::impl::complete(readback_entry &entry)
+{
+	if (entry.ready)
+		return;
+	if (entry.slot >= 0)
+		wait_slot(slots[entry.slot]);
+	if (!entry.host.coherent)
+	{
+		VkMappedMemoryRange range{ VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE };
+		range.memory = entry.host.memory;
+		range.size = VK_WHOLE_SIZE;
+		vkInvalidateMappedMemoryRanges(device, 1, &range);
+	}
+	entry.ready = true;
+}
+
+
+//-------------------------------------------------
+//  current_readback - the read-back entry holding
+//  the current image of a buffer, copied now if
+//  no read-back has it yet
+//-------------------------------------------------
+
+int voodoo_vk::impl::current_readback(int buffer)
+{
+	int found = -1;
+	for (int i = 0; i < READBACKS; i++)
+		if ((readback[i].buffer == buffer) && (readback[i].version == versions[buffer]))
+			found = i;
+	if (found < 0)
+	{
+		if (!flush(buffer, false) || (last_readback < 0))
+			return -1;
+		found = last_readback;
+	}
+	complete(readback[found]);
+	return found;
 }
 
 
@@ -1292,10 +1621,15 @@ bool voodoo_vk::read(int buffer, bitmap_rgb32 &dest, rectangle const &hclip, s32
 	impl &s = *m;
 	if ((buffer < 0) || (buffer > 2) || !s.width)
 		return false;
-	if (((s.readback_buffer != buffer) || !s.commands.empty()) && !s.flush(buffer, true))
+	int const entry = s.current_readback(buffer);
+	if (entry < 0)
 		return false;
 
-	u32 const *const image = reinterpret_cast<u32 const *>(s.readback.mapped);
+	u32 const *const image = reinterpret_cast<u32 const *>(s.readback[entry].host.mapped);
+	if (lut)
+		s.lut_frames++;
+	else
+		s.copied_frames++;
 	for (s32 y = hclip.top(); y <= hclip.bottom(); y++)
 	{
 		u32 *const dst = &dest.pix(y);
@@ -1323,6 +1657,62 @@ bool voodoo_vk::read(int buffer, bitmap_rgb32 &dest, rectangle const &hclip, s32
 		}
 	}
 	return true;
+}
+
+void voodoo_vk::set_clut(u8 const *lut)
+{
+	impl &s = *m;
+	u32 *const table = reinterpret_cast<u32 *>(s.clut.mapped);
+	bool changed = (lut == nullptr) != s.clut_linear;
+	if (lut)
+		for (int i = 0; (i < 3 * 256) && !changed; i++)
+			changed = (table[i] != lut[i]);
+	if (!changed)
+		return;
+
+	// the batches in flight may read the table; the read-backs went through
+	// the old one
+	s.wait_all();
+	if (lut)
+		for (int i = 0; i < 3 * 256; i++)
+			table[i] = lut[i];
+	s.flush_buffer(s.clut, 0, s.clut.size);
+	s.clut_linear = (lut == nullptr);
+	for (impl::readback_entry &entry : s.readback)
+		entry.buffer = -1;
+}
+
+
+void voodoo_vk::prefetch(int buffer)
+{
+	impl &s = *m;
+	if ((buffer < 0) || (buffer > 2) || !s.width)
+		return;
+	for (impl::readback_entry const &entry : s.readback)
+		if ((entry.buffer == buffer) && (entry.version == s.versions[buffer]))
+			return;
+	s.flush(buffer, false);
+}
+
+
+bitmap_rgb32 *voodoo_vk::frame(int buffer, rectangle const &area, s32 xoffs, s32 yoffs)
+{
+	impl &s = *m;
+	if ((buffer < 0) || (buffer > 2) || !s.width)
+		return nullptr;
+	if ((area.left() < xoffs) || (area.right() - xoffs >= s.width) || (area.top() < yoffs) || (area.bottom() - yoffs >= s.height))
+		return nullptr;
+	int const index = s.current_readback(buffer);
+	if (index < 0)
+		return nullptr;
+
+	// target pixel (x - xoffs, y - yoffs) at (x, y)
+	impl::readback_entry &entry = s.readback[index];
+	u32 *const base = reinterpret_cast<u32 *>(entry.host.mapped) - (ptrdiff_t(yoffs) * s.width + xoffs);
+	entry.view.wrap(base, area.right() + 1, area.bottom() + 1, s.width);
+	s.shown_readback = index;
+	s.direct_frames++;
+	return &entry.view;
 }
 
 } // namespace voodoo

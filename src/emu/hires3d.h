@@ -46,6 +46,11 @@ public:
 	// bitmap for the frame being drawn (native size times scale)
 	bitmap_rgb32 &frame_bitmap();
 
+	// show bitmap for the frame being drawn instead of the frame bitmap
+	// (frame_bitmap() then returns it); it is in the same coordinates and
+	// must stay intact until the next frame is shown
+	void use_frame(bitmap_rgb32 &bitmap);
+
 	// the update covering cliprect is finished; the frame is shown once
 	// the bottom of the visible area has been drawn
 	void frame_done(const rectangle &cliprect);
@@ -80,14 +85,17 @@ public:
 	static bool update_texture(screen_device &screen, render_texture &texture);
 
 private:
+	void begin_frame();
+
 	screen_device &m_screen;
 	int m_scale;
 	std::unique_ptr<vk3d_renderer> m_vulkan;
 	bool m_vulkan_tried = false;
 	bitmap_rgb32 m_bitmap[2];
 	int m_current = 0;
-	int m_published = -1;
-	int m_shown = -1;
+	bitmap_rgb32 *m_draw = nullptr;         // bitmap of the frame being drawn
+	bitmap_rgb32 *m_published = nullptr;    // finished frame to show
+	int m_shown = -1;                       // own bitmap shown, or -1
 	u64 m_frame = ~u64(0);
 };
 

@@ -50,7 +50,7 @@ bool hires3d_output::active() const
 }
 
 
-bitmap_rgb32 &hires3d_output::frame_bitmap()
+void hires3d_output::begin_frame()
 {
 	// partial updates of the same frame draw into the same bitmap; a new
 	// frame never draws into the bitmap the renderer is showing
@@ -58,21 +58,36 @@ bitmap_rgb32 &hires3d_output::frame_bitmap()
 	{
 		m_frame = m_screen.frame_number();
 		m_current = (m_shown == 0) ? 1 : 0;
+		m_draw = &m_bitmap[m_current];
 	}
+	if (m_draw == &m_bitmap[m_current])
+	{
+		int const width = m_screen.width() * m_scale;
+		int const height = m_screen.height() * m_scale;
+		if ((m_draw->width() != width) || (m_draw->height() != height))
+			m_draw->allocate(width, height);
+	}
+}
 
-	bitmap_rgb32 &bitmap = m_bitmap[m_current];
-	int const width = m_screen.width() * m_scale;
-	int const height = m_screen.height() * m_scale;
-	if ((bitmap.width() != width) || (bitmap.height() != height))
-		bitmap.allocate(width, height);
-	return bitmap;
+
+bitmap_rgb32 &hires3d_output::frame_bitmap()
+{
+	begin_frame();
+	return *m_draw;
+}
+
+
+void hires3d_output::use_frame(bitmap_rgb32 &bitmap)
+{
+	begin_frame();
+	m_draw = &bitmap;
 }
 
 
 void hires3d_output::frame_done(const rectangle &cliprect)
 {
-	if (cliprect.bottom() >= m_screen.visible_area().bottom())
-		m_published = m_current;
+	if (m_draw && (cliprect.bottom() >= m_screen.visible_area().bottom()))
+		m_published = m_draw;
 }
 
 
@@ -236,11 +251,11 @@ bool hires3d_output::update_texture(screen_device &screen, render_texture &textu
 {
 	for (hires3d_output *output : s_outputs)
 	{
-		if ((&output->m_screen == &screen) && (output->m_published >= 0))
+		if ((&output->m_screen == &screen) && output->m_published)
 		{
-			texture.set_bitmap(output->m_bitmap[output->m_published], output->scaled(screen.visible_area()), TEXFORMAT_RGB32);
-			output->m_shown = output->m_published;
-			output->m_published = -1;
+			texture.set_bitmap(*output->m_published, output->scaled(screen.visible_area()), TEXFORMAT_RGB32);
+			output->m_shown = (output->m_published == &output->m_bitmap[0]) ? 0 : (output->m_published == &output->m_bitmap[1]) ? 1 : -1;
+			output->m_published = nullptr;
 			return true;
 		}
 	}

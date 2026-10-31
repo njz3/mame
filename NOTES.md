@@ -27,7 +27,7 @@ Matériel visé, dans l'ordre :
 | 1 | Sega Model 1 | vr, vformula | OK (vr ×2, ×4) | OK (vr ×2, ×4) ; relecture lente |
 | 2 | Namco System 22 / Super 22 | ridgerac, ridgera2, raverace, acedrive, victlap, cybrcycc, dirtdash, alpinerd | OK (ridgerac, dirtdash ×2) | à faire |
 | 3 | Konami K001005 | gticlub, midnrun, windheat, jetwave | OK (gticlub, midnrun ×2) | à faire |
-| 4 | 3dfx Voodoo 1/2 | sfrush, sfrushrk, calspeed, hyprdriv, vaportrx, roadburn, thrilld, racingj | OK (sfrush ×2 ×4, racingj ×2, roadburn ×2) ; coûteux en CPU | OK (même image que le logiciel) ; relecture à optimiser |
+| 4 | 3dfx Voodoo 1/2 | sfrush, sfrushrk, calspeed, hyprdriv, vaportrx, roadburn, thrilld, racingj | OK (sfrush ×2 ×4, racingj ×2, roadburn ×2) ; coûteux en CPU | OK (même image que le logiciel) ; au niveau du natif en ×2 sur roadburn |
 | 5 | Midway V-Unit | crusnusa, crusnwld, offroadc | 2D OK (crusnusa ×2) ; 3D à vérifier en démo (sommets entiers : bords natifs, textures HD) | à faire |
 | 6 | Midway Zeus 2 | crusnexo | OK (crusnexo ×2, mode démo) | à faire |
 | 7 | Namco System 21 | winrun, driveyes | OK (winrun, driveyes ×2) | à faire |
@@ -292,6 +292,30 @@ l'écraser.
     L'attente du GPU suit le nombre de pixels (3,4 ms par image en ×2,
     10,6 ms en ×4 sur roadburn) : c'est surtout la relecture de l'image et sa
     copie dans le bitmap.
-  - À faire : relecture sans attente (une image de retard, en option) et
-    bitmap HD pris directement dans la mémoire relue, puis partage de l'image
-    avec l'affichage (bgfx) pour supprimer la relecture.
+  - Suite : relecture sans attente et image directe (entrée suivante).
+- 2026-10-31 : **Voodoo sur Vulkan, relecture sans attente et image directe.**
+  - MAME affiche à la vblank le tampon devenu avant à l'échange précédent.
+    Juste après chaque échange, la relecture du nouveau tampon avant part donc
+    sur le GPU sans attendre, et elle a une image entière pour arriver. Pas
+    d'image de retard : l'image montrée est la même qu'avant.
+  - Les relectures vont dans un anneau de 3 tampons. L'affichage montre la
+    mémoire relue directement, sans copie, grâce à la nouvelle
+    `hires3d_output::use_frame()`. La relecture montrée n'est pas réécrite
+    avant l'image suivante.
+  - Les drivers qui dessinent leur 2D par-dessus (NWK-TR, Hang Pilot, via
+    `hires()`) gardent une copie, pour ne pas laisser d'ancien texte dans la
+    mémoire relue.
+  - La CLUT du DAC, quand elle n'est pas linéaire (roadburn), est appliquée
+    sur le GPU par une passe plein écran vers une image d'affichage, qui est
+    relue à la place du tampon couleur.
+  - Quand seul le GPU dessine, le tampon natif n'est plus converti pour
+    l'écran natif (il n'est ni dessiné ni montré). Le nombre de pixels estimé
+    pour la chronologie du Voodoo tient compte du rectangle de découpage :
+    sans lui, les grands triangles hors écran faisaient paraître la puce plus
+    occupée et le CPU tournait davantage sur son état.
+  - roadburn, 30 s émulées, meilleur de 3 essais alternés : avant cette étape
+    16,5 s en natif contre 20,3 s en Vulkan ×2 ; après, 19,7 s contre 19,8 s
+    (le portable chauffe, d'où les écarts). Attente GPU : de 3,5 s à 0,02 s,
+    toutes les images montrées sans copie.
+  - Reste : partager l'image avec l'affichage (bgfx) pour supprimer la
+    relecture elle-même.

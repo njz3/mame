@@ -68,10 +68,23 @@ public:
 	void write_depth(s32 x, s32 scry, u16 value);
 	void fill_rows(int buffer, u32 first, u32 count, u16 value);
 
+	// the CLUT of the DAC (256 red, green and blue values), applied on the
+	// GPU before reading back; nullptr when it is linear
+	void set_clut(u8 const *lut);
+
+	// start copying a buffer back for the display, without waiting (after
+	// a swap, the buffer is shown from the next frame)
+	void prefetch(int buffer);
+
 	// draw what is pending and copy the hclip area of a buffer into dest:
 	// dest pixel (x, y) is target pixel (x - xoffs, y - yoffs); lut holds
 	// 256 red, green and blue values, or is nullptr
 	bool read(int buffer, bitmap_rgb32 &dest, rectangle const &hclip, s32 xoffs, s32 yoffs, u8 const *lut);
+
+	// same without copying: a bitmap over the read-back memory, in the
+	// coordinates of read(), covering area; it stays intact until two other
+	// images have been read back; nullptr if area is not inside the image
+	bitmap_rgb32 *frame(int buffer, rectangle const &area, s32 xoffs, s32 yoffs);
 
 private:
 	struct impl;
