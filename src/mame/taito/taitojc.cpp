@@ -16,8 +16,10 @@ Taito custom chips on this hardware:
 TODO:
 - Games are running at wrong speed(unthrottled?) compared to pcb recordings,
   easily noticeable on sidebs/sidebs2. For example the selection screens are
-  too fast, and the driving is almost twice as slow. Even slower after the
-  m68k fpu/softfloat update since MAME 0.267.
+  too fast. The driving used to render the 3D at 8-10 fps: the 68040 FPU used
+  the much slower 68881/68882 instruction timings (now fixed in the core) and
+  the 68040 integer timings are still slower than the real pipelined core,
+  so the main CPU clock is scaled up in machine_start (see there).
 - dendego intro object RAM usage has various gfx bugs (check video file)
 - dendego title screen builds up and it shouldn't
 - landgear has some weird crashes (after playing one round, after a couple of
@@ -507,6 +509,16 @@ void taitojc_state::irq_unk_w(uint8_t data)
 
 uint16_t taitojc_state::dsp_shared_r(offs_t offset)
 {
+	// the main CPU frame loop polls this DSP status word while it waits for
+	// an interrupt: when the same instruction reads it twice in a row, let
+	// the poll take longer instead of spinning through it (idle skip)
+	if ((offset == 0x7f0) && !machine().side_effects_disabled())
+	{
+		offs_t const pc = m_maincpu->pc();
+		if (pc == m_status_poll_pc)
+			m_maincpu->eat_cycles(200);
+		m_status_poll_pc = pc;
+	}
 	return m_dsp_shared_ram[offset];
 }
 
@@ -1086,6 +1098,11 @@ void taitojc_state::machine_reset()
 
 void taitojc_state::machine_start()
 {
+	// MAME's 68040 integer instruction timings are slower than the real
+	// pipelined core; with them alone sidebs/sidebs2 render the race at about
+	// 20 fps, and at 30 fps (every other frame) with the CPU 1.5 times faster
+	m_maincpu->set_clock_scale(1.5);
+
 	// register for savestates
 	save_item(NAME(m_dsp_rom_pos));
 	save_item(NAME(m_first_dsp_reset));

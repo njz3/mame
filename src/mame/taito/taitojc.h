@@ -91,6 +91,7 @@ protected:
 	uint8_t m_mcu_data_hc11 = 0;
 
 	bool m_has_dsp_hack = false;
+	offs_t m_status_poll_pc = 0;
 
 	void coin_control_w(uint8_t data);
 
