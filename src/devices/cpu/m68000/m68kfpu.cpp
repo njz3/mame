@@ -1675,6 +1675,15 @@ void m68000_musashi_device::WRITE_EA_PACK(int mode, int reg, int k, extFloat80_t
 	}
 }
 
+// Cycle counts: the 68881/68882 coprocessor timings, or the much shorter
+// register-to-register timings of the pipelined FPU built into the 68040 for
+// the instructions it implements in hardware (the others are emulated by the
+// FPSP software on a real 68040 and keep the coprocessor counts).
+static inline int fpu_cycles(u32 is_68040, int mc6888x, int mc68040)
+{
+	return is_68040 ? mc68040 : mc6888x;
+}
+
 void m68000_musashi_device::fpgen_rm_reg(u16 w2)
 {
 	// arithmetic instructions record their address for exception handlers
@@ -1904,7 +1913,7 @@ void m68000_musashi_device::fpgen_rm_reg(u16 w2)
 		{
 			m_fpr[dst] = source;
 			set_condition_codes(m_fpr[dst]);
-			m_icount -= 56;
+			m_icount -= fpu_cycles(m_cpu_type & CPU_TYPE_040, 56, 2);
 			break;
 		}
 		case 0x01:      // FINT
@@ -1928,7 +1937,7 @@ void m68000_musashi_device::fpgen_rm_reg(u16 w2)
 			m_fpr[dst] = extF80_sqrt(source);
 			set_condition_codes(m_fpr[dst]);
 			sync_exception_flags(source, source, EXC_ENB_INEXACT);
-			m_icount -= 109;
+			m_icount -= fpu_cycles(m_cpu_type & CPU_TYPE_040, 109, 103);
 			break;
 		}
 		case 0x06:      // FLOGNP1
@@ -2003,7 +2012,7 @@ void m68000_musashi_device::fpgen_rm_reg(u16 w2)
 			m_fpr[dst] = source;
 			m_fpr[dst].signExp &= 0x7fff;
 			set_condition_codes(m_fpr[dst]);
-			m_icount -= 58;
+			m_icount -= fpu_cycles(m_cpu_type & CPU_TYPE_040, 58, 3);
 			break;
 		}
 		case 0x1a:      // FNEG
@@ -2011,7 +2020,7 @@ void m68000_musashi_device::fpgen_rm_reg(u16 w2)
 			m_fpr[dst] = source;
 			m_fpr[dst].signExp ^= 0x8000;
 			set_condition_codes(m_fpr[dst]);
-			m_icount -= 58;
+			m_icount -= fpu_cycles(m_cpu_type & CPU_TYPE_040, 58, 3);
 			break;
 		}
 		case 0x1d:      // FCOS
@@ -2073,7 +2082,7 @@ void m68000_musashi_device::fpgen_rm_reg(u16 w2)
 		}
 		case 0x20:      // FDIV
 			fpu_div(w2, source, extF80_roundingPrecision);
-			m_icount -= 128;
+			m_icount -= fpu_cycles(m_cpu_type & CPU_TYPE_040, 128, 38);
 			break;
 		case 0x21:      // FMOD
 		{
@@ -2099,7 +2108,7 @@ void m68000_musashi_device::fpgen_rm_reg(u16 w2)
 			set_condition_codes(m_fpr[dst]);
 			sync_exception_flags(source, dstCopy, EXC_ENB_INEXACT|EXC_ENB_OVRFLOW|EXC_ENB_UNDFLOW);
 			LOGMASKED(LOG_INSTRUCTIONS_VERBOSE, "FADD: %f + %f = %f\n", fx80_to_double(dstCopy), fx80_to_double(source), fx80_to_double(m_fpr[dst]));
-			m_icount -= 76;
+			m_icount -= fpu_cycles(m_cpu_type & CPU_TYPE_040, 76, 3);
 			break;
 		}
 		case 0x23:      // FMUL
@@ -2108,7 +2117,7 @@ void m68000_musashi_device::fpgen_rm_reg(u16 w2)
 			set_condition_codes(m_fpr[dst]);
 			sync_exception_flags(source, dstCopy, EXC_ENB_INEXACT|EXC_ENB_OVRFLOW|EXC_ENB_UNDFLOW);
 			LOGMASKED(LOG_INSTRUCTIONS_VERBOSE, "FMUL: %f * %f = %f\n", fx80_to_double(dstCopy), fx80_to_double(source), fx80_to_double(m_fpr[dst]));
-			m_icount -= 96;
+			m_icount -= fpu_cycles(m_cpu_type & CPU_TYPE_040, 96, 5);
 			break;
 		}
 		case 0x24:      // FSGLDIV
@@ -2118,7 +2127,7 @@ void m68000_musashi_device::fpgen_rm_reg(u16 w2)
 			m_fpr[dst] = f32_to_extF80( f32_div(a, b) );
 			set_condition_codes(m_fpr[dst]);
 			sync_exception_flags(source, dstCopy, EXC_ENB_INEXACT | EXC_ENB_OVRFLOW | EXC_ENB_UNDFLOW);
-			m_icount -= 94;
+			m_icount -= fpu_cycles(m_cpu_type & CPU_TYPE_040, 94, 38);
 			break;
 		}
 		case 0x25:      // FREM
@@ -2155,7 +2164,7 @@ void m68000_musashi_device::fpgen_rm_reg(u16 w2)
 			m_fpr[dst] = f32_to_extF80( f32_mul(a, b) );
 			set_condition_codes(m_fpr[dst]);
 			sync_exception_flags(source, dstCopy, EXC_ENB_INEXACT | EXC_ENB_OVRFLOW | EXC_ENB_UNDFLOW);
-			m_icount -= 94;
+			m_icount -= fpu_cycles(m_cpu_type & CPU_TYPE_040, 94, 5);
 			break;
 		}
 		case 0x28: case 0x29: case 0x2a: case 0x2b:
@@ -2165,7 +2174,7 @@ void m68000_musashi_device::fpgen_rm_reg(u16 w2)
 			set_condition_codes(m_fpr[dst]);
 			sync_exception_flags(source, dstCopy, EXC_ENB_INEXACT | EXC_ENB_OVRFLOW | EXC_ENB_UNDFLOW);
 			LOGMASKED(LOG_INSTRUCTIONS_VERBOSE, "FSUB: %f - %f = %f\n", fx80_to_double(dstCopy), fx80_to_double(source), fx80_to_double(m_fpr[dst]));
-			m_icount -= 76;
+			m_icount -= fpu_cycles(m_cpu_type & CPU_TYPE_040, 76, 3);
 			break;
 		}
 
@@ -2215,14 +2224,14 @@ void m68000_musashi_device::fpgen_rm_reg(u16 w2)
 			sync_exception_flags(source, dstCopy, 0);
 
 			LOGMASKED(LOG_INSTRUCTIONS_VERBOSE, "FCMP: %f vs %f\n", fx80_to_double(dstCopy), fx80_to_double(source));
-			m_icount -= 58;
+			m_icount -= fpu_cycles(m_cpu_type & CPU_TYPE_040, 58, 3);
 			break;
 		}
 		case 0x3a: case 0x3b: case 0x3e: case 0x3f: // FTST
 		{
 			set_condition_codes(source);
 			sync_exception_flags(source, dstCopy, 0);
-			m_icount -= 56;
+			m_icount -= fpu_cycles(m_cpu_type & CPU_TYPE_040, 56, 3);
 			break;
 		}
 		case 0x08: // FETOXM1
@@ -2356,7 +2365,7 @@ void m68000_musashi_device::fpgen_rm_reg(u16 w2)
 			}
 			set_condition_codes(m_fpr[dst]);
 			sync_exception_flags(source, source, EXC_ENB_INEXACT | EXC_ENB_OVRFLOW | EXC_ENB_UNDFLOW);
-			m_icount -= 58;
+			m_icount -= fpu_cycles(m_cpu_type & CPU_TYPE_040, 58, 2);
 			break;
 		}
 		case 0x41:      // FSSQRT
@@ -2368,7 +2377,7 @@ void m68000_musashi_device::fpgen_rm_reg(u16 w2)
 			}
 			set_condition_codes(m_fpr[dst]);
 			sync_exception_flags(source, source, EXC_ENB_INEXACT);
-			m_icount -= 109;
+			m_icount -= fpu_cycles(m_cpu_type & CPU_TYPE_040, 109, 103);
 			break;
 		}
 		case 0x58:      // FSABS
@@ -2382,7 +2391,7 @@ void m68000_musashi_device::fpgen_rm_reg(u16 w2)
 			}
 			set_condition_codes(m_fpr[dst]);
 			sync_exception_flags(source, source, EXC_ENB_INEXACT | EXC_ENB_OVRFLOW | EXC_ENB_UNDFLOW);
-			m_icount -= 58;
+			m_icount -= fpu_cycles(m_cpu_type & CPU_TYPE_040, 58, 3);
 			break;
 		}
 		case 0x5a:      // FSNEG
@@ -2396,13 +2405,13 @@ void m68000_musashi_device::fpgen_rm_reg(u16 w2)
 			}
 			set_condition_codes(m_fpr[dst]);
 			sync_exception_flags(source, source, EXC_ENB_INEXACT | EXC_ENB_OVRFLOW | EXC_ENB_UNDFLOW);
-			m_icount -= 58;
+			m_icount -= fpu_cycles(m_cpu_type & CPU_TYPE_040, 58, 3);
 			break;
 		}
 		case 0x60:      // FSDIV
 		case 0x64:      // FDDIV
 			fpu_div(w2, source, (opmode & 4) ? 64 : 32);
-			m_icount -= 124;
+			m_icount -= fpu_cycles(m_cpu_type & CPU_TYPE_040, 124, 38);
 			break;
 		case 0x62:      // FSADD
 		case 0x66:      // FDADD
@@ -2413,7 +2422,7 @@ void m68000_musashi_device::fpgen_rm_reg(u16 w2)
 			}
 			set_condition_codes(m_fpr[dst]);
 			sync_exception_flags(source, dstCopy, EXC_ENB_INEXACT | EXC_ENB_OVRFLOW | EXC_ENB_UNDFLOW);
-			m_icount -= 76;
+			m_icount -= fpu_cycles(m_cpu_type & CPU_TYPE_040, 76, 3);
 			break;
 		}
 		case 0x63:      // FSMUL
@@ -2425,7 +2434,7 @@ void m68000_musashi_device::fpgen_rm_reg(u16 w2)
 			}
 			set_condition_codes(m_fpr[dst]);
 			sync_exception_flags(source, dstCopy, EXC_ENB_INEXACT | EXC_ENB_OVRFLOW | EXC_ENB_UNDFLOW);
-			m_icount -= 96;
+			m_icount -= fpu_cycles(m_cpu_type & CPU_TYPE_040, 96, 5);
 			break;
 		}
 		case 0x68:      // FSSUB
@@ -2437,7 +2446,7 @@ void m68000_musashi_device::fpgen_rm_reg(u16 w2)
 			}
 			set_condition_codes(m_fpr[dst]);
 			sync_exception_flags(source, dstCopy, EXC_ENB_INEXACT | EXC_ENB_OVRFLOW | EXC_ENB_UNDFLOW);
-			m_icount -= 76;
+			m_icount -= fpu_cycles(m_cpu_type & CPU_TYPE_040, 76, 3);
 			break;
 		}
 
@@ -2520,7 +2529,7 @@ void m68000_musashi_device::fmove_reg_mem(u16 w2)
 		}
 	}
 
-	m_icount -= 12;
+	m_icount -= fpu_cycles(m_cpu_type & CPU_TYPE_040, 12, 3);
 }
 
 void m68000_musashi_device::apply_fpcr_rounding()
@@ -2629,7 +2638,7 @@ void m68000_musashi_device::fmove_fpcr(u16 w2)
 			}
 			if (regsel & 2) m_fpsr = OPER_I_32() & FPSR_WRITE_MASK;
 			if (regsel & 1) m_fpiar = OPER_I_32();
-			m_icount -= 30;
+			m_icount -= fpu_cycles(m_cpu_type & CPU_TYPE_040, 30, 4);
 			return;
 		}
 
@@ -2709,7 +2718,7 @@ void m68000_musashi_device::fmove_fpcr(u16 w2)
 		apply_fpcr_rounding();
 	}
 
-	m_icount -= 30;
+	m_icount -= fpu_cycles(m_cpu_type & CPU_TYPE_040, 30, 4);
 }
 
 void m68000_musashi_device::fmovem(u16 w2)
