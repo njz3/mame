@@ -14,6 +14,7 @@ TODO:
 
 #include "emuopts.h"
 #include "hires3d.h"
+#include "vk3d.h"
 
 DEFINE_DEVICE_TYPE(NAMCOS21_3D, namcos21_3d_device, "namcos21_3d", "Namco System 21 3D Rasterizer")
 
@@ -37,6 +38,22 @@ void namcos21_3d_device::device_start()
 	assert(m_framebuffer_size > 0);
 
 	m_scale = std::clamp(machine().options().int_value(OPTION_HIRES3D), 1, 16);
+
+	// -hires3d: on the GPU unless -hires3d_renderer is software; the frame
+	// buffers here then stay native for the emulation
+	if ((m_scale > 1) && (strcmp(machine().options().value(OPTION_HIRES3D_RENDERER), "software") != 0))
+	{
+		std::string error;
+		m_vk = namcos21_vk::create(m_scale, m_poly_frame_width, m_poly_frame_height, error);
+		if (m_vk)
+		{
+			osd_printf_verbose("namcos21_3d: hires3d drawn with Vulkan on %s\n", m_vk->device_name());
+			m_hires_scale = m_scale;
+			m_scale = 1;
+		}
+		else
+			osd_printf_verbose("namcos21_3d: hires3d drawn in software (%s)\n", error);
+	}
 	m_fb_width = m_poly_frame_width * m_scale;
 	m_fb_height = m_poly_frame_height * m_scale;
 	m_fb_size = m_fb_width * m_fb_height;
@@ -76,6 +93,9 @@ void namcos21_3d_device::swap_and_clear_poly_framebuffer()
 			for (int x = 0; x < m_poly_frame_width; x++)
 				m_native_z[y * m_poly_frame_width + x] = m_poly_framebuffer_z2[size_t(y * m_scale) * m_fb_width + x * m_scale];
 	}
+
+	if (m_vk)
+		m_vk->swap();
 }
 
 void namcos21_3d_device::copy_visible_poly_framebuffer(bitmap_ind16 &bitmap, const rectangle &cliprect, int scale)
@@ -84,15 +104,14 @@ void namcos21_3d_device::copy_visible_poly_framebuffer(bitmap_ind16 &bitmap, con
 	clip &= cliprect;
 
 	// blit the visible framebuffer (sampled when the destination is native
-	// and the frame buffer is larger)
-	int const step = m_scale / scale;
+	// and the frame buffer is larger, magnified when it is smaller)
 	for (int sy = clip.top(); sy <= clip.bottom(); sy++)
 	{
 		u16 *const dest = &bitmap.pix(sy);
-		const u16 *const source = m_poly_framebuffer_pens2.get() + size_t(m_fb_width) * sy * step;
+		const u16 *const source = m_poly_framebuffer_pens2.get() + size_t(m_fb_width) * (sy * m_scale / scale);
 		for (int sx = clip.left(); sx <= clip.right(); sx++)
 		{
-			const u16 pen = source[sx * step];
+			const u16 pen = source[sx * m_scale / scale];
 			if (pen)
 				dest[sx] = pen;
 		}
@@ -283,6 +302,18 @@ void namcos21_3d_device::blit_single_quad(int sx[4], int sy[4], int zcode[4], u1
 
 	rendertri(&v[0], &v[1], &v[2], color, zsort);
 	rendertri(&v[2], &v[3], &v[0], color, zsort);
+
+	// and again on the GPU at the high resolution
+	if (m_vk)
+	{
+		double x[4], y[4];
+		for (int i = 0; i < 4; i++)
+		{
+			x[i] = (m_poly_frame_width / 2 + sx[i]) * m_hires_scale;
+			y[i] = (m_poly_frame_height / 2 + sy[i]) * m_hires_scale;
+		}
+		m_vk->quad(x, y, color, zsort);
+	}
 }
 
 void namcos21_3d_device::draw_direct_quad(const u16 *source, u16 color)

@@ -59,6 +59,7 @@ void hires3d_output::begin_frame()
 		m_frame = m_screen.frame_number();
 		m_current = (m_shown == 0) ? 1 : 0;
 		m_draw = &m_bitmap[m_current];
+		m_draw_ready = nullptr;
 	}
 	if (m_draw == &m_bitmap[m_current])
 	{
@@ -77,17 +78,22 @@ bitmap_rgb32 &hires3d_output::frame_bitmap()
 }
 
 
-void hires3d_output::use_frame(bitmap_rgb32 &bitmap)
+void hires3d_output::use_frame(bitmap_rgb32 &bitmap, std::function<void ()> &&ready)
 {
 	begin_frame();
 	m_draw = &bitmap;
+	m_draw_ready = std::move(ready);
 }
 
 
 void hires3d_output::frame_done(const rectangle &cliprect)
 {
 	if (m_draw && (cliprect.bottom() >= m_screen.visible_area().bottom()))
+	{
 		m_published = m_draw;
+		m_published_ready = std::move(m_draw_ready);
+		m_draw_ready = nullptr;
+	}
 }
 
 
@@ -253,6 +259,11 @@ bool hires3d_output::update_texture(screen_device &screen, render_texture &textu
 	{
 		if ((&output->m_screen == &screen) && output->m_published)
 		{
+			if (output->m_published_ready)
+			{
+				output->m_published_ready();
+				output->m_published_ready = nullptr;
+			}
 			texture.set_bitmap(*output->m_published, output->scaled(screen.visible_area()), TEXFORMAT_RGB32);
 			output->m_shown = (output->m_published == &output->m_bitmap[0]) ? 0 : (output->m_published == &output->m_bitmap[1]) ? 1 : -1;
 			output->m_published = nullptr;

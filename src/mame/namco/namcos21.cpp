@@ -476,6 +476,13 @@ void namcos21_state::gpu_videoram_w(offs_t offset, u16 data, u16 mem_mask)
 		if (BIT(m_gpu_videoram_mask, i))
 			m_gpu_videoram[(offset + i) & 0x7ffff] = color;
 	}
+
+	// the GPU copy of the layer, with -hires3d on Vulkan
+	if (namcos21_vk *const vk = m_namcos21_3d->vulkan())
+	{
+		vk->layer_written(offset & 0x7ffff);
+		vk->layer_written((offset + 7) & 0x7ffff);
+	}
 }
 
 u16 namcos21_state::gpu_videoram_r(offs_t offset)
@@ -552,7 +559,28 @@ u32 namcos21_state::screen_update(screen_device &screen, bitmap_ind16 &bitmap, c
 	// entries 0 and 1 unused parts controls priority mixing
 	const u16 pri = (m_palette->read16_ext(1) >> 8) & 7;
 
-	if (m_hires->active())
+	if (m_hires->active() && m_namcos21_3d->vulkan())
+	{
+		// on the GPU: the 2D layer mixed with the 3D there, the frame shown
+		// from the read-back memory
+		namcos21_vk::layer_mix const mix = { m_gpu_register[1] - cliprect.top(), m_gpu_register[0] & 0xff, u32(0x1000 | (m_gpu_color << 8 & 0xf00)), pri, u32((m_gpu_color << 8 & 0xf00) | 0xff) };
+		bitmap_rgb32 *frame = nullptr;
+		if (m_namcos21_3d->vulkan()->mix_layer(m_gpu_videoram.get(), mix, m_palette->palette()->entry_list_adjusted(), m_palette->entries(), cliprect, screen.visible_area(), frame))
+		{
+			if (frame)
+			{
+				m_hires->use_frame(*frame, [this] () { if (namcos21_vk *const vk = m_namcos21_3d->vulkan()) vk->frame_ready(); });
+				m_hires->frame_done(cliprect);
+			}
+		}
+		else
+		{
+			// the GPU failed: continue in software, with the native 3D magnified
+			osd_printf_warning("namcos21: Vulkan failed, hires3d continues in software\n");
+			m_namcos21_3d->vulkan_failed();
+		}
+	}
+	if (m_hires->active() && !m_namcos21_3d->vulkan())
 	{
 		int const scale = m_hires->scale();
 		rectangle const hclip = m_hires->scaled(cliprect);

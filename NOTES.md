@@ -30,7 +30,7 @@ Matériel visé, dans l'ordre :
 | 4 | 3dfx Voodoo 1/2 | sfrush, sfrushrk, calspeed, hyprdriv, vaportrx, roadburn, thrilld, racingj | OK (sfrush ×2 ×4, racingj ×2, roadburn ×2) ; coûteux en CPU | OK (même image que le logiciel) ; au niveau du natif en ×2 sur roadburn |
 | 5 | Midway V-Unit | crusnusa, crusnwld, offroadc | OK (3 jeux ×2 en démo 3D ; sommets entiers : bords natifs, textures HD) | OK (même image que le logiciel) ; ×4 60 s contre 81 s en logiciel |
 | 6 | Midway Zeus 2 | crusnexo | OK (crusnexo ×2, ×4, mode démo) | OK (même image que le logiciel, aux arrondis des mélanges près) ; ×4 107 s contre 334 s en logiciel |
-| 7 | Namco System 21 | winrun, driveyes | OK (winrun, driveyes ×2) | à faire |
+| 7 | Namco System 21 | winrun, driveyes | OK (winrun, driveyes ×2) | OK (même image que le logiciel) ; ×2 près du natif |
 | 8 | Taito JC (TC0780FPA) | sidebs, sidebs2, dangcurv | OK (sidebs, sidebs2 ×2) | à faire |
 | 9 | Gaelco 3D | speedup, surfplnt, radikalb | OK (speedup, radikalb ×2) | à faire |
 | 10 | SNK HNG64 | roadedge, xrally | OK (roadedge, xrally ×2) | à faire |
@@ -446,3 +446,31 @@ l'écraser.
     logiciel, 82 s en natif ; ×4 107 à 111 s en Vulkan, 334 s en logiciel,
     78 à 102 s en natif (portable qui chauffe). Environ 1600 triangles et
     moins de 2 lots par image ; 3 s d'attente du GPU sur 120 s.
+- 2026-11-02 : **Namco System 21 sur Vulkan** (`namcos21_vk`).
+  - Les deux tampons image (numéros de couleur R16 et profondeur) sont sur
+    le GPU à N fois la taille native ; les tampons du CPU restent natifs,
+    pour l'écran natif et la profondeur que lisent les sprites de Driver's
+    Eyes.
+  - Pour chaque triangle, le CPU fait avancer les arêtes en double comme
+    `rendertri` et garde l'étendue de chaque ligne (un mot par ligne). Le
+    GPU remplit ces étendues avec le test de profondeur (zsort constant par
+    quad, exact en D32). Le CPU ne fait donc plus qu'un travail par ligne,
+    et l'image est exactement celle du logiciel.
+  - L'écran est mélangé sur le GPU puis relu : Winning Run y a sa couche 2D
+    (mémoire de 512 Ko recopiée par pages écrites, `bitmap_draw` porté avec
+    les trois priorités) ; Driver's Eyes reçoit à chaque image l'écran natif
+    sous la 3D et les pixels changés par les sprites du dessus. La palette
+    ajustée est envoyée avec le mélange.
+  - `hires3d_output::use_frame()` accepte un rappel « image prête », appelé
+    juste avant que l'affichage prenne l'image. L'attente de la relecture
+    est faite là : les trois cartes de Driver's Eyes travaillent en même
+    temps sur le GPU au lieu de s'attendre l'une l'autre (attente totale de
+    25 s à 6 s sur 60 s).
+  - Contrôle, 6 captures sur 60 s : Winning Run identique au logiciel ;
+    Driver's Eyes identique sur l'écran central. Les écrans de côté
+    dépendent du link entre les trois cartes, qui échoue parfois au
+    démarrage (« RECEIVE ERROR »), en natif aussi : la partie diverge d'une
+    exécution à l'autre.
+  - Temps pour 60 s émulées : winrun natif 29 à 31 s, ×2 33 s en Vulkan
+    contre 41 à 55 s en logiciel, ×4 44 s contre 87 s ; driveyes natif
+    65 s, ×2 88 s contre 109 à 182 s, ×4 112 s contre 197 s.

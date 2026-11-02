@@ -93,6 +93,7 @@ private:
 	std::unique_ptr<hires3d_output> m_hires;
 	bitmap_ind16 m_hires_ind;
 	bitmap_ind16 m_below;
+	bitmap_ind16 m_bottom;      // on the GPU: the native screen under the 3D
 
 	u16 video_enable_r();
 	void video_enable_w(offs_t offset, u16 data, u16 mem_mask = ~0);
@@ -316,9 +317,16 @@ u32 namco_de_pcbstack_device::screen_update(screen_device &screen, bitmap_ind16 
 	m_c355spr->draw(screen, bitmap, cliprect, 14);
 
 	bool const hires = m_hires->active();
+	namcos21_vk *const vk = hires ? m_namcos21_3d->vulkan() : nullptr;
 	int const scale = m_hires->scale();
 	rectangle const hclip = m_hires->scaled(cliprect);
-	if (hires)
+	if (vk)
+	{
+		if ((m_bottom.width() != bitmap.width()) || (m_bottom.height() != bitmap.height()))
+			m_bottom.allocate(bitmap.width(), bitmap.height());
+		copybitmap(m_bottom, bitmap, 0, 0, 0, 0, cliprect);
+	}
+	else if (hires)
 	{
 		if ((m_hires_ind.width() != screen.width() * scale) || (m_hires_ind.height() != screen.height() * scale))
 			m_hires_ind.allocate(screen.width() * scale, screen.height() * scale);
@@ -335,7 +343,34 @@ u32 namco_de_pcbstack_device::screen_update(screen_device &screen, bitmap_ind16 
 	}
 	m_c355spr->draw(screen, bitmap, cliprect, 15);
 
-	if (hires)
+	if (vk)
+	{
+		// on the GPU: the pixels the top sprites change (0xffff elsewhere)
+		// over the 3D and the native screen under it
+		for (int y = cliprect.top(); y <= cliprect.bottom(); y++)
+		{
+			u16 *const top = &m_below.pix(y);
+			u16 const *const after = &bitmap.pix(y);
+			for (int x = cliprect.left(); x <= cliprect.right(); x++)
+				top[x] = (after[x] != top[x]) ? after[x] : 0xffff;
+		}
+		bitmap_rgb32 *frame = nullptr;
+		if (vk->mix_sprites(m_bottom, m_below, m_palette->palette()->entry_list_adjusted(), m_palette->entries(), cliprect, screen.visible_area(), frame))
+		{
+			if (frame)
+			{
+				m_hires->use_frame(*frame, [this] () { if (namcos21_vk *const vk = m_namcos21_3d->vulkan()) vk->frame_ready(); });
+				m_hires->frame_done(cliprect);
+			}
+		}
+		else
+		{
+			// the GPU failed: software from the next update on
+			osd_printf_warning("namcos21_de: Vulkan failed, hires3d continues in software\n");
+			m_namcos21_3d->vulkan_failed();
+		}
+	}
+	else if (hires)
 	{
 		for (int y = cliprect.top(); y <= cliprect.bottom(); y++)
 		{

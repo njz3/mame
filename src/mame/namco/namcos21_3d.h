@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include "namcos21_vk.h"
+
 class namcos21_3d_device : public device_t
 {
 public:
@@ -34,6 +36,12 @@ public:
 	void copy_visible_poly_framebuffer(bitmap_ind16 &bitmap, const rectangle &cliprect, int scale = 1);
 	void swap_and_clear_poly_framebuffer();
 	u16 *get_visible_zbuffer() { return (m_scale == 1) ? m_poly_framebuffer_z2.get() : m_native_z.get(); }
+
+	// -hires3d on the GPU: the high-resolution frame buffers and the screen
+	// mix, nullptr in software; after a failure, the high-resolution screen
+	// magnifies the native frame buffers
+	namcos21_vk *vulkan() { return m_vk.get(); }
+	void vulkan_failed() { m_vk.reset(); }
 
 	void draw_direct_quad(const u16 *source, u16 color);
 	int draw_quads(const u16 *source, const u8 *pointram, const u32 ptram_size, u32 quad_idx);
@@ -79,6 +87,11 @@ private:
 	int m_fb_height;
 	int m_fb_size;
 	std::unique_ptr<u16[]> m_native_z;
+
+	// with m_vk, the frame buffers here stay native (m_scale is 1) and the
+	// GPU draws at m_hires_scale times the native size
+	std::unique_ptr<namcos21_vk> m_vk;
+	int m_hires_scale = 1;
 };
 
 DECLARE_DEVICE_TYPE(NAMCOS21_3D, namcos21_3d_device)
