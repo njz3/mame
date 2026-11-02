@@ -16,6 +16,7 @@
 
 #include "emupal.h"
 #include "hires3d.h"
+#include "hng64_vk.h"
 #include "screen.h"
 #include "tilemap.h"
 
@@ -116,9 +117,16 @@ public:
 	int scale() const { return m_scale; }
 	int size() const { return 512 * m_scale; }
 
+	// -hires3d on the GPU: the high-resolution 3D buffers and the screen
+	// mix, nullptr in software; after a failure, the high-resolution screen
+	// magnifies the native one
+	hng64_vk *vulkan() { return m_vk.get(); }
+	void vulkan_failed() { m_vk.reset(); }
+
 private:
 	hng64_state &m_state;
-	int m_scale;
+	int m_scale;                    // 1 with m_vk, which draws at the -hires3d scale
+	std::unique_ptr<hng64_vk> m_vk;
 
 	// (Temporarily class members - someday they will live in the memory map)
 	std::unique_ptr<float[]> m_depthBuffer3d;
@@ -215,6 +223,7 @@ public:
 	// natively and only the pixels they change are magnified)
 	std::unique_ptr<hires3d_output> m_hires;
 	bitmap_rgb32 m_below;
+	bitmap_rgb32 m_hires_bottom;    // on the GPU: the layers under the 3D
 	void blit_3d(bitmap_rgb32 &bitmap, const rectangle &cliprect, int scale);
 	required_device<palette_device> m_palette;
 	required_device<palette_device> m_palette_fade0;

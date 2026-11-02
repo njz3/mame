@@ -4,6 +4,7 @@
 #include "hng64.h"
 
 #include "emuopts.h"
+#include "vk3d.h"
 
 #include <algorithm>
 
@@ -753,7 +754,8 @@ void hng64_state::mixsprites_test(screen_device& screen, bitmap_rgb32& bitmap, c
 }
 
 // Blit the 3D colour buffer into bitmap, whose resolution is scale times the
-// native one (cliprect in its pixels); the buffer is sampled when it is larger.
+// native one (cliprect in its pixels); the buffer is sampled when it is larger
+// and magnified when it is smaller.
 void hng64_state::blit_3d(bitmap_rgb32 &bitmap, const rectangle &cliprect, int scale)
 {
 	// 3D palette half, same bit as spriteblendtype
@@ -763,7 +765,7 @@ void hng64_state::blit_3d(bitmap_rgb32 &bitmap, const rectangle &cliprect, int s
 	const int ysize = visarea.bottom() - visarea.top();
 	const int size = m_poly_renderer->size();
 	const int mask = size - 1;
-	const int step = m_poly_renderer->scale() / scale;
+	const int bufscale = m_poly_renderer->scale();
 
 	if (ysize)
 	{
@@ -784,14 +786,14 @@ void hng64_state::blit_3d(bitmap_rgb32 &bitmap, const rectangle &cliprect, int s
 			// Blit the color buffer into the primary bitmap
 			for (int y = cliprect.top(); y <= cliprect.bottom(); y++)
 			{
-				const int realy = (((y - visarea.top() * scale) * yinc) >> 16) * step;
+				const int realy = (((y - visarea.top() * scale) * yinc) >> 16) * bufscale / scale;
 
 				const u16 *src = &m_poly_renderer->colorBuffer3d()[((realy) & mask) * size];
 				u32 *dst = &bitmap.pix(y, cliprect.left());
 
 				for (int x = cliprect.left(); x <= cliprect.right(); x++)
 				{
-					const u16 srcpix = src[(((cliprect.left() + x) + xscroll) * step) & mask];
+					const u16 srcpix = src[(((cliprect.left() + x) + xscroll) * bufscale / scale) & mask];
 					if (srcpix & 0x07ff)
 					{
 						// format in our framebuffer is llll appp pppp pppp
@@ -952,7 +954,15 @@ u32 hng64_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, cons
 	// 3d gets drawn next (with -hires3d, also at the higher resolution over
 	// the magnified layers below it)
 	bool const hires = m_hires->active();
-	if (hires)
+	hng64_vk *const vk = hires ? m_poly_renderer->vulkan() : nullptr;
+	if (vk)
+	{
+		// on the GPU: the layers under the 3D kept for the mix
+		if ((m_hires_bottom.width() != bitmap.width()) || (m_hires_bottom.height() != bitmap.height()))
+			m_hires_bottom.allocate(bitmap.width(), bitmap.height());
+		copybitmap(m_hires_bottom, bitmap, 0, 0, 0, 0, cliprect);
+	}
+	else if (hires)
 	{
 		m_hires->upscale(bitmap, m_hires->frame_bitmap(), cliprect, false);
 		blit_3d(m_hires->frame_bitmap(), m_hires->scaled(cliprect), m_hires->scale());
@@ -983,7 +993,44 @@ u32 hng64_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, cons
 		}
 	}
 
-	if (hires)
+	if (vk)
+	{
+		// on the GPU: the pixels the layers above the 3D change (alpha 0
+		// elsewhere), mixed there with the 3D blit and the layers under it
+		for (int y = cliprect.top(); y <= cliprect.bottom(); y++)
+		{
+			u32 *const top = &m_below.pix(y);
+			u32 const *const after = &bitmap.pix(y);
+			for (int x = cliprect.left(); x <= cliprect.right(); x++)
+				top[x] = (after[x] != top[x]) ? (after[x] | 0xff000000) : 0;
+		}
+		const rectangle &visarea = m_screen->visible_area();
+		const int ysize = visarea.bottom() - visarea.top();
+		int xscroll = (m_fbscroll[0] >> 21);
+		if (xscroll & 0x400)
+			xscroll -= 0x800;
+		hng64_vk::blit b;
+		b.enabled = !(m_fbcontrol[0] & 0x01) && ysize;
+		b.xscroll = xscroll + 256;
+		b.yinc = ysize ? ((512 << 16) / ysize) : 0;
+		b.palbase = BIT(m_tcram[0x4c / 4], 16) ? 0x800 : 0x000;
+		bitmap_rgb32 *frame = nullptr;
+		if (vk->mix(m_hires_bottom, m_below, b, reinterpret_cast<rgb_t const *>(m_palette_3d->pens()), m_palette_3d->entries(), cliprect, screen.visible_area(), frame))
+		{
+			if (frame)
+			{
+				m_hires->use_frame(*frame, [this] () { if (hng64_vk *const vk = m_poly_renderer->vulkan()) vk->frame_ready(); });
+				m_hires->frame_done(cliprect);
+			}
+		}
+		else
+		{
+			// the GPU failed: software from the next update on
+			osd_printf_warning("hng64: Vulkan failed, hires3d continues in software\n");
+			m_poly_renderer->vulkan_failed();
+		}
+	}
+	else if (hires)
 	{
 		// magnify what the layers above the 3D changed
 		int const scale = m_hires->scale();

@@ -11,6 +11,21 @@ hng64_poly_renderer::hng64_poly_renderer(hng64_state& state)
 	, m_state(state)
 	, m_scale(std::clamp(state.machine().options().int_value(OPTION_HIRES3D), 1, 16))
 {
+	// -hires3d: on the GPU unless -hires3d_renderer is software; the buffers
+	// here then stay native for the native screen
+	if ((m_scale > 1) && (strcmp(state.machine().options().value(OPTION_HIRES3D_RENDERER), "software") != 0) && (state.m_texturerom.bytes() >= 0x1000000))
+	{
+		std::string error;
+		m_vk = hng64_vk::create(m_scale, 512, &state.m_texturerom[0], error);
+		if (m_vk)
+		{
+			osd_printf_verbose("hng64: hires3d drawn with Vulkan on %s\n", m_vk->device_name());
+			m_scale = 1;
+		}
+		else
+			osd_printf_verbose("hng64: hires3d drawn in software (%s)\n", error);
+	}
+
 	const s32 bufferSize = size() * size();
 	m_depthBuffer3d = std::make_unique<float[]>(bufferSize);
 	m_colorBuffer3d = std::make_unique<u16[]>(bufferSize);
@@ -1053,6 +1068,9 @@ bool hng64_state::command3d(const u16* packet)
 
 void hng64_state::clear3d()
 {
+	if (hng64_vk *const vk = m_poly_renderer->vulkan())
+		vk->clear();
+
 	// Reset the buffers...
 	//const rectangle& visarea = m_screen->visible_area();
 	const int bufferSize = m_poly_renderer->size() * m_poly_renderer->size();
@@ -1537,5 +1555,22 @@ void hng64_poly_renderer::drawShaded(polygon *p)
 
 			render_triangle<7>(visibleArea, render_delegate(&hng64_poly_renderer::render_texture_scanline, this), pVert[0], pVert[1], pVert[2]);
 		}
+	}
+
+	// and again on the GPU at the high resolution
+	if (m_vk)
+	{
+		hng64_vk::state const st = { p->flatShade, p->tex4bpp != 0, p->blend, p->texIndex, p->palOffset, p->colorIndex,
+				p->texPageSmall, p->texscrollx, p->texscrolly, p->tex_mask_x, p->tex_mask_y };
+		hng64_vk::vertex v[std::size(p->vert)];
+		for (int j = 0; j < p->n; j++)
+		{
+			const polyVert &pv = p->vert[j];
+			if (p->flatShade)
+				v[j] = { pv.clipCoords[0], pv.clipCoords[1], { pv.clipCoords[2], 0.0f, 0.0f, 0.0f, 0.0f } };
+			else
+				v[j] = { pv.clipCoords[0], pv.clipCoords[1], { pv.clipCoords[2], pv.clipCoords[3], pv.light, pv.texCoords[0], pv.texCoords[1] } };
+		}
+		m_vk->polygon(st, p->n, v);
 	}
 }

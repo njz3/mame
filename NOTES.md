@@ -33,7 +33,7 @@ Matériel visé, dans l'ordre :
 | 7 | Namco System 21 | winrun, driveyes | OK (winrun, driveyes ×2) | OK (même image que le logiciel) ; ×2 près du natif |
 | 8 | Taito JC (TC0780FPA) | sidebs, sidebs2, dangcurv | OK (sidebs, sidebs2 ×2) | OK (sidebs ×2, même image que le logiciel à 0,07 % près) |
 | 9 | Gaelco 3D | speedup, surfplnt, radikalb | OK (speedup, radikalb ×2) | OK (même image que le logiciel) ; ×4 38 s contre 108 s en logiciel |
-| 10 | SNK HNG64 | roadedge, xrally | OK (roadedge, xrally ×2) | à faire |
+| 10 | SNK HNG64 | roadedge, xrally | OK (roadedge, xrally ×2) | OK (même image que le logiciel à 0,5 % près) ; ×2 près du natif |
 | — | Namco System 23 | motoxgo, raceon, finfurl | quand l'émulation de base marchera | |
 
 ## Architecture
@@ -515,3 +515,23 @@ l'écraser.
   - Temps pour 60 s émulées : speedup natif 24 à 27 s, ×2 29 s en Vulkan
     contre 33 s en logiciel, ×4 38 s contre 90 à 108 s ; radikalb natif 33 s,
     ×2 36 s contre 41 à 53 s.
+- 2026-11-02 : **SNK HNG64 sur Vulkan** (`hng64_vk`).
+  - Le tampon 3D (numéros de couleur avec lumière et bit de mélange) et sa
+    profondeur flottante sont sur le GPU à N fois 512 × 512 ; la profondeur
+    est stockée en Z / 128, ce qui garde l'ordre et la valeur 100 de
+    l'effacement exactes. Les tampons du CPU restent natifs.
+  - Triangles de `drawShaded` préparés comme `render_triangle` (plans de Z,
+    W, lumière, S et T) ; le shader reprend l'étendue de la ligne puis les
+    rastériseurs plein et texturé (division de perspective, défilement de
+    texture, petites pages avec `fmod` du C, texels 4 ou 8 bits). La ROM de
+    textures (16 Mo) part avec le premier lot.
+  - L'écran est mélangé sur le GPU : couches natives sous la 3D, `blit_3d`
+    porté (défilement, étirement vertical, palette 3D à 16 luminosités,
+    mélange à 50 % calculé exactement dans le shader), puis les pixels
+    changés par les couches du dessus.
+  - Contrôle sur 90 s, 9 captures par jeu : au plus 0,54 % des pixels
+    au-delà de 24 (texture de la route de xrally).
+  - Temps pour 90 s émulées : roadedge natif 136 s, ×2 144 s en Vulkan
+    contre 168 s en logiciel ; xrally natif 126 s, ×2 132 s contre 138 s.
+    L'émulation elle-même est lourde, le gain est donc faible. xrally attend
+    le GPU 28 s (5 ms par image) : à examiner.
