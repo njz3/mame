@@ -31,7 +31,7 @@ Matériel visé, dans l'ordre :
 | 5 | Midway V-Unit | crusnusa, crusnwld, offroadc | OK (3 jeux ×2 en démo 3D ; sommets entiers : bords natifs, textures HD) | OK (même image que le logiciel) ; ×4 60 s contre 81 s en logiciel |
 | 6 | Midway Zeus 2 | crusnexo | OK (crusnexo ×2, ×4, mode démo) | OK (même image que le logiciel, aux arrondis des mélanges près) ; ×4 107 s contre 334 s en logiciel |
 | 7 | Namco System 21 | winrun, driveyes | OK (winrun, driveyes ×2) | OK (même image que le logiciel) ; ×2 près du natif |
-| 8 | Taito JC (TC0780FPA) | sidebs, sidebs2, dangcurv | OK (sidebs, sidebs2 ×2) | à faire |
+| 8 | Taito JC (TC0780FPA) | sidebs, sidebs2, dangcurv | OK (sidebs, sidebs2 ×2) | OK (sidebs ×2, même image que le logiciel à 0,07 % près) |
 | 9 | Gaelco 3D | speedup, surfplnt, radikalb | OK (speedup, radikalb ×2) | à faire |
 | 10 | SNK HNG64 | roadedge, xrally | OK (roadedge, xrally ×2) | à faire |
 | — | Namco System 23 | motoxgo, raceon, finfurl | quand l'émulation de base marchera | |
@@ -474,3 +474,25 @@ l'écraser.
   - Temps pour 60 s émulées : winrun natif 29 à 31 s, ×2 33 s en Vulkan
     contre 41 à 55 s en logiciel, ×4 44 s contre 87 s ; driveyes natif
     65 s, ×2 88 s contre 109 à 182 s, ×4 112 s contre 197 s.
+- 2026-11-02 : **Taito JC (TC0780FPA) sur Vulkan** (`tc0780fpa_vk`).
+  - Même organisation que System 21 : deux tampons de numéros de couleur et
+    une profondeur 16 bits (exacte en D32) sur le GPU, effacés à l'échange ;
+    les tampons du CPU restent natifs pour l'écran natif.
+  - Triangles (`render_triangle`, plans des paramètres) et quads
+    (`render_polygon<4>`, paramètres le long des arêtes) préparés sur le
+    CPU, puis le shader reprend l'étendue de la ligne et les trois
+    rastériseurs (plein, ombré, texturé avec bouclage). Les paramètres
+    avancent en `départ + k × pas` au lieu d'additions successives, d'où
+    de rares pixels différents.
+  - La mémoire de textures (4 Mo) est recopiée par pages écrites ; l'écran
+    mélange sur le GPU les couches natives du dessous, la 3D et les couches
+    du dessus (objets et texte), puis la palette, avec l'attente reportée au
+    moment où l'affichage prend l'image.
+  - Contrôle, Side by Side sur 90 s, 9 captures : au plus 0,07 % des pixels
+    au-delà de 24. Dangerous Curves n'atteint pas la 3D en 90 s (le mélange
+    est identique).
+  - Temps pour 90 s émulées : sidebs natif 86 s, ×2 104 s en Vulkan contre
+    147 s en logiciel ; dangcurv natif 34 s, ×2 47 s contre 54 s. En ×4,
+    la relecture de l'image (13 Mo) coûte 3,3 ms d'attente par image : il
+    faudra passer l'image du GPU à l'affichage sans la relire. (Mesures ×4
+    faites pendant que deux autres MAME tournaient sur le portable.)

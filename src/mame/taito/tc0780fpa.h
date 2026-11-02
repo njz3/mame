@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include "tc0780fpa_vk.h"
+
 #include "video/poly.h"
 
 
@@ -31,6 +33,9 @@ public:
 	void draw(bitmap_ind16 &bitmap, const rectangle &cliprect, int scale);
 	void swap_buffers();
 
+	// -hires3d on the GPU: the primitives are also drawn there
+	void set_vulkan(tc0780fpa_vk *vk) { m_vk = vk; }
+
 private:
 	// the frame buffers are m_scale times the screen size (-hires3d)
 	bitmap_ind16 m_fb[2];
@@ -41,6 +46,7 @@ private:
 
 	int m_current_fb;
 	int m_scale;
+	tc0780fpa_vk *m_vk = nullptr;
 };
 
 
@@ -59,11 +65,18 @@ public:
 	void poly_fifo_w(uint16_t data);
 	void render_w(uint16_t data);
 
+	// -hires3d on the GPU: the high-resolution frame buffers and the screen
+	// mix, nullptr in software; after a failure, the high-resolution screen
+	// magnifies the native frame buffers
+	tc0780fpa_vk *vulkan() { return m_vk.get(); }
+	void vulkan_failed();
+
 protected:
 	// device-level overrides
 	virtual void device_start() override ATTR_COLD;
 	virtual void device_stop() override ATTR_COLD;
 	virtual void device_reset() override ATTR_COLD;
+	virtual void device_post_load() override;
 
 private:
 	std::unique_ptr<uint8_t[]> m_texture;
@@ -71,6 +84,7 @@ private:
 	int32_t m_poly_fifo_ptr = 0;
 
 	std::unique_ptr<tc0780fpa_renderer> m_renderer;
+	std::unique_ptr<tc0780fpa_vk> m_vk;     // with it, m_renderer draws natively
 
 	uint16_t m_tex_address = 0;
 	uint16_t m_tex_offset = 0;

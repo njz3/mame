@@ -9,6 +9,7 @@
 #include "emuopts.h"
 #include "hires3d.h"
 #include "screen.h"
+#include "vk3d.h"
 
 
 static constexpr unsigned POLY_FIFO_SIZE = 32;
@@ -46,6 +47,9 @@ void tc0780fpa_renderer::swap_buffers()
 
 	m_fb[m_current_fb].fill(0, m_cliprect);
 	m_zb.fill(0xffff, m_cliprect);
+
+	if (m_vk)
+		m_vk->swap();
 }
 
 void tc0780fpa_renderer::draw(bitmap_ind16 &bitmap, const rectangle &cliprect, int scale)
@@ -56,16 +60,16 @@ void tc0780fpa_renderer::draw(bitmap_ind16 &bitmap, const rectangle &cliprect, i
 		return;
 	}
 
-	// native destination: sample the larger frame buffer
-	int const step = m_scale / scale;
+	// native destination: sample the larger frame buffer; larger
+	// destination: magnify it
 	bitmap_ind16 const &fb = m_fb[m_current_fb ^ 1];
 	for (int y = cliprect.top(); y <= cliprect.bottom(); y++)
 	{
-		uint16_t const *const src = &fb.pix(y * step);
+		uint16_t const *const src = &fb.pix(y * m_scale / scale);
 		uint16_t *const dst = &bitmap.pix(y);
 		for (int x = cliprect.left(); x <= cliprect.right(); x++)
 		{
-			uint16_t const pen = src[x * step];
+			uint16_t const pen = src[x * m_scale / scale];
 			if (pen)
 				dst[x] = pen;
 		}
@@ -176,6 +180,16 @@ void tc0780fpa_renderer::render_texture_scan(int32_t scanline, const extent_t &e
 }
 
 
+// the vertices for the GPU, with the parameters a primitive does not use
+// cleared
+static std::array<tc0780fpa_vk::vertex, 4> vk_vertices(tc0780fpa_renderer::vertex_t const *vert, int count, bool textured)
+{
+	std::array<tc0780fpa_vk::vertex, 4> result{};
+	for (int i = 0; i < count; i++)
+		result[i] = { vert[i].x, vert[i].y, { vert[i].p[0], vert[i].p[1], textured ? vert[i].p[2] : 0.0f, textured ? vert[i].p[3] : 0.0f } };
+	return result;
+}
+
 void tc0780fpa_renderer::render(uint16_t *polygon_fifo, int length)
 {
 	vertex_t vert[4];
@@ -237,8 +251,9 @@ void tc0780fpa_renderer::render(uint16_t *polygon_fifo, int length)
 
 			if (vert[0].p[0] < 0x8000 && vert[1].p[0] < 0x8000 && vert[2].p[0] < 0x8000)
 			{
-				if (vert[0].p[1] == vert[1].p[1] &&
-					vert[1].p[1] == vert[2].p[1])
+				bool const solid = vert[0].p[1] == vert[1].p[1] &&
+					vert[1].p[1] == vert[2].p[1];
+				if (solid)
 				{
 					// optimization: all colours the same -> render solid
 					render_triangle<2>(m_cliprect, render_delegate(&tc0780fpa_renderer::render_solid_scan, this), vert[0], vert[1], vert[2]);
@@ -247,6 +262,8 @@ void tc0780fpa_renderer::render(uint16_t *polygon_fifo, int length)
 				{
 					render_triangle<2>(m_cliprect, render_delegate(&tc0780fpa_renderer::render_shade_scan, this), vert[0], vert[1], vert[2]);
 				}
+				if (m_vk)
+					m_vk->triangle(vk_vertices(vert, 3, false).data(), solid ? tc0780fpa_vk::MODE_SOLID : tc0780fpa_vk::MODE_SHADE, {}, m_cliprect);
 			}
 			break;
 		}
@@ -297,6 +314,8 @@ void tc0780fpa_renderer::render(uint16_t *polygon_fifo, int length)
 			if (vert[0].p[0] < 0x8000 && vert[1].p[0] < 0x8000 && vert[2].p[0] < 0x8000)
 			{
 				render_triangle<4>(m_cliprect, render_delegate(&tc0780fpa_renderer::render_texture_scan, this), vert[0], vert[1], vert[2]);
+				if (m_vk)
+					m_vk->triangle(vk_vertices(vert, 3, true).data(), tc0780fpa_vk::MODE_TEXTURE, { extra.tex_base_x, extra.tex_base_y, extra.tex_wrap_x, extra.tex_wrap_y }, m_cliprect);
 			}
 			break;
 		}
@@ -332,9 +351,10 @@ void tc0780fpa_renderer::render(uint16_t *polygon_fifo, int length)
 
 			if (vert[0].p[0] < 0x8000 && vert[1].p[0] < 0x8000 && vert[2].p[0] < 0x8000 && vert[3].p[0] < 0x8000)
 			{
-				if (vert[0].p[1] == vert[1].p[1] &&
+				bool const solid = vert[0].p[1] == vert[1].p[1] &&
 					vert[1].p[1] == vert[2].p[1] &&
-					vert[2].p[1] == vert[3].p[1])
+					vert[2].p[1] == vert[3].p[1];
+				if (solid)
 				{
 					// optimization: all colours the same -> render solid
 					render_polygon<4, 2>(m_cliprect, render_delegate(&tc0780fpa_renderer::render_solid_scan, this), vert);
@@ -343,6 +363,8 @@ void tc0780fpa_renderer::render(uint16_t *polygon_fifo, int length)
 				{
 					render_polygon<4, 2>(m_cliprect, render_delegate(&tc0780fpa_renderer::render_shade_scan, this), vert);
 				}
+				if (m_vk)
+					m_vk->quad(vk_vertices(vert, 4, false).data(), solid ? tc0780fpa_vk::MODE_SOLID : tc0780fpa_vk::MODE_SHADE, {}, m_cliprect);
 			}
 			break;
 		}
@@ -399,6 +421,8 @@ void tc0780fpa_renderer::render(uint16_t *polygon_fifo, int length)
 			if (vert[0].p[0] < 0xc000 && vert[1].p[0] < 0xc000 && vert[2].p[0] < 0xc000 && vert[3].p[0] < 0xc000)
 			{
 				render_polygon<4, 4>(m_cliprect, render_delegate(&tc0780fpa_renderer::render_texture_scan, this), vert);
+				if (m_vk)
+					m_vk->quad(vk_vertices(vert, 4, true).data(), tc0780fpa_vk::MODE_TEXTURE, { extra.tex_base_x, extra.tex_base_y, extra.tex_wrap_x, extra.tex_wrap_y }, m_cliprect);
 			}
 			break;
 		}
@@ -428,7 +452,20 @@ void tc0780fpa_device::device_start()
 	m_texture = std::make_unique<uint8_t[]>(0x400000);
 	m_poly_fifo = std::make_unique<uint16_t[]>(POLY_FIFO_SIZE);
 
-	m_renderer = std::make_unique<tc0780fpa_renderer>(*this, screen(), m_texture.get(), std::clamp(machine().options().int_value(OPTION_HIRES3D), 1, 16));
+	// -hires3d: on the GPU unless -hires3d_renderer is software; the frame
+	// buffers of m_renderer then stay native for the native screen
+	int const scale = std::clamp(machine().options().int_value(OPTION_HIRES3D), 1, 16);
+	if ((scale > 1) && (strcmp(machine().options().value(OPTION_HIRES3D_RENDERER), "software") != 0))
+	{
+		std::string error;
+		m_vk = tc0780fpa_vk::create(scale, screen().width(), screen().height(), m_texture.get(), error);
+		if (m_vk)
+			osd_printf_verbose("tc0780fpa: hires3d drawn with Vulkan on %s\n", m_vk->device_name());
+		else
+			osd_printf_verbose("tc0780fpa: hires3d drawn in software (%s)\n", error);
+	}
+	m_renderer = std::make_unique<tc0780fpa_renderer>(*this, screen(), m_texture.get(), m_vk ? 1 : scale);
+	m_renderer->set_vulkan(m_vk.get());
 
 	save_pointer(NAME(m_texture), 0x400000);
 	save_pointer(NAME(m_poly_fifo), POLY_FIFO_SIZE);
@@ -446,6 +483,18 @@ void tc0780fpa_device::device_start()
 void tc0780fpa_device::device_reset()
 {
 	m_poly_fifo_ptr = 0;
+}
+
+void tc0780fpa_device::device_post_load()
+{
+	if (m_vk)
+		m_vk->resync();
+}
+
+void tc0780fpa_device::vulkan_failed()
+{
+	m_renderer->set_vulkan(nullptr);
+	m_vk.reset();
 }
 
 //-------------------------------------------------
@@ -482,6 +531,8 @@ void tc0780fpa_device::tex_w(uint16_t data)
 	int const y = ((m_tex_offset >> 5) & 0x1f) | ((m_tex_offset >> 6) & 0x20);
 
 	int const index = (((m_texbase_y << 5) + y) << 11) + ((m_texbase_x << 5) + x);
+	if (m_vk)
+		m_vk->texture_written(index);
 	m_texture[index] = data & 0xff;
 
 	m_tex_offset++;

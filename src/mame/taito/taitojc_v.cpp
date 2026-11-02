@@ -278,16 +278,26 @@ uint32_t taitojc_state::screen_update(screen_device &screen, bitmap_ind16 &bitma
 		constexpr uint16_t EMPTY = 0xffff;
 		int const scale = m_hires->scale();
 		rectangle const hclip = m_hires->scaled(cliprect);
-		if ((m_hires_ind.width() != screen.width() * scale) || (m_hires_ind.height() != screen.height() * scale))
-			m_hires_ind.allocate(screen.width() * scale, screen.height() * scale);
+		tc0780fpa_vk *const vk = m_tc0780fpa->vulkan();
 
 		bitmap.fill(0, cliprect);
 		draw_object_bank(bitmap, cliprect, 0, 0);
 		draw_object_bank(bitmap, cliprect, 1, 0);
 		draw_object_bank(bitmap, cliprect, 2, 0);
-		m_hires->upscale(bitmap, m_hires_ind, cliprect);
-
-		m_tc0780fpa->draw(m_hires_ind, hclip, scale);
+		if (vk)
+		{
+			// on the GPU: the layers under the 3D kept for the mix
+			if ((m_hires_bottom.width() != bitmap.width()) || (m_hires_bottom.height() != bitmap.height()))
+				m_hires_bottom.allocate(bitmap.width(), bitmap.height());
+			copybitmap(m_hires_bottom, bitmap, 0, 0, 0, 0, cliprect);
+		}
+		else
+		{
+			if ((m_hires_ind.width() != screen.width() * scale) || (m_hires_ind.height() != screen.height() * scale))
+				m_hires_ind.allocate(screen.width() * scale, screen.height() * scale);
+			m_hires->upscale(bitmap, m_hires_ind, cliprect);
+			m_tc0780fpa->draw(m_hires_ind, hclip, scale);
+		}
 
 		bitmap.fill(EMPTY, cliprect);
 		draw_object_bank(bitmap, cliprect, 0, 1);
@@ -295,10 +305,33 @@ uint32_t taitojc_state::screen_update(screen_device &screen, bitmap_ind16 &bitma
 		draw_object_bank(bitmap, cliprect, 2, 1);
 		if (BIT(m_objlist[0xfc4/4], 16))
 			m_tilemap->draw(screen, bitmap, cliprect, 0, 0);
-		m_hires->upscale(bitmap, m_hires_ind, cliprect, EMPTY);
 
-		m_hires->indexed_to_frame(m_hires_ind, hclip, *m_palette);
-		m_hires->frame_done(cliprect);
+		if (vk)
+		{
+			// mixed with the 3D on the GPU, the frame shown from the
+			// read-back memory
+			bitmap_rgb32 *frame = nullptr;
+			if (vk->mix(m_hires_bottom, bitmap, m_palette->palette()->entry_list_adjusted(), m_palette->entries(), cliprect, screen.visible_area(), frame))
+			{
+				if (frame)
+				{
+					m_hires->use_frame(*frame, [this] () { if (tc0780fpa_vk *const vk = m_tc0780fpa->vulkan()) vk->frame_ready(); });
+					m_hires->frame_done(cliprect);
+				}
+			}
+			else
+			{
+				// the GPU failed: software from the next update on
+				osd_printf_warning("taitojc: Vulkan failed, hires3d continues in software\n");
+				m_tc0780fpa->vulkan_failed();
+			}
+		}
+		else
+		{
+			m_hires->upscale(bitmap, m_hires_ind, cliprect, EMPTY);
+			m_hires->indexed_to_frame(m_hires_ind, hclip, *m_palette);
+			m_hires->frame_done(cliprect);
+		}
 	}
 
 	bitmap.fill(0, cliprect);
