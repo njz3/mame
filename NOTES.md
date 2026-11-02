@@ -178,14 +178,15 @@ l'écraser.
 
 ## Prochaines étapes
 
-1. Vulkan : deux images en vol (fence, commandes, relecture et sommets doublés),
-   puis passage direct de l'image à bgfx.
-2. Zeus 2 (crusnexo) : copie HD du tampon couleur et profondeur, avec
-   l'adressage `frame_addr_from_xy`, les remplissages et `frame_write`.
-3. Voodoo 1/2 : sommets 12.4, recalcul des gradients ; relectures LFB par le
-   CPU sur le tampon natif.
-4. System 21, Taito JC, Gaelco 3D, HNG64.
-5. Rendu Vulkan de System 22 et K001005 (shaders propres à chaque puce).
+Toutes les puces de la liste ont un rendu logiciel HD et un rendu Vulkan
+(2026-11-02). Reste :
+
+1. Passer l'image du GPU directement à bgfx au lieu de la relire : en ×4, la
+   relecture coûte environ 3 ms par image (13 à 15 Mo).
+2. HNG64 : comprendre les 5 ms d'attente du GPU par image sur xrally.
+3. Refaire les mesures au calme (une partie a été faite pendant que d'autres
+   MAME tournaient sur le portable).
+4. Namco System 23, quand son émulation de base marchera.
 - 2026-10-31 : **Namco System 21** en logiciel HD.
   - `namcos21_3d` : tampons × N, sommets (entiers) mis à l'échelle, ce qui
     affine les arêtes. Une copie native de la profondeur visible reste
