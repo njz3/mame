@@ -14,7 +14,9 @@
 #include "cpu/adsp2100/adsp2100.h"
 #include "cpu/tms34010/tms34010.h"
 
+#include "emuopts.h"
 #include "input.h" // for DMA debug keys
+#include "vk3d.h"
 
 #define LOG_DMA             (1U << 1)
 
@@ -65,8 +67,19 @@ void midvunit_base_state::video_start()
 
 	m_hires = std::make_unique<hires3d_output>(*m_screen);
 	m_hires_scale = m_hires->scale();
-	if (m_hires_scale > 1)
-		m_hires_vram.resize(size_t(2) * 512 * 512 * m_hires_scale * m_hires_scale);
+
+	// -hires3d: on the GPU unless -hires3d_renderer is software
+	if ((m_hires_scale > 1) && (strcmp(machine().options().value(OPTION_HIRES3D_RENDERER), "software") != 0))
+	{
+		std::string error;
+		m_vk = midvunit_vk::create(m_hires_scale, &m_videoram[0], reinterpret_cast<uint8_t const *>(m_textureram.target()), error);
+		if (m_vk)
+			osd_printf_verbose("midvunit: hires3d drawn with Vulkan on %s\n", m_vk->device_name());
+		else
+			osd_printf_verbose("midvunit: hires3d drawn in software (%s)\n", error);
+	}
+	if (hires_software())
+		hires_software_start();
 
 	save_item(NAME(m_video_regs));
 	save_item(NAME(m_dma_data));
@@ -80,6 +93,25 @@ void midvunit_base_state::video_start()
 void midvunit_base_state::device_post_load()
 {
 	m_video_changed = true;
+	if (m_vk)
+		m_vk->resync();
+	else if (hires_software())
+		hires_software_start();
+}
+
+
+void midvunit_base_state::hires_software_start()
+{
+	// the high-resolution copy made from the native video RAM
+	int const scale = m_hires_scale;
+	m_hires_vram.resize(size_t(2) * 512 * 512 * scale * scale);
+	for (offs_t offset = 0; offset < 0x80000; offset++)
+	{
+		int const stride = 512 * scale;
+		uint16_t *dest = hires_page(BIT(offset, 18)) + size_t(((offset >> 9) & 0x1ff) * scale) * stride + (offset & 0x1ff) * scale;
+		for (int row = 0; row < scale; row++, dest += stride)
+			std::fill_n(dest, scale, m_videoram[offset]);
+	}
 }
 
 /*************************************
@@ -307,6 +339,7 @@ void midvunit_renderer::process_dma_queue()
 	uint16_t pixdata = m_state.m_dma_data[1];
 
 	render_delegate callback;
+	int mode = midvunit_vk::MODE_FLAT;
 	bool const textured = ((m_state.m_dma_data[0] & 0x300) == 0x100);
 
 	// handle flat-shaded quads here
@@ -332,16 +365,19 @@ void midvunit_renderer::process_dma_queue()
 		if ((m_state.m_dma_data[0] & 0xc00) == 0x000)
 		{
 			callback = render_delegate(&midvunit_renderer::render_tex, this);
+			mode = midvunit_vk::MODE_TEX;
 		}
 		// handle non-masked, transparent quads
 		else if ((m_state.m_dma_data[0] & 0xc00) == 0x800)
 		{
 			callback = render_delegate(&midvunit_renderer::render_textrans, this);
+			mode = midvunit_vk::MODE_TEXTRANS;
 		}
 		// handle masked, transparent quads
 		else if ((m_state.m_dma_data[0] & 0xc00) == 0xc00)
 		{
 			callback = render_delegate(&midvunit_renderer::render_textransmask, this);
+			mode = midvunit_vk::MODE_TEXTRANSMASK;
 			pixdata += (m_state.m_dma_data[0] & 0x00ff);
 		}
 		// handle masked, non-transparent quads (invalid?)
@@ -378,6 +414,16 @@ void midvunit_renderer::process_dma_queue()
 		}
 		rectangle const &vis = m_state.m_screen->visible_area();
 		rectangle const clip(vis.left() * scale, (vis.right() + 1) * scale - 1, vis.top() * scale, (vis.bottom() + 1) * scale - 1);
+
+		// on the GPU: the same quad, with the parameters of the vertices
+		if (m_state.m_vk)
+		{
+			midvunit_vk::vertex hv[4];
+			for (int i = 0; i < 4; i++)
+				hv[i] = { vert[i].x, vert[i].y, textured ? vert[i].p[0] : 0.0f, textured ? vert[i].p[1] : 0.0f };
+			m_state.m_vk->quad((m_state.m_page_control & 4) ? 1 : 0, hv, mode, objectdata.pixdata, objectdata.dither != 0, m_state.m_dma_data[14] * 256, clip);
+			return;
+		}
 
 		midvunit_object_data &hiresdata = object_data().next();
 		hiresdata = objectdata;
@@ -440,7 +486,8 @@ uint32_t midvunit_base_state::dma_trigger_r(offs_t offset)
 void midvunit_base_state::page_control_w(uint32_t data)
 {
 	// watch for the display page to change
-	if ((m_page_control ^ data) & 1)
+	bool const flipped = ((m_page_control ^ data) & 1) != 0;
+	if (flipped)
 	{
 		m_video_changed = true;
 		if (machine().input().code_pressed(KEYCODE_L))
@@ -448,6 +495,10 @@ void midvunit_base_state::page_control_w(uint32_t data)
 		m_screen->update_partial(m_screen->vpos() - 1);
 	}
 	m_page_control = data;
+
+	// on the GPU, the page now visible is converted for the display at once
+	if (flipped && m_vk && m_hires->active())
+		m_vk->prefetch(m_page_control & 1, m_screen->visible_area(), m_palette->palette()->entry_list_adjusted());
 }
 
 
@@ -515,7 +566,9 @@ void midvunit_base_state::videoram_w(offs_t offset, uint32_t data, uint32_t mem_
 	COMBINE_DATA(&m_videoram[offset]);
 
 	// magnify the pixel into the high-resolution copy
-	if (m_hires_scale > 1)
+	if (m_vk)
+		m_vk->write(BIT(offset, 18), offset & 0x1ff, (offset >> 9) & 0x1ff, m_videoram[offset]);
+	else if (m_hires_scale > 1)
 	{
 		int const scale = m_hires_scale;
 		int const stride = 512 * scale;
@@ -562,6 +615,8 @@ void midvunit_base_state::textureram_w(offs_t offset, uint32_t data)
 {
 	uint8_t *const base = (uint8_t *)m_textureram.target();
 	m_poly->wait("Texture RAM write");
+	if (m_vk)
+		m_vk->texture_written(offset * 2);
 	base[offset * 2] = data;
 	base[offset * 2 + 1] = data >> 8;
 }
@@ -593,7 +648,28 @@ uint32_t midvunit_base_state::screen_update(screen_device &screen, bitmap_ind16 
 	// game fades by changing the palette alone (the native indexed bitmap
 	// gets the palette applied when it is displayed)
 	bool const hires_active = (m_hires_scale > 1) && m_hires->active();
-	if (hires_active)
+	if (hires_active && m_vk)
+	{
+		// on the GPU: the rows converted there, the frame shown from the
+		// read-back memory
+		bitmap_rgb32 *frame = nullptr;
+		if (m_vk->update((m_page_control & 1) ? 1 : 0, cliprect, screen.visible_area(), m_palette->palette()->entry_list_adjusted(), frame))
+		{
+			if (frame)
+			{
+				m_hires->use_frame(*frame);
+				m_hires->frame_done(cliprect);
+			}
+		}
+		else
+		{
+			// the GPU failed: continue in software from the native video RAM
+			osd_printf_warning("midvunit: Vulkan failed, hires3d continues in software\n");
+			m_vk.reset();
+			hires_software_start();
+		}
+	}
+	if (hires_active && !m_vk)
 	{
 		int const scale = m_hires_scale;
 		int const stride = 512 * scale;

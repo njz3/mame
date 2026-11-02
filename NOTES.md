@@ -28,7 +28,7 @@ Matériel visé, dans l'ordre :
 | 2 | Namco System 22 / Super 22 | ridgerac, ridgera2, raverace, acedrive, victlap, cybrcycc, dirtdash, alpinerd | OK (ridgerac, dirtdash ×2) | OK (5 jeux ×2) ; plus rapide que le natif |
 | 3 | Konami K001005 | gticlub, midnrun, windheat, jetwave | OK (gticlub, midnrun ×2) | OK (midnrun, gticlub) ; proche du natif |
 | 4 | 3dfx Voodoo 1/2 | sfrush, sfrushrk, calspeed, hyprdriv, vaportrx, roadburn, thrilld, racingj | OK (sfrush ×2 ×4, racingj ×2, roadburn ×2) ; coûteux en CPU | OK (même image que le logiciel) ; au niveau du natif en ×2 sur roadburn |
-| 5 | Midway V-Unit | crusnusa, crusnwld, offroadc | 2D OK (crusnusa ×2) ; 3D à vérifier en démo (sommets entiers : bords natifs, textures HD) | à faire |
+| 5 | Midway V-Unit | crusnusa, crusnwld, offroadc | OK (3 jeux ×2 en démo 3D ; sommets entiers : bords natifs, textures HD) | OK (même image que le logiciel) ; ×4 60 s contre 81 s en logiciel |
 | 6 | Midway Zeus 2 | crusnexo | OK (crusnexo ×2, mode démo) | à faire |
 | 7 | Namco System 21 | winrun, driveyes | OK (winrun, driveyes ×2) | à faire |
 | 8 | Taito JC (TC0780FPA) | sidebs, sidebs2, dangcurv | OK (sidebs, sidebs2 ×2) | à faire |
@@ -380,3 +380,37 @@ l'écraser.
   - Temps, midnrun 60 s émulées en ×2 : 14,3 à 17,1 s en Vulkan, 12,7 s en
     natif, 27,5 s en logiciel. Il reste environ 1 ms d'attente par image
     composée (composition et relecture), sur environ 1500 images composées.
+- 2026-11-02 : **Midway V-Unit sur Vulkan** (`midvunit_vk`).
+  - La copie HD des deux pages de mémoire vidéo est sur le GPU (images R16
+    de 512·N de côté). Les quads de la file DMA y sont dessinés par un port
+    des rastériseurs par ligne (aplat, texture, texture transparente,
+    texture masquée). Comme `poly_manager::render_polygon<4>` interpole par
+    ligne le long des arêtes gauche et droite (quads non plans), le shader
+    de fragments réévalue ces arêtes à sa ligne. Il reprend aussi les
+    arrondis, le clip appliqué avant le calcul des paramètres, les
+    coordonnées de texture entières et le tramage.
+  - Les écritures CPU dans la mémoire vidéo sont groupées en segments de
+    pixels voisins, dessinés en blocs N×N. Une écriture dans la mémoire de
+    textures n'envoie le lot en cours que si elle touche la fenêtre de
+    textures qu'il utilise.
+  - Au changement de page, la page visible est convertie tout de suite par
+    la palette dans une image d'affichage, relue sans attendre (3 tampons).
+    À la mise à jour de l'écran, cette image est montrée sans copie si la
+    page et la palette n'ont pas changé ; sinon les lignes sont converties
+    dans l'ordre du dessin, ce qui garde les fondus par la palette.
+  - Après un chargement d'état, les deux pages sont refaites depuis la
+    mémoire native ; si Vulkan échoue, le rendu repasse en logiciel HD.
+  - NVRAM calibrées pour crusnusa et crusnwld (Enter, c'est-à-dire Test,
+    aux écrans « CALIBRATE CONTROLS ») : les deux jeux atteignent la démo
+    3D. ROM copiée : offroadc.
+  - Contrôle en ×2, 120 s de démo : crusnwld et offroadc identiques au
+    logiciel sur 12 captures ; crusnusa identique sur 7 captures, à 4
+    pixels près sur une ligne (arrondi flottant).
+  - Temps pour 120 s émulées (portable, mesures assez dispersées) :
+    crusnusa ×2 43,5 à 58,9 s en Vulkan, 53,2 s en logiciel, 38,8 à 52 s en
+    natif ; crusnusa ×4 60,2 s en Vulkan, 81,1 s en logiciel, natif 50,3 et
+    52,2 s mesurés juste avant et après ; crusnwld ×2 59,2 s en Vulkan,
+    79,4 s en logiciel, 58,7 s en natif ; offroadc ×2 46,3 s en Vulkan,
+    57,8 s en logiciel. Le rendu coûte environ 3 s de CPU sur 120 s, dont
+    environ 1 s d'attente du GPU, surtout pour les images converties à la
+    mise à jour au lieu de l'être au changement de page.

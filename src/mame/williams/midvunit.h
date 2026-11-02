@@ -22,6 +22,7 @@
 
 #include "emupal.h"
 #include "hires3d.h"
+#include "midvunit_vk.h"
 #include "screen.h"
 
 #include <vector>
@@ -67,11 +68,15 @@ public:
 
 	// -hires3d: a copy of both video RAM pages at m_hires_scale times the
 	// native resolution; the quads are drawn into both, CPU writes are
-	// magnified into it, and the display reads it
+	// magnified into it, and the display reads it; the copy is on the GPU
+	// with m_vk, else in m_hires_vram
 	std::unique_ptr<hires3d_output> m_hires;
 	int m_hires_scale = 1;
+	std::unique_ptr<midvunit_vk> m_vk;
 	std::vector<uint16_t> m_hires_vram;
 	uint16_t *hires_page(int page) { return &m_hires_vram[size_t(page) * 512 * 512 * m_hires_scale * m_hires_scale]; }
+	bool hires_software() const { return (m_hires_scale > 1) && !m_vk; }
+	void hires_software_start();
 
 protected:
 	static inline constexpr XTAL MIDVUNIT_VIDEO_CLOCK = 33.333333_MHz_XTAL;
