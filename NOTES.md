@@ -32,7 +32,7 @@ Matériel visé, dans l'ordre :
 | 6 | Midway Zeus 2 | crusnexo | OK (crusnexo ×2, ×4, mode démo) | OK (même image que le logiciel, aux arrondis des mélanges près) ; ×4 107 s contre 334 s en logiciel |
 | 7 | Namco System 21 | winrun, driveyes | OK (winrun, driveyes ×2) | OK (même image que le logiciel) ; ×2 près du natif |
 | 8 | Taito JC (TC0780FPA) | sidebs, sidebs2, dangcurv | OK (sidebs, sidebs2 ×2) | OK (sidebs ×2, même image que le logiciel à 0,07 % près) |
-| 9 | Gaelco 3D | speedup, surfplnt, radikalb | OK (speedup, radikalb ×2) | à faire |
+| 9 | Gaelco 3D | speedup, surfplnt, radikalb | OK (speedup, radikalb ×2) | OK (même image que le logiciel) ; ×4 38 s contre 108 s en logiciel |
 | 10 | SNK HNG64 | roadedge, xrally | OK (roadedge, xrally ×2) | à faire |
 | — | Namco System 23 | motoxgo, raceon, finfurl | quand l'émulation de base marchera | |
 
@@ -496,3 +496,22 @@ l'écraser.
     la relecture de l'image (13 Mo) coûte 3,3 ms d'attente par image : il
     faudra passer l'image du GPU à l'affichage sans la relire. (Mesures ×4
     faites pendant que deux autres MAME tournaient sur le portable.)
+- 2026-11-02 : **Gaelco 3D sur Vulkan** (`gaelco3d_vk`).
+  - Le tampon image (jamais effacé par le matériel) et la profondeur 16 bits
+    sont sur le GPU, à l'envers comme l'écran les montre ; les tampons du
+    CPU restent natifs.
+  - Chaque triangle de l'éventail est préparé comme `render_triangle` ; le
+    shader reprend l'étendue de la ligne puis les trois rastériseurs : plans
+    de u/z, v/z et 1/z, masque de texture, filtre bilinéaire COLOR3D, mélange
+    à 50 % (double source, la moitié de la destination arrondie par le GPU).
+  - Le test de profondeur compare la valeur signée et écrit sa valeur
+    absolue : le signe dépend de z0, fixe par polygone, d'où une variante
+    de pipeline (comparaison ou non) par polygone.
+  - La texture et son masque (en bits) sont envoyés une fois ; la palette
+    est copiée dans le lot quand elle change ; la relecture est attendue
+    quand l'affichage prend l'image.
+  - Contrôle sur 60 s : speedup identique au logiciel sur 7 captures,
+    radikalb à 0,07 % des pixels près.
+  - Temps pour 60 s émulées : speedup natif 24 à 27 s, ×2 29 s en Vulkan
+    contre 33 s en logiciel, ×4 38 s contre 90 à 108 s ; radikalb natif 33 s,
+    ×2 36 s contre 41 à 53 s.

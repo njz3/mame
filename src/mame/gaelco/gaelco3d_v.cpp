@@ -15,6 +15,7 @@
 
 #include "emuopts.h"
 #include "video.h"
+#include "vk3d.h"
 
 #include <iterator>
 
@@ -33,17 +34,12 @@ gaelco3d_state::gaelco3d_renderer::gaelco3d_renderer(gaelco3d_state &state) :
 	poly_manager<float, gaelco3d_object_data, 1>(state.machine()),
 	m_state(state),
 	m_scale(std::clamp(state.machine().options().int_value(OPTION_HIRES3D), 1, 16)),
-	m_screenbits(state.m_screen->width() * m_scale, state.m_screen->height() * m_scale),
-	m_zbuffer(state.m_screen->width() * m_scale, state.m_screen->height() * m_scale),
 	m_polygons(0),
 	m_texture_size(state.memregion("texture")->bytes()),
 	m_texmask_size(state.memregion("texmask")->bytes() * 8),
 	m_texture(std::make_unique<uint8_t[]>(m_texture_size)),
 	m_texmask(std::make_unique<uint8_t[]>(m_texmask_size))
 {
-	state.machine().save().save_item(NAME(m_screenbits));
-	state.machine().save().save_item(NAME(m_zbuffer));
-
 	/* first expand the pixel data */
 	uint8_t *src = state.memregion("texture")->base();
 	uint8_t *dst = m_texture.get();
@@ -62,6 +58,28 @@ gaelco3d_state::gaelco3d_renderer::gaelco3d_renderer(gaelco3d_state &state) :
 	for (int y = 0; y < m_texmask_size/4096; y++)
 		for (int x = 0; x < 4096; x++)
 			dst[y * 4096 + x] = (src[(x / 1024) * (m_texmask_size / 8 / 4) + (y * 1024 + x % 1024) / 8] >> (x % 8)) & 1;
+
+	// -hires3d: on the GPU unless -hires3d_renderer is software; the buffers
+	// here then stay native for the native screen
+	int const width = state.m_screen->width();
+	int const height = state.m_screen->height();
+	if ((m_scale > 1) && (strcmp(state.machine().options().value(OPTION_HIRES3D_RENDERER), "software") != 0))
+	{
+		std::string error;
+		m_vk = gaelco3d_vk::create(m_scale, width, height, m_texture.get(), m_texture_size, m_texmask.get(), m_texmask_size, state.m_palette.get(), error);
+		if (m_vk)
+		{
+			osd_printf_verbose("gaelco3d: hires3d drawn with Vulkan on %s\n", m_vk->device_name());
+			m_vk_scale = m_scale;
+			m_scale = 1;
+		}
+		else
+			osd_printf_verbose("gaelco3d: hires3d drawn in software (%s)\n", error);
+	}
+	m_screenbits.allocate(width * m_scale, height * m_scale);
+	m_zbuffer.allocate(width * m_scale, height * m_scale);
+	state.machine().save().save_item(NAME(m_screenbits));
+	state.machine().save().save_item(NAME(m_zbuffer));
 }
 
 
@@ -73,10 +91,10 @@ gaelco3d_state::gaelco3d_renderer::gaelco3d_renderer(gaelco3d_state &state) :
 
 void gaelco3d_state::video_start()
 {
+	m_palette = std::make_unique<rgb_t[]>(32768);
 	m_poly = std::make_unique<gaelco3d_renderer>(*this);
 	m_hires = std::make_unique<hires3d_output>(*m_screen);
 
-	m_palette = std::make_unique<rgb_t[]>(32768);
 	m_polydata_buffer = std::make_unique<uint32_t[]>(MAX_POLYDATA);
 
 	/* save states */
@@ -136,6 +154,8 @@ void gaelco3d_state::gaelco3d_renderer::render_poly(screen_device &screen, uint3
 	gaelco3d_object_data &object = object_data().next();
 	int const color = (polydata[10] & 0x7f) << 8;
 	vertex_t vert[MAX_VERTICES];
+	gaelco3d_vk::vertex hvert[MAX_VERTICES];
+	float const hscale = m_vk_scale;
 
 	if (LOG_POLYGONS)
 	{
@@ -184,6 +204,8 @@ void gaelco3d_state::gaelco3d_renderer::render_poly(screen_device &screen, uint3
 		data = polydata[13 + vertnum * 2];
 		vert[vertnum].x = (midx + (float)((int32_t)data >> 16) + 0.5f) * scale;
 		vert[vertnum].y = (midy + (float)((int32_t)(data << 18) >> 18) + 0.5f) * scale;
+		hvert[vertnum].x = (midx + (float)((int32_t)data >> 16) + 0.5f) * hscale;
+		hvert[vertnum].y = (midy + (float)((int32_t)(data << 18) >> 18) + 0.5f) * hscale;
 	}
 
 	/* if we have a valid number of verts, render them */
@@ -214,6 +236,27 @@ void gaelco3d_state::gaelco3d_renderer::render_poly(screen_device &screen, uint3
 		/* color 0x7f seems to be hard-coded as a 50% alpha blend */
 		else
 			render_triangle_fan<0>(visarea, render_delegate(&gaelco3d_renderer::render_alphablend, this), vertnum, &vert[0]);
+
+		// and again on the GPU at the high resolution
+		if (m_vk)
+		{
+			float const hmaxx = float(screen.width()) * hscale;
+			float const hmaxy = float(screen.height()) * hscale;
+			for (int i = 0; i < vertnum; i++)
+			{
+				if (hvert[i].x > hmaxx - hscale && hvert[i].x < hmaxx)
+					hvert[i].x = hmaxx;
+				if (hvert[i].y > hmaxy - hscale && hvert[i].y < hmaxy)
+					hvert[i].y = hmaxy;
+			}
+			const rectangle hvisarea(vis.left() * m_vk_scale, (vis.right() + 1) * m_vk_scale - 1, vis.top() * m_vk_scale, (vis.bottom() + 1) * m_vk_scale - 1);
+			gaelco3d_vk::plane const p = { object.tex, uint32_t(color), z0,
+					ooz_base, ooz_dx / hscale, ooz_dy / hscale,
+					uoz_base, uoz_dx / hscale, uoz_dy / hscale,
+					voz_base, voz_dx / hscale, voz_dy / hscale };
+			int const mode = (color != 0x7f00 && z0 < 0 && ooz_dx == 0 && ooz_dy == 0) ? gaelco3d_vk::MODE_NOZ : (color != 0x7f00) ? gaelco3d_vk::MODE_NORMAL : gaelco3d_vk::MODE_ALPHA;
+			m_vk->polygon(mode, p, vertnum, hvert, hvisarea);
+		}
 
 		m_polygons += vertnum - 2;
 	}
@@ -440,6 +483,8 @@ void gaelco3d_state::render_w(uint32_t data)
 void gaelco3d_state::paletteram_w(offs_t offset, uint16_t data, uint16_t mem_mask)
 {
 	m_poly->wait("Palette change");
+	if (gaelco3d_vk *const vk = m_poly->vulkan())
+		vk->palette_changed();
 	COMBINE_DATA(&m_paletteram16[offset]);
 	m_palette[offset] = ((m_paletteram16[offset] & 0x7fe0) << 6) | (m_paletteram16[offset] & 0x1f);
 }
@@ -448,6 +493,8 @@ void gaelco3d_state::paletteram_w(offs_t offset, uint16_t data, uint16_t mem_mas
 void gaelco3d_state::paletteram_020_w(offs_t offset, uint32_t data, uint32_t mem_mask)
 {
 	m_poly->wait("Palette change");
+	if (gaelco3d_vk *const vk = m_poly->vulkan())
+		vk->palette_changed();
 	COMBINE_DATA(&m_paletteram32[offset]);
 	m_palette[offset * 2 + 0] = ((m_paletteram32[offset] & 0x7fe00000) >> 10) | ((m_paletteram32[offset] & 0x1f0000) >> 16);
 	m_palette[offset * 2 + 1] = ((m_paletteram32[offset] & 0x7fe0) << 6) | (m_paletteram32[offset] & 0x1f);
@@ -469,9 +516,34 @@ uint32_t gaelco3d_state::screen_update(screen_device &screen, bitmap_rgb32 &bitm
 	m_poly->wait("Screen update");
 	bitmap_rgb32 &screenbits = m_poly->screenbits();
 	int const scale = m_poly->scale();
+	if (m_poly->vulkan() && m_hires->active())
+	{
+		// on the GPU: the rows shown read back, the frame shown from the
+		// read-back memory
+		bitmap_rgb32 *frame = nullptr;
+		if (m_poly->vulkan()->update(cliprect, screen.visible_area(), frame))
+		{
+			if (frame)
+			{
+				m_hires->use_frame(*frame, [this] () { if (gaelco3d_vk *const vk = m_poly->vulkan()) vk->frame_ready(); });
+				m_hires->frame_done(cliprect);
+			}
+		}
+		else
+		{
+			// the GPU failed: continue with the native frame magnified
+			osd_printf_warning("gaelco3d: Vulkan failed, hires3d continues in software\n");
+			m_poly->vulkan_failed();
+		}
+	}
 	if (scale == 1)
 	{
 		copybitmap(bitmap, screenbits, 0, 1, 0, 0, cliprect);
+		if (m_hires->active() && !m_poly->vulkan())
+		{
+			m_hires->upscale(bitmap, m_hires->frame_bitmap(), cliprect, false);
+			m_hires->frame_done(cliprect);
+		}
 	}
 	else
 	{

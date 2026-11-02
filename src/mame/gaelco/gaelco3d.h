@@ -17,6 +17,7 @@
 #include "machine/74259.h"
 #include "machine/eepromser.h"
 #include "gaelco3d_m.h"
+#include "gaelco3d_vk.h"
 #include "machine/gen_latch.h"
 #include "machine/timer.h"
 #include "sound/dmadac.h"
@@ -86,6 +87,12 @@ private:
 
 		bitmap_rgb32 &screenbits() { return m_screenbits; }
 		int scale() const { return m_scale; }
+
+		// -hires3d on the GPU: the high-resolution frame buffer, nullptr in
+		// software; after a failure, the high-resolution screen magnifies
+		// the native frame buffer
+		gaelco3d_vk *vulkan() { return m_vk.get(); }
+		void vulkan_failed() { m_vk.reset(); }
 		uint32_t polygons() { uint32_t result = m_polygons; m_polygons = 0; return result; }
 
 		void render_poly(screen_device &screen, uint32_t *polydata);
@@ -94,8 +101,11 @@ private:
 		gaelco3d_state &m_state;
 
 	private:
-		// the frame and depth buffers are m_scale times the screen (-hires3d)
+		// the frame and depth buffers are m_scale times the screen (-hires3d);
+		// with m_vk they stay native and the GPU draws at m_vk_scale times
 		int m_scale;
+		int m_vk_scale = 1;
+		std::unique_ptr<gaelco3d_vk> m_vk;
 		bitmap_rgb32 m_screenbits;
 		bitmap_ind16 m_zbuffer;
 		uint32_t m_polygons = 0;
