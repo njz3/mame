@@ -8,8 +8,10 @@
 #include "emu.h"
 #include "zeus2.h"
 
+#include "emuopts.h"
 #include "input.h" // for video debug keys
 #include "screen.h"
+#include "vk3d.h"
 
 #include <algorithm>
 
@@ -91,7 +93,18 @@ void zeus2_device::device_start()
 
 	m_hires = std::make_unique<hires3d_output>(screen());
 	m_hires_scale = m_hires->scale();
-	if (m_hires_scale > 1)
+
+	// -hires3d: on the GPU unless -hires3d_renderer is software
+	if ((m_hires_scale > 1) && (strcmp(machine().options().value(OPTION_HIRES3D_RENDERER), "software") != 0))
+	{
+		std::string error;
+		m_vk = zeus2_vk::create(m_hires_scale, m_frameColor.get(), m_frameDepth.get(), m_waveram.get(), m_pal_table, error);
+		if (m_vk)
+			osd_printf_verbose("zeus2: hires3d drawn with Vulkan on %s\n", m_vk->device_name());
+		else
+			osd_printf_verbose("zeus2: hires3d drawn in software (%s)\n", error);
+	}
+	if ((m_hires_scale > 1) && !m_vk)
 	{
 		size_t const pixels = size_t(WAVERAM1_WIDTH) * WAVERAM1_HEIGHT * 2 * m_hires_scale * m_hires_scale;
 		m_hiresColor = std::make_unique<uint32_t[]>(pixels);
@@ -145,6 +158,28 @@ void zeus2_device::device_start()
 	save_item(NAME(m_fill_color));
 	save_item(NAME(m_fill_depth));
 	save_item(NAME(m_yScale));
+}
+
+void zeus2_device::hires_software_start()
+{
+	// the high-resolution copy made from the native frame buffer (state load,
+	// or Vulkan failing)
+	size_t const pixels = size_t(WAVERAM1_WIDTH) * WAVERAM1_HEIGHT * 2 * m_hires_scale * m_hires_scale;
+	m_hiresColor = std::make_unique<uint32_t[]>(pixels);
+	m_hiresDepth = std::make_unique<int32_t[]>(pixels);
+	for (uint32_t addr = 0; addr < WAVERAM1_WIDTH * WAVERAM1_HEIGHT * 2; addr++)
+		hires_write(addr, m_frameColor[addr], true, m_frameDepth[addr]);
+}
+
+void zeus2_device::device_post_load()
+{
+	if (m_vk)
+	{
+		m_vk->set_layout(frame_row_shift());
+		m_vk->resync();
+	}
+	else if (m_hiresColor)
+		hires_software_start();
 }
 
 void zeus2_device::device_reset()
@@ -251,7 +286,29 @@ uint32_t zeus2_device::screen_update(screen_device &screen, bitmap_rgb32 &bitmap
 		}
 
 		// high-resolution frame from the magnified copy
-		if ((m_hires_scale > 1) && m_hires->active())
+		bool const hires_active = (m_hires_scale > 1) && m_hires->active();
+		if (hires_active && m_vk)
+		{
+			// on the GPU: the rows shown read back, the frame shown from the
+			// read-back memory
+			bitmap_rgb32 *frame = nullptr;
+			if (m_vk->update(frame_addr_from_xy(0, 0, false), cliprect, screen.visible_area(), frame))
+			{
+				if (frame)
+				{
+					m_hires->use_frame(*frame);
+					m_hires->frame_done(cliprect);
+				}
+			}
+			else
+			{
+				// the GPU failed: continue in software from the native frame buffer
+				osd_printf_warning("zeus2: Vulkan failed, hires3d continues in software\n");
+				m_vk.reset();
+				hires_software_start();
+			}
+		}
+		if (hires_active && !m_vk)
 		{
 			int const scale = m_hires_scale;
 			bitmap_rgb32 &hires = m_hires->frame_bitmap();
@@ -489,6 +546,8 @@ void zeus2_device::zeus2_register_update(offs_t offset, uint32_t oldval, int log
 			screen().configure(htotal, vtotal, visarea, attotime::from_ticks(htotal * vtotal, dotclk));
 			zeus_cliprect = visarea;
 			zeus_cliprect.set_origin(0, zeus_cliprect.top());
+			if (m_vk)
+				m_vk->set_layout(frame_row_shift());
 			// re-time vertical sync against the mode just programmed
 			rearm_vsync();
 		}
@@ -577,6 +636,10 @@ void zeus2_device::zeus2_register_update(offs_t offset, uint32_t oldval, int log
 		screen().update_partial(screen().vpos());
 		log_fifo = machine().input().code_pressed(KEYCODE_L) | ALWAYS_LOG_FIFO;
 		m_zeusbase[0x38] = temp;
+
+		// on the GPU, the rows now shown are read back at once
+		if (m_vk && (m_zeusbase[0x10] & 0x20) && m_hires->active())
+			m_vk->prefetch(frame_addr_from_xy(0, 0, false), screen().visible_area());
 	}
 	break;
 	case 0x39:
@@ -798,6 +861,8 @@ void zeus2_device::zeus2_register_update(offs_t offset, uint32_t oldval, int log
 			{
 				// Waveram Write
 				uint32_t *dest = waveram0_ptr_from_expanded_addr(m_zeusbase[0x41]);
+				if (m_vk)
+					m_vk->waveram_written((dest - m_waveram.get()) * 4);
 				WAVERAM_WRITE32(dest, 0, m_zeusbase[0x48]);
 				WAVERAM_WRITE32(dest, 1, m_zeusbase[0x49]);
 				if (logit)
@@ -891,8 +956,11 @@ void zeus2_device::zeus2_register_update(offs_t offset, uint32_t oldval, int log
 					// Crusn wraps the frame buffer during fill so need to mask address
 					m_frameColor[(addr + count) & (WAVERAM1_WIDTH * WAVERAM1_HEIGHT * 2 - 1)] = m_fill_color;
 					m_frameDepth[(addr + count) & (WAVERAM1_WIDTH * WAVERAM1_HEIGHT * 2 - 1)] = m_fill_depth;
-					hires_write(addr + count, m_fill_color, true, m_fill_depth);
+					if (m_hiresColor)
+						hires_write(addr + count, m_fill_color, true, m_fill_depth);
 				}
+				if (m_vk)
+					m_vk->fill(addr, numPixels, m_fill_color, m_fill_depth);
 			}
 			break;
 			case 0x9:
@@ -1022,6 +1090,8 @@ void zeus2_device::load_pal_table(void *wavePtr, uint32_t ctrl, int type, int lo
 	m_palSize = (count + 1) * 4;
 	uint32_t addr = (ctrl >> 24) << 1;
 	uint32_t *tablePtr = &m_pal_table[addr];
+	if (m_vk)
+		m_vk->palette_changed();
 	if (type == 0) {
 		// Convert from RGB555
 		uint16_t *src = (uint16_t*)wavePtr;
@@ -1894,9 +1964,31 @@ void zeus2_renderer::zeus2_render_poly(vertex_t *vert, int numverts, uint32_t te
 
 	render_triangle_fan<4>(m_state->zeus_cliprect, render_delegate(&zeus2_renderer::render_poly_8bit, this), numverts, clipvert);
 
-	// and again into the high-resolution copy
+	// and again into the high-resolution copy, on the GPU or in software
 	int const scale = m_state->m_hires_scale;
-	if (scale > 1)
+	if (m_state->m_vk)
+	{
+		zeus2_vk::state st;
+		st.mode = extra.solid_enable ? zeus2_vk::MODE_SOLID : extra.texture_rgb555 ? zeus2_vk::MODE_RGB555 : extra.texture_alpha ? zeus2_vk::MODE_ALPHA : zeus2_vk::MODE_TEXTURE;
+		st.texel_format = ((texmode & 3) == 0) ? zeus2_vk::TEXEL_4BIT_2X2 : ((texmode & 3) == 1) ? zeus2_vk::TEXEL_8BIT_4X2 :
+				((texmode & 3) == 2) ? zeus2_vk::TEXEL_8BIT_2X2_ALPHA : zeus2_vk::TEXEL_8BIT_2X2;
+		st.texbase = m_state->zeus_texbase;
+		st.texwidth = extra.texwidth;
+		st.solidcolor = ((extra.solidcolor & 0x7c00) << 9) | ((extra.solidcolor & 0x3e0) << 6) | ((extra.solidcolor & 0x1f) << 3);
+		st.transcolor = extra.transcolor;
+		st.src_alpha = extra.srcAlpha;
+		st.dst_alpha = extra.dstAlpha;
+		st.zbuf_min = extra.zbuf_min;
+		st.blend = extra.blend_enable;
+		st.depth_test = extra.depth_test_enable;
+		st.depth_write = extra.depth_write_enable;
+		st.depth_clear = extra.depth_clear_enable;
+		zeus2_vk::vertex hv[std::size(clipvert)];
+		for (int i = 0; i < numverts; i++)
+			hv[i] = { clipvert[i].x, clipvert[i].y, { clipvert[i].p[0], clipvert[i].p[1], clipvert[i].p[2], clipvert[i].p[3] } };
+		m_state->m_vk->polygon(st, frame_base, m_state->zeus_cliprect, numverts, hv);
+	}
+	else if (scale > 1)
 	{
 		vertex_t hiresvert[std::size(clipvert)];
 		for (int i = 0; i < numverts; i++)

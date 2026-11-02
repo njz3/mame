@@ -1983,6 +1983,8 @@ if VIDEOS["ZEUS2"] then
 	files {
 		MAME_DIR .. "src/devices/video/zeus2.cpp",
 		MAME_DIR .. "src/devices/video/zeus2.h",
+		MAME_DIR .. "src/devices/video/zeus2_vk.cpp",
+		MAME_DIR .. "src/devices/video/zeus2_vk.h",
 	}
 end
 

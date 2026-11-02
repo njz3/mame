@@ -29,7 +29,7 @@ Matériel visé, dans l'ordre :
 | 3 | Konami K001005 | gticlub, midnrun, windheat, jetwave | OK (gticlub, midnrun ×2) | OK (midnrun, gticlub) ; proche du natif |
 | 4 | 3dfx Voodoo 1/2 | sfrush, sfrushrk, calspeed, hyprdriv, vaportrx, roadburn, thrilld, racingj | OK (sfrush ×2 ×4, racingj ×2, roadburn ×2) ; coûteux en CPU | OK (même image que le logiciel) ; au niveau du natif en ×2 sur roadburn |
 | 5 | Midway V-Unit | crusnusa, crusnwld, offroadc | OK (3 jeux ×2 en démo 3D ; sommets entiers : bords natifs, textures HD) | OK (même image que le logiciel) ; ×4 60 s contre 81 s en logiciel |
-| 6 | Midway Zeus 2 | crusnexo | OK (crusnexo ×2, mode démo) | à faire |
+| 6 | Midway Zeus 2 | crusnexo | OK (crusnexo ×2, ×4, mode démo) | OK (même image que le logiciel, aux arrondis des mélanges près) ; ×4 107 s contre 334 s en logiciel |
 | 7 | Namco System 21 | winrun, driveyes | OK (winrun, driveyes ×2) | à faire |
 | 8 | Taito JC (TC0780FPA) | sidebs, sidebs2, dangcurv | OK (sidebs, sidebs2 ×2) | à faire |
 | 9 | Gaelco 3D | speedup, surfplnt, radikalb | OK (speedup, radikalb ×2) | à faire |
@@ -414,3 +414,35 @@ l'écraser.
     57,8 s en logiciel. Le rendu coûte environ 3 s de CPU sur 120 s, dont
     environ 1 s d'attente du GPU, surtout pour les images converties à la
     mise à jour au lieu de l'être au changement de page.
+- 2026-11-02 : **Midway Zeus 2 sur Vulkan** (`zeus2_vk`).
+  - La copie HD du tampon image (couleur et profondeur, avec la structure
+    de lignes native × N) est sur le GPU, et la mémoire d'ondes (16 Mo,
+    textures) y est recopiée par pages de 16 Ko écrites depuis le lot
+    précédent.
+  - Chaque triangle de `render_triangle_fan` est préparé sur le CPU comme
+    le fait `render_triangle` (tri en Y, lignes couvertes, pentes, plans des
+    paramètres). Le shader de fragments en déduit l'étendue de sa ligne, la
+    profondeur entière (départ tronqué puis pas entiers), u/z, v/z et 1/z,
+    puis applique `render_poly_8bit` : plancher de profondeur, couleur
+    pleine, RGB555, texels avec alpha, texels par palette avec le filtre
+    bilinéaire de `rgbaint_t` (version SSE) et la couleur transparente.
+  - La profondeur 24 bits devient celle du GPU (D32, valeur / 2^24, exacte).
+    Le mélange « source × a + destination × b » passe par la double source
+    du GPU : seul l'arrondi de la part de la destination peut différer d'un
+    niveau.
+  - La palette est copiée dans le lot quand elle change ; une écriture dans
+    la mémoire d'ondes envoie d'abord les triangles en attente.
+  - Remplissages et écritures de l'hôte deviennent des segments de pixels
+    natifs, dessinés en blocs N×N.
+  - Quand l'adresse d'affichage change (registre 0x38), les lignes affichées
+    sont relues sans attendre ; la mise à jour de l'écran les montre si
+    rien n'a été dessiné dedans depuis.
+  - Défaut corrigé au passage : le mode logiciel ne doit pas recopier le
+    tampon natif au démarrage, `m_yScale` n'y est pas encore fixé (plantage
+    en ×4).
+  - Contrôle, démo de crusnexo sur 120 s, 8 captures : écart moyen de 0 à
+    0,33 niveau, au plus 0,05 % des pixels au-delà de 24 (halos mélangés).
+  - Temps pour 120 s émulées : ×2 89 à 105 s en Vulkan, 164 à 169 s en
+    logiciel, 82 s en natif ; ×4 107 à 111 s en Vulkan, 334 s en logiciel,
+    78 à 102 s en natif (portable qui chauffe). Environ 1600 triangles et
+    moins de 2 lots par image ; 3 s d'attente du GPU sur 120 s.

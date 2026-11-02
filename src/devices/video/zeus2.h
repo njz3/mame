@@ -16,6 +16,7 @@
 #include "video/rgbutil.h"
 
 #include "hires3d.h"
+#include "zeus2_vk.h"
 
 #include "endianness.h"
 
@@ -135,11 +136,14 @@ public:
 
 	// -hires3d: a copy of the frame buffer at m_hires_scale times the native
 	// resolution, with the same row layout; the polygons are drawn into both,
-	// the fills and host writes are magnified into it, and the display reads it
+	// the fills and host writes are magnified into it, and the display reads
+	// it; the copy is on the GPU with m_vk, else in m_hiresColor/m_hiresDepth
 	std::unique_ptr<hires3d_output> m_hires;
 	int m_hires_scale = 1;
+	std::unique_ptr<zeus2_vk> m_vk;
 	std::unique_ptr<uint32_t[]> m_hiresColor;
 	std::unique_ptr<int32_t[]> m_hiresDepth;
+	void hires_software_start();
 	size_t hires_index(uint32_t addr, int suby, int subx) const
 	{
 		addr &= WAVERAM1_WIDTH * WAVERAM1_HEIGHT * 2 - 1;
@@ -151,7 +155,9 @@ public:
 	}
 	void hires_write(uint32_t addr, uint32_t color, bool write_depth, int32_t depth)
 	{
-		if (m_hires_scale == 1)
+		if (m_vk)
+			m_vk->pixel(addr, color, write_depth, depth);
+		if (!m_hiresColor)
 			return;
 		for (int sub = 0; sub < m_hires_scale; sub++)
 		{
@@ -190,6 +196,7 @@ protected:
 	virtual void device_start() override ATTR_COLD;
 	virtual void device_reset() override ATTR_COLD;
 	virtual void device_stop() override ATTR_COLD;
+	virtual void device_post_load() override;
 
 private:
 	static constexpr unsigned WAVERAM0_WIDTH    = 1024;
