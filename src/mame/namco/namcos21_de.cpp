@@ -56,6 +56,8 @@ public:
 	// construction/destruction
 	namco_de_pcbstack_device(const machine_config &mconfig, const char *tag, device_t *owner, u8 pcb, u32 clock = 0);
 
+	namco_c139_device &sci() { return *m_sci; }
+
 protected:
 	virtual void device_add_mconfig(machine_config &config) override ATTR_COLD;
 	virtual void device_start() override ATTR_COLD;
@@ -473,9 +475,6 @@ void namco_de_pcbstack_device::device_start()
 		m_audiobank->configure_entry(i, memregion("audiocpu")->base() + (i % max) * 0x4000);
 
 	save_item(NAME(m_video_enable));
-
-	// the three stacks are linked through their C139s on fixed local ports
-	m_sci->sci_de_hack(m_pcb);
 }
 
 void namco_de_pcbstack_device::device_reset()
@@ -501,10 +500,23 @@ public:
 
 	void driveyes(machine_config &config);
 
+protected:
+	virtual void machine_start() override ATTR_COLD;
+
 private:
 	required_device_array<namco_de_pcbstack_device, 3> m_pcb;
 	required_device<namcoio_gearbox_device> m_io_gearbox;
 };
+
+void namcos21_de_state::machine_start()
+{
+	// the C139s of the three stacks are wired together: each one receives what the others send
+	// (the center stack sends the frames, the side stacks only receive)
+	for (int i = 0; i < 3; i++)
+		for (int j = 0; j < 3; j++)
+			if (i != j)
+				m_pcb[i]->sci().add_local_peer(m_pcb[j]->sci());
+}
 
 // driveyes only
 void namcos21_de_state::driveyes(machine_config &config)

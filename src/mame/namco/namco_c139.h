@@ -1,5 +1,5 @@
 // license:BSD-3-Clause
-// copyright-holders:Angelo Salese
+// copyright-holders:Angelo Salese, Ariane Fugmann
 /***************************************************************************
 
     Namco C139 - Serial I/F Controller
@@ -10,12 +10,9 @@
 
 #pragma once
 
+#include <deque>
+#include <vector>
 
-
-
-//**************************************************************************
-//  INTERFACE CONFIGURATION MACROS
-//**************************************************************************
 
 //**************************************************************************
 //  TYPE DEFINITIONS
@@ -41,12 +38,11 @@ public:
 	uint16_t reg_r(offs_t offset);
 	void reg_w(offs_t offset, uint16_t data, uint16_t mem_mask = ~0);
 
-	void sci_de_hack(uint8_t data);
-
+	// boards of one machine wired together (Driver's Eyes): what this chip sends goes to 'peer' instead of the network
+	void add_local_peer(namco_c139_device &peer);
 
 protected:
 	// device-level overrides
-//  virtual void device_validity_check(validity_checker &valid) const;
 	virtual void device_start() override ATTR_COLD;
 	virtual void device_stop() override ATTR_COLD;
 	virtual void device_reset() override ATTR_COLD;
@@ -54,45 +50,39 @@ protected:
 	devcb_write_line m_irq_cb;
 
 private:
+	class context;
+
 	uint16_t m_ram[0x2000];
-	uint16_t m_reg[0x0010];
+	uint16_t m_reg[8];
+
+	bool m_tx_busy;
+	bool m_rx_locked;
+	attotime m_rx_irq_time;
 
 	std::string m_localhost;
 	std::string m_localport;
 	std::string m_remotehost;
 	std::string m_remoteport;
 
-	emu_timer *m_tick_timer;
-
-	class context;
 	std::unique_ptr<context> m_context;
+	std::vector<namco_c139_device *> m_local_peers;
+	std::deque<std::vector<uint16_t> > m_local_rx;
 
-	uint8_t m_buffer[0x200];
-
-	uint16_t m_linktimer;
-	uint8_t m_linkid;
-	uint8_t m_txsize;
-	uint8_t m_txblock;
-	uint8_t m_reg_f3;
+	emu_timer *m_tick_timer;
+	emu_timer *m_tx_timer;
 
 	TIMER_CALLBACK_MEMBER(tick_timer_callback);
+	TIMER_CALLBACK_MEMBER(tx_done);
 
-	void comm_tick();
-	void read_data(unsigned data_size);
-	unsigned read_frame(unsigned data_size);
-	unsigned find_sync_bit(unsigned tx_offset, unsigned tx_mask);
-	void send_data(unsigned data_size);
-	void send_frame(unsigned data_size);
+	void check_tx();
+	void check_rx();
+	void update_irq();
+	void deliver_local(std::vector<uint16_t> const &words);
 };
 
 
 // device type definition
 DECLARE_DEVICE_TYPE(NAMCO_C139, namco_c139_device)
-
-
-//**************************************************************************
-//  GLOBAL VARIABLES
-//**************************************************************************
 
 
 #endif // MAME_NAMCO_NAMCO_C139_H
