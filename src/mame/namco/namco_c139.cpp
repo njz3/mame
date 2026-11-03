@@ -77,7 +77,8 @@ public:
 		m_stopping(false),
 		m_state_rx(0U),
 		m_state_tx(0U),
-		m_sending(false)
+		m_sending(false),
+		m_rx_discard(UINT_MAX)
 	{
 	}
 
@@ -136,6 +137,9 @@ public:
 					m_timeout_tx.cancel();
 					m_state_rx.store(0);
 					m_state_tx.store(0);
+					// what was queued for or received from the old connections is stale
+					m_fifo_tx.consume(m_fifo_tx.used());
+					m_rx_discard.store(m_fifo_rx.write_position(), std::memory_order_release);
 					start_accept();
 					start_connect();
 				});
@@ -173,6 +177,11 @@ public:
 	// a frame on the wire: 16-bit word count, then each 9-bit word as 2 bytes, little-endian
 	bool receive(std::vector<uint16_t> &words)
 	{
+		// drop what was left over from a lost connection (the network thread only marks it)
+		unsigned const discard = m_rx_discard.exchange(UINT_MAX, std::memory_order_acquire);
+		if (discard != UINT_MAX)
+			m_fifo_rx.discard_to(discard);
+
 		if (m_state_rx.load() < 2)
 			return false;
 
@@ -332,10 +341,20 @@ private:
 			return (BUFFER_SIZE + current_rp - current_wp - 1 + BUFFER_SIZE) % BUFFER_SIZE;
 		}
 
-		void clear()
+		// producer side: where the next byte will be written
+		unsigned write_position() const
 		{
-			m_wp.store(0, std::memory_order_release);
-			m_rp.store(0, std::memory_order_release);
+			return m_wp.load(std::memory_order_relaxed);
+		}
+
+		// consumer side: drop what was written before a write_position() taken by the producer, unless it was read already
+		void discard_to(unsigned position)
+		{
+			unsigned const current_wp = m_wp.load(std::memory_order_acquire);
+			unsigned const current_rp = m_rp.load(std::memory_order_relaxed);
+			unsigned const data_avail = (BUFFER_SIZE + current_wp - current_rp) % BUFFER_SIZE;
+			if (((BUFFER_SIZE + position - current_rp) % BUFFER_SIZE) <= data_avail)
+				m_rp.store(position, std::memory_order_release);
 		}
 
 	private:
@@ -367,6 +386,8 @@ private:
 							{
 								if (err)
 								{
+									if (err == asio::error::operation_aborted)
+										return; // closed on purpose (reset, stop): whoever closed it listens again
 									LOG("C139: RX error accepting - %d %s\n", err.value(), err.message());
 									std::error_code e;
 									m_acceptor.close(e);
@@ -425,6 +446,8 @@ private:
 					*m_remoteaddr,
 					[this] (std::error_code const &err)
 					{
+						if (err == asio::error::operation_aborted)
+							return; // closed on purpose (time-out, reset, stop): whoever closed it connects again
 						m_timeout_tx.cancel();
 						if (err)
 						{
@@ -438,6 +461,8 @@ private:
 						{
 							LOG("C139: TX connection established\n");
 							m_state_tx.store(2);
+							if (m_fifo_tx.used() && !m_sending.exchange(true))
+								start_send_tx();
 						}
 					});
 			m_state_tx.store(1);
@@ -446,8 +471,9 @@ private:
 
 	void start_send_tx()
 	{
-		if (m_stopping)
+		if (m_stopping || (m_state_tx.load() != 2))
 		{
+			// not connected: the connection handler starts sending again
 			m_sending.store(false);
 			return;
 		}
@@ -470,11 +496,14 @@ private:
 					m_fifo_tx.consume(length);
 					if (err)
 					{
-						LOG("C139: TX connection error: %s\n", err.message().c_str());
-						m_sock_tx.close();
-						m_state_tx.store(0);
-						m_fifo_tx.clear();
+						m_fifo_tx.consume(m_fifo_tx.used()); // this thread is the reader of the TX fifo
 						m_sending.store(false);
+						if (err == asio::error::operation_aborted)
+							return; // closed on purpose (time-out, reset, stop): whoever closed it connects again
+						LOG("C139: TX connection error: %s\n", err.message().c_str());
+						std::error_code e;
+						m_sock_tx.close(e);
+						m_state_tx.store(0);
 						start_connect();
 					}
 					else
@@ -495,13 +524,16 @@ private:
 				{
 					if (err || !length)
 					{
+						if (err == asio::error::operation_aborted)
+							return; // closed on purpose (reset, stop): whoever closed it listens again
 						if (err)
 							LOG("C139: RX connection error: %s\n", err.message());
 						else
 							LOG("C139: RX connection lost\n");
-						m_sock_rx.close();
+						std::error_code e;
+						m_sock_rx.close(e);
 						m_state_rx.store(0);
-						m_fifo_rx.clear();
+						m_rx_discard.store(m_fifo_rx.write_position(), std::memory_order_release);
 						start_accept();
 					}
 					else
@@ -509,9 +541,10 @@ private:
 						if (UINT_MAX == m_fifo_rx.write(&m_buffer_rx[0], length))
 						{
 							LOG("C139: RX buffer overflow\n");
-							m_sock_rx.close();
+							std::error_code e;
+							m_sock_rx.close(e);
 							m_state_rx.store(0);
-							m_fifo_rx.clear();
+							m_rx_discard.store(m_fifo_rx.write_position(), std::memory_order_release);
 							start_accept();
 							return;
 						}
@@ -548,6 +581,7 @@ private:
 	std::atomic_uint m_state_rx;
 	std::atomic_uint m_state_tx;
 	std::atomic_bool m_sending;     // a write is in flight or posted on the network thread
+	std::atomic_uint m_rx_discard;  // RX fifo write position of a lost connection, UINT_MAX if none
 	fifo m_fifo_rx;
 	fifo m_fifo_tx;
 	std::array<uint8_t, 0x400> m_buffer_rx;
