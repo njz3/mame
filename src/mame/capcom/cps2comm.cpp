@@ -132,7 +132,8 @@ public:
 		m_stopping(false),
 		m_in_connected(false),
 		m_usart_wp(0U),
-		m_usart_rp(0U)
+		m_usart_rp(0U),
+		m_usart_discard(UINT_MAX)
 	{
 	}
 
@@ -203,8 +204,8 @@ public:
 				{
 					if (BIT(val, 0, 2) == 0U)
 					{
-						unsigned rp = m_usart_rp.load(std::memory_order_relaxed);
-						m_usart_wp.store(rp, std::memory_order_release);
+						// the emulation thread reads the USART buffer: let it drop what was queued so far
+						m_usart_discard.store(m_usart_wp.load(std::memory_order_relaxed), std::memory_order_release);
 					}
 					m_route = val;
 				});
@@ -212,8 +213,19 @@ public:
 
 	bool usart_get(u8 &data)
 	{
-		unsigned const rp = m_usart_rp.load(std::memory_order_relaxed);
+		unsigned const discard = m_usart_discard.exchange(UINT_MAX, std::memory_order_acquire);
+		unsigned rp = m_usart_rp.load(std::memory_order_relaxed);
 		unsigned const wp = m_usart_wp.load(std::memory_order_acquire);
+		if (discard != UINT_MAX)
+		{
+			// drop what was queued before routing turned the USART off, unless it was read already
+			unsigned const size = unsigned(m_usart_buf.size());
+			if (((size + discard - rp) % size) <= ((size + wp - rp) % size))
+			{
+				rp = discard;
+				m_usart_rp.store(rp, std::memory_order_release);
+			}
+		}
 		if (rp == wp)
 			return false;
 		data = m_usart_buf[rp];
@@ -547,6 +559,7 @@ private:
 	bool m_in_connected;
 	std::atomic_uint m_usart_wp;
 	std::atomic_uint m_usart_rp;
+	std::atomic_uint m_usart_discard; // USART buffer write position to drop up to, UINT_MAX if none
 	buffer m_in_snd_buf;
 	buffer m_out_snd_buf;
 	std::array<u8, 128> m_in_rcv_buf;

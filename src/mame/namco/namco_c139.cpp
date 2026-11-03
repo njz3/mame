@@ -8,52 +8,47 @@
     connected to M5M5179P RAM with a 13-bit address bus, and 9 bit data bus
     connected to host cpu with a 14*-bit address bus, and 13 bit data bus
     2 clock inputs - 16M and 12M
-    currently there are 4 known modes of operation:
 
-    mode 0x08:
-    - ridgera2
-    - raverace
+    Used on System 2, System 21, System 22 / Super System 22 to link cabinets in a
+    ring (each chip transmits to the next one) and, in Driver's Eyes, the three
+    boards of one machine. The model below comes from the link code of the games
+    (see C139.md at the top of the source tree for the per-game analysis).
 
-    mode 0x09:
-    - fourtrax
-    - suzuka8h
-    - suzuk8h2
-    - winrungp
-    - winrun91
-    - driveyes (center)
-    - cybsled
-    - cybrcomm
-    - acedrive
-    - victlap
-    - cybrcycc
-    - adillor
+    RAM: 0x2000 9-bit words. Words 0x0000-0x0fff are the transmit area, words
+    0x1000-0x1fff the receive ring. Bit 8 is the frame sync bit: the games set it
+    on the last word of a frame and look for it when parsing received frames.
 
-    mode 0x0c:
-    - ridgeracf
+    Registers (Namco names from the Cyber Cycles COMMUNICATION screen):
+    0 IRQ   (STATUS)   bit 0 error, bit 1 frame received, bit 2 transmitter idle
+                       (live, set after reset); writing clears bits 0-1 where the
+                       written value has a 0
+    1 MSK   (MODE)     interrupt masks, 1 = masked: bit 1 receive, bit 2 transmitter
+                       idle; bit 3 must be set for any interrupt (winrun writes 0 and
+                       never acknowledges). When the chip raises an interrupt it sets
+                       the corresponding mask bit, the game clears it to re-arm. The
+                       "modes" 0x08/0x09/0x0c/0x0d/0x0f of the old notes are masks.
+    2 B-9   (CONTROL)  forces bit 8 of host writes to the RAM: 1 = clear, 3 = set
+                       (ridgera2 and raverace write their frames with 1, then the
+                       checksum, last word of the frame, with 3)
+    3 S-M   (START)    bit 0 holds the transmitter while the game programs it
+    4 R-C   (RXSIZE)   decremented for each word received (Final Lap checks it)
+    5 S-C   (TXSIZE)   words to send; a transmission starts when it is not 0 and
+                       START bit 0 is clear, it reads 0 again once sent
+    6 R-AD  (RXOFFSET) next receive address, words go to 0x1000 | (RXOFFSET & 0xfff)
+    7 S-AD  (TXOFFSET) 13-bit word address of the next word to send; the games relay
+                       received frames themselves by pointing it into the receive
+                       ring (0x1000 + position)
 
-    mode 0x0d:
-    - finallap
-    - finallap2
-    - finallap3
-    - driveyes (sides)
-    - tokyowar
-    - aircomb
-    - dirtdash
-    - alpiner2b (uses 0xfd)
-
-    mode 0x0f (configuration mode)
-    - 0x02 used to setup byte/word adressing
-
-    NOTES:
-      apparently mode 0x09 and 0x0d modify the received data.
-      mode 0x09 does not update *anything* after data got changed. might be automatic.
-      mode 0x0d updates the tx offset pointing to the rx buffer (which is not supported right now)
+    The chip doesn't relay, filter or modify anything: every frame sent arrives in
+    the next chip's receive ring, and the games forward, count and remove frames
+    themselves (hop counters in the frames). Only one frame is put in the receive
+    ring per receive interrupt: the handlers only parse the last frame before
+    RXOFFSET.
 
     TODO:
-    - hook a real chip and test in detail
-    - mode 0x0d shows 1 machine in service mode and attract mode, however most games seem to work "okay" in multiplayer.
+    - hook a real chip and test in detail (START config values 3 / 0x11, error bit,
+      line speed, whether a transmission stops at a word with bit 8)
     - C422 seems to be a pin compatible upgrade to C139, probably supporting higher clock speeds? hook up c139 in system23
-    - mode 0x0b is used by s23 games to test interrupts.
 
 ***************************************************************************/
 
@@ -81,7 +76,9 @@ public:
 		m_timeout_tx(m_ioctx),
 		m_stopping(false),
 		m_state_rx(0U),
-		m_state_tx(0U)
+		m_state_tx(0U),
+		m_sending(false),
+		m_rx_discard(UINT_MAX)
 	{
 	}
 
@@ -140,6 +137,9 @@ public:
 					m_timeout_tx.cancel();
 					m_state_rx.store(0);
 					m_state_tx.store(0);
+					// what was queued for or received from the old connections is stale
+					m_fifo_tx.consume(m_fifo_tx.used());
+					m_rx_discard.store(m_fifo_rx.write_position(), std::memory_order_release);
 					start_accept();
 					start_connect();
 				});
@@ -169,46 +169,64 @@ public:
 		}
 	}
 
-	void check_sockets()
-	{
-	}
-
 	bool connected()
 	{
 		return m_state_rx.load() == 2 && m_state_tx.load() == 2;
 	}
 
-	unsigned receive(uint8_t *buffer, unsigned data_size)
+	// a frame on the wire: 16-bit word count, then each 9-bit word as 2 bytes, little-endian
+	bool receive(std::vector<uint16_t> &words)
 	{
+		// drop what was left over from a lost connection (the network thread only marks it)
+		unsigned const discard = m_rx_discard.exchange(UINT_MAX, std::memory_order_acquire);
+		if (discard != UINT_MAX)
+			m_fifo_rx.discard_to(discard);
+
 		if (m_state_rx.load() < 2)
-			return UINT_MAX;
+			return false;
 
-		if (data_size > m_fifo_rx.used())
-			return 0;
+		uint8_t header[2];
+		if (m_fifo_rx.used() < 2 || m_fifo_rx.read(&header[0], 2, true) != 2)
+			return false;
+		unsigned const count = header[0] | (header[1] << 8);
+		if (m_fifo_rx.used() < 2 + count * 2)
+			return false;
 
-		return m_fifo_rx.read(&buffer[0], data_size, false);
+		std::vector<uint8_t> data(2 + count * 2);
+		m_fifo_rx.read(&data[0], data.size(), false);
+		words.resize(count);
+		for (unsigned i = 0; i < count; i++)
+			words[i] = (data[2 + i * 2] | (data[3 + i * 2] << 8)) & 0x1ff;
+		return true;
 	}
 
-	unsigned send(uint8_t *buffer, unsigned data_size)
+	void send(std::vector<uint16_t> const &words)
 	{
 		if (m_state_tx.load() < 2)
-			return UINT_MAX;
+			return;
 
-		if (data_size > m_fifo_tx.free())
+		std::vector<uint8_t> data(2 + words.size() * 2);
+		data[0] = words.size() & 0xff;
+		data[1] = (words.size() >> 8) & 0xff;
+		for (unsigned i = 0; i < words.size(); i++)
 		{
-			LOG("C139: TX buffer overflow\n");
-			return UINT_MAX;
+			data[2 + i * 2] = words[i] & 0xff;
+			data[3 + i * 2] = (words[i] >> 8) & 0xff;
 		}
 
-		bool const sending = m_fifo_tx.used();
-		m_fifo_tx.write(&buffer[0], data_size);
-		if (!sending)
-			asio::post(m_ioctx, 
+		if (data.size() > m_fifo_tx.free())
+		{
+			LOG("C139: TX buffer overflow\n");
+			return;
+		}
+
+		m_fifo_tx.write(&data[0], data.size());
+		if (!m_sending.exchange(true))
+			asio::post(m_ioctx,
 					[this] ()
 					{
 						start_send_tx();
 					});
-		return data_size;
 	}
 
 private:
@@ -323,10 +341,20 @@ private:
 			return (BUFFER_SIZE + current_rp - current_wp - 1 + BUFFER_SIZE) % BUFFER_SIZE;
 		}
 
-		void clear()
+		// producer side: where the next byte will be written
+		unsigned write_position() const
 		{
-			m_wp.store(0, std::memory_order_release);
-			m_rp.store(0, std::memory_order_release);
+			return m_wp.load(std::memory_order_relaxed);
+		}
+
+		// consumer side: drop what was written before a write_position() taken by the producer, unless it was read already
+		void discard_to(unsigned position)
+		{
+			unsigned const current_wp = m_wp.load(std::memory_order_acquire);
+			unsigned const current_rp = m_rp.load(std::memory_order_relaxed);
+			unsigned const data_avail = (BUFFER_SIZE + current_wp - current_rp) % BUFFER_SIZE;
+			if (((BUFFER_SIZE + position - current_rp) % BUFFER_SIZE) <= data_avail)
+				m_rp.store(position, std::memory_order_release);
 		}
 
 	private:
@@ -358,6 +386,8 @@ private:
 							{
 								if (err)
 								{
+									if (err == asio::error::operation_aborted)
+										return; // closed on purpose (reset, stop): whoever closed it listens again
 									LOG("C139: RX error accepting - %d %s\n", err.value(), err.message());
 									std::error_code e;
 									m_acceptor.close(e);
@@ -416,6 +446,8 @@ private:
 					*m_remoteaddr,
 					[this] (std::error_code const &err)
 					{
+						if (err == asio::error::operation_aborted)
+							return; // closed on purpose (time-out, reset, stop): whoever closed it connects again
 						m_timeout_tx.cancel();
 						if (err)
 						{
@@ -429,6 +461,8 @@ private:
 						{
 							LOG("C139: TX connection established\n");
 							m_state_tx.store(2);
+							if (m_fifo_tx.used() && !m_sending.exchange(true))
+								start_send_tx();
 						}
 					});
 			m_state_tx.store(1);
@@ -437,10 +471,24 @@ private:
 
 	void start_send_tx()
 	{
-		if (m_stopping)
+		if (m_stopping || (m_state_tx.load() != 2))
+		{
+			// not connected: the connection handler starts sending again
+			m_sending.store(false);
 			return;
+		}
 
-		unsigned used = m_fifo_tx.read(&m_buffer_tx[0], std::min<unsigned>(m_fifo_tx.used(), m_buffer_tx.size()), true);
+		unsigned const pending = m_fifo_tx.used();
+		if (!pending)
+		{
+			// nothing left: stop, unless the emulation thread queued data while it still saw us sending
+			m_sending.store(false);
+			if (m_fifo_tx.used() && !m_sending.exchange(true))
+				start_send_tx();
+			return;
+		}
+
+		unsigned used = m_fifo_tx.read(&m_buffer_tx[0], std::min<unsigned>(pending, m_buffer_tx.size()), true);
 		m_sock_tx.async_write_some(
 				asio::buffer(&m_buffer_tx[0], used),
 				[this] (std::error_code const &err, std::size_t length)
@@ -448,13 +496,17 @@ private:
 					m_fifo_tx.consume(length);
 					if (err)
 					{
+						m_fifo_tx.consume(m_fifo_tx.used()); // this thread is the reader of the TX fifo
+						m_sending.store(false);
+						if (err == asio::error::operation_aborted)
+							return; // closed on purpose (time-out, reset, stop): whoever closed it connects again
 						LOG("C139: TX connection error: %s\n", err.message().c_str());
-						m_sock_tx.close();
+						std::error_code e;
+						m_sock_tx.close(e);
 						m_state_tx.store(0);
-						m_fifo_tx.clear();
 						start_connect();
 					}
-					else if (m_fifo_tx.used())
+					else
 					{
 						start_send_tx();
 					}
@@ -472,13 +524,16 @@ private:
 				{
 					if (err || !length)
 					{
+						if (err == asio::error::operation_aborted)
+							return; // closed on purpose (reset, stop): whoever closed it listens again
 						if (err)
 							LOG("C139: RX connection error: %s\n", err.message());
 						else
 							LOG("C139: RX connection lost\n");
-						m_sock_rx.close();
+						std::error_code e;
+						m_sock_rx.close(e);
 						m_state_rx.store(0);
-						m_fifo_rx.clear();
+						m_rx_discard.store(m_fifo_rx.write_position(), std::memory_order_release);
 						start_accept();
 					}
 					else
@@ -486,9 +541,10 @@ private:
 						if (UINT_MAX == m_fifo_rx.write(&m_buffer_rx[0], length))
 						{
 							LOG("C139: RX buffer overflow\n");
-							m_sock_rx.close();
+							std::error_code e;
+							m_sock_rx.close(e);
 							m_state_rx.store(0);
-							m_fifo_rx.clear();
+							m_rx_discard.store(m_fifo_rx.write_position(), std::memory_order_release);
 							start_accept();
 							return;
 						}
@@ -524,6 +580,8 @@ private:
 	bool m_stopping;
 	std::atomic_uint m_state_rx;
 	std::atomic_uint m_state_tx;
+	std::atomic_bool m_sending;     // a write is in flight or posted on the network thread
+	std::atomic_uint m_rx_discard;  // RX fifo write position of a lost connection, UINT_MAX if none
 	fifo m_fifo_rx;
 	fifo m_fifo_tx;
 	std::array<uint8_t, 0x400> m_buffer_rx;
@@ -531,17 +589,31 @@ private:
 };
 
 
-//**************************************************************************
-//  GLOBAL VARIABLES
-//**************************************************************************
-#define REG_0_STATUS 0
-#define REG_1_MODE 1
-#define REG_2_CONTROL 2
-#define REG_3_START 3
-#define REG_4_RXSIZE 4
-#define REG_5_TXSIZE 5
-#define REG_6_RXOFFSET 6
-#define REG_7_TXOFFSET 7
+namespace {
+
+enum : unsigned
+{
+	REG_STATUS = 0,
+	REG_MODE,
+	REG_CONTROL,
+	REG_START,
+	REG_RXSIZE,
+	REG_TXSIZE,
+	REG_RXOFFSET,
+	REG_TXOFFSET
+};
+
+// one 9-bit word with start and stop bits at about 2 Mbit/s
+attotime const WORD_TIME = attotime::from_nsec(5500);
+
+// next address in the same half of the RAM (frames relayed from the receive ring wrap inside it)
+inline uint16_t next_address(uint16_t address)
+{
+	return (address & 0x1000) | ((address + 1) & 0x0fff);
+}
+
+} // anonymous namespace
+
 
 // device type definition
 DEFINE_DEVICE_TYPE(NAMCO_C139, namco_c139_device, "namco_c139", "Namco C139 Serial")
@@ -576,18 +648,12 @@ namco_c139_device::namco_c139_device(const machine_config &mconfig, const char *
 	m_localport = opts.comm_localport();
 	m_remotehost = opts.comm_remotehost();
 	m_remoteport = opts.comm_remoteport();
+}
 
-	// come up with some magic number for identification
-	std::string remotehost = util::string_format("%s:%s", m_remotehost, m_remoteport);
-	m_linkid = 0;
-	for (int x = 0; x < sizeof(remotehost) && remotehost[x] != 0; x++)
-	{
-		m_linkid ^= remotehost[x];
-	}
 
-	LOG("C139: ID byte = %02d\n", m_linkid);
-
-	std::fill(std::begin(m_buffer), std::end(m_buffer), 0);
+void namco_c139_device::add_local_peer(namco_c139_device &peer)
+{
+	m_local_peers.push_back(&peer);
 }
 
 
@@ -598,23 +664,16 @@ namco_c139_device::namco_c139_device(const machine_config &mconfig, const char *
 void namco_c139_device::device_start()
 {
 	m_tick_timer = timer_alloc(FUNC(namco_c139_device::tick_timer_callback), this);
-	m_tick_timer->adjust(attotime::never);
+	m_tx_timer = timer_alloc(FUNC(namco_c139_device::tx_done), this);
 
-	auto ctx = std::make_unique<context>(*this);
-	m_context = std::move(ctx);
+	m_context = std::make_unique<context>(*this);
 	m_context->start();
-
 
 	// state saving
 	save_item(NAME(m_ram));
 	save_item(NAME(m_reg));
-
-	save_item(NAME(m_linktimer));
-	save_item(NAME(m_linkid));
-
-	save_item(NAME(m_txsize));
-	save_item(NAME(m_txblock));
-	save_item(NAME(m_reg_f3));
+	save_item(NAME(m_tx_busy));
+	save_item(NAME(m_rx_locked));
 }
 
 
@@ -627,20 +686,23 @@ void namco_c139_device::device_reset()
 	std::fill(std::begin(m_ram), std::end(m_ram), 0);
 	std::fill(std::begin(m_reg), std::end(m_reg), 0);
 
-	m_context->reset(m_localhost, m_localport, m_remotehost, m_remoteport);
+	m_tx_busy = false;
+	m_rx_locked = false;
+	m_rx_irq_time = attotime::zero;
+	m_tx_timer->adjust(attotime::never);
+	m_local_rx.clear();
 
-	m_linktimer = 0x0200;
+	// boards wired together in one machine don't use the network
+	if (m_local_peers.empty())
+		m_context->reset(m_localhost, m_localport, m_remotehost, m_remoteport);
 
-	m_txsize = 0x00;
-	m_txblock = 0x00;
-	m_reg_f3 = 0x00;
-
-	m_tick_timer->adjust(attotime::from_hz(800),0,attotime::from_hz(800));
+	m_tick_timer->adjust(attotime::from_hz(2000), 0, attotime::from_hz(2000));
 }
 
 void namco_c139_device::device_stop()
 {
 	m_tick_timer->adjust(attotime::never);
+	m_tx_timer->adjust(attotime::never);
 
 	m_context->stop();
 	m_context.reset();
@@ -658,13 +720,23 @@ uint16_t namco_c139_device::ram_r(offs_t offset)
 
 void namco_c139_device::ram_w(offs_t offset, uint16_t data, uint16_t mem_mask)
 {
-	COMBINE_DATA(&m_ram[offset]);
-	m_txsize = offset;
+	uint16_t value = m_ram[offset];
+	COMBINE_DATA(&value);
+	value &= 0x1ff;
+
+	// B-9 forces bit 8 of the words written by the host
+	if (m_reg[REG_CONTROL] & 1)
+		value = (value & 0xff) | ((m_reg[REG_CONTROL] & 2) ? 0x100 : 0);
+
+	m_ram[offset] = value;
 }
 
 uint16_t namco_c139_device::reg_r(offs_t offset)
 {
 	uint16_t result = m_reg[offset];
+	if (offset == REG_STATUS)
+		result = (result & 3) | (m_tx_busy ? 0 : 4);
+
 	if (!machine().side_effects_disabled())
 		LOG("C139: reg_r[%02x] = %04x\n", offset, result);
 	return result;
@@ -674,327 +746,152 @@ void namco_c139_device::reg_w(offs_t offset, uint16_t data, uint16_t mem_mask)
 {
 	if (!machine().side_effects_disabled())
 		LOG("C139: reg_w[%02x] = %04x\n", offset, data);
-	m_reg[offset] = data;
 
-	// status reset / irq ack?
-	if (offset == REG_0_STATUS && data == 0)
-		m_reg[offset] = 4;
-
-	// hack to get alpinr2b working
-	if (offset == REG_1_MODE && data >= 0x000f)
-		m_reg[REG_1_MODE] &= 0x000f;
-
-	// possibly setup/config mode?
-	if (m_reg[REG_1_MODE] == 0x0f && offset == REG_3_START)
+	switch (offset)
 	{
-		m_reg_f3 = data;
-		logerror("C139: m_reg_f3 = %02x\n", m_reg_f3);
-	}
-
-	// mode 09 tx trigger
-	if (offset == REG_1_MODE && data == 0x09 && m_txsize > 0)
-		m_txblock = 0x00;
-
-	// mode 08 & 0c tx trigger
-	if (offset == REG_2_CONTROL && data == 0x03)
-		m_txblock = 0x00;
-
-	// mode 0d tx trigger
-	if (offset == REG_5_TXSIZE && data > 0)
-		m_txblock = 0x00;
-
-	// hack to get raverace working
-	if (m_reg[REG_1_MODE] == 0x08 && offset == REG_2_CONTROL)
-	{
-		if (data == 1)
-			m_txsize = 0;
-		if (data == 3)
-			m_reg[REG_5_TXSIZE] = m_txsize + 2;
-	}
-}
-
-void namco_c139_device::sci_de_hack(uint8_t data)
-{
-	// prepare "filenames"
-	switch (data)
-	{
-		case 0:
-			m_localhost = "127.0.0.1";
-			m_localport = "15112";
-			m_remotehost = "127.0.0.1";
-			m_remoteport = "15113";
+		case REG_STATUS:
+			// clears the interrupt causes written as 0, the transmitter idle bit is live
+			m_reg[REG_STATUS] &= (data | ~mem_mask) & 3;
+			check_rx();
 			break;
-		case 1:
-			m_localhost = "127.0.0.1";
-			m_localport = "15113";
-			m_remotehost = "127.0.0.1";
-			m_remoteport = "15114";
+
+		case REG_MODE:
+			COMBINE_DATA(&m_reg[REG_MODE]);
+			m_reg[REG_MODE] &= 0x0f;
+			// clearing the receive mask re-arms the receive interrupt
+			if (!(m_reg[REG_MODE] & 2))
+				m_rx_locked = false;
+			update_irq();
+			check_rx();
 			break;
-		case 2:
-			m_localhost = "127.0.0.1";
-			m_localport = "15114";
-			m_remotehost = "127.0.0.1";
-			m_remoteport = "15112";
+
+		case REG_START:
+		case REG_TXSIZE:
+			COMBINE_DATA(&m_reg[offset]);
+			m_reg[offset] &= 0x1fff;
+			check_tx();
 			break;
+
 		default:
-			m_localhost = "127.0.0.1";
-			m_localport = "15112";
-			m_remotehost = "127.0.0.1";
-			m_remoteport = "15112";
+			COMBINE_DATA(&m_reg[offset]);
+			m_reg[offset] &= 0x1fff;
 			break;
 	}
-
-	// come up with some magic number for identification
-	std::string remotehost = util::string_format("%s:%s", m_remotehost, m_remoteport);
-	m_linkid = 0;
-	for (int x = 0; x < sizeof(remotehost) && remotehost[x] != 0; x++)
-	{
-		m_linkid ^= remotehost[x];
-	}
-
-	LOG("C139: ID byte = %02d\n", m_linkid);
 }
+
+
+//**************************************************************************
+//  LINK
+//**************************************************************************
 
 TIMER_CALLBACK_MEMBER(namco_c139_device::tick_timer_callback)
 {
-	comm_tick();
-}
+	check_tx();
+	check_rx();
+	update_irq();
 
-void namco_c139_device::comm_tick()
-{
-	m_context->check_sockets();
-
-	if (m_linktimer > 0x0000)
-		m_linktimer--;
-
-	if (m_linktimer == 0x0000)
+	// the receive request stays active until the game handles it: repeat it when it went unanswered,
+	// e.g. raised while the interrupt controller level was still disabled (Driver's Eyes side boards
+	// at boot, Alpine Racer 2 while it transmits)
+	if (m_rx_locked && (m_reg[REG_STATUS] & 2) && (machine().time() - m_rx_irq_time) > attotime::from_msec(1))
 	{
-		// if both sockets are connected
-		if (m_context->connected())
-		{
-			// link established
-			unsigned data_size = 0x200;
-			switch (m_reg[REG_1_MODE])
-			{
-				case 0x08:
-					// ridgera2, raverace
-					// 0b1000
-					// reg2 - 1 > write mem > 3 > 1 > write mem > 3 etc.
-					// txcount NOT cleared on send
-					read_data(data_size);
-					if (m_reg[REG_2_CONTROL] == 0x03 && m_reg[REG_5_TXSIZE] > 0x00)
-						send_data(data_size);
-					break;
-
-				case 0x09:
-					// suzuka8h, acedrive, winrungp, cybrcycc, driveyes (center)
-					// 0b1001 - auto-send via sync bit (and auto offset)
-					read_data(data_size);
-					send_data(data_size);
-					break;
-
-				case 0x0c:
-					// ridgeracf
-					// 0b1100 - send by register / txwords
-					// txcount IS cleared on send
-					read_data(data_size);
-					if (m_reg[REG_2_CONTROL] == 0x03 && m_reg[REG_3_START] == 0x00)
-						send_data(data_size);
-					break;
-
-				case 0x0d:
-					// final lap, driveyes (left & right)
-					// 0b1101 - auto-send via register?
-					read_data(data_size);
-					if (m_reg[REG_3_START] == 0x00 && m_reg[REG_5_TXSIZE] > 0x00)
-						send_data(data_size);
-					break;
-
-				case 0x0f:
-					// init / reset
-					break;
-
-				default:
-					// unknown mode
-					break;
-			}
-		}
-	}
-}
-
-void namco_c139_device::read_data(unsigned data_size)
-{
-	if (m_reg[REG_0_STATUS] != 0x06)
-	{
-		// try to read a message
-		unsigned recv = read_frame(data_size);
-		if (recv > 0)
-		{
-			// (hack) update linkcount for mode 09
-			if (m_buffer[0] == m_linkid && m_reg[REG_1_MODE] == 0x09 && (m_reg_f3 & 0x2) == 2)
-				m_buffer[0x07] = m_buffer[0x1ff];
-
-			// save message to "rx buffer"
-			unsigned rx_size = m_buffer[2] << 8 | m_buffer[1];
-			unsigned rx_offset = m_reg[REG_6_RXOFFSET]; // rx offset in words
-			LOG("C139: rx_offset = %04x, rx_size == %02x\n", rx_offset, rx_size);
-			unsigned buf_offset = 3;
-			for (unsigned j = 0x00; j < rx_size; j++)
-			{
-				m_ram[0x1000 + (rx_offset & 0x0fff)] = m_buffer[buf_offset + 1] << 8 | m_buffer[buf_offset];
-				rx_offset++;
-				buf_offset += 2;
-			}
-
-			// relay messages
-			if (m_buffer[0] != m_linkid)
-			{
-				if (m_reg[REG_1_MODE] == 0x09 && (m_reg_f3 & 0x2) == 2)
-					m_buffer[0x1ff]++;
-
-				send_frame(data_size);
-			}
-			else
-			{
-				if (m_reg[REG_1_MODE] == 0x09)
-					m_reg[REG_5_TXSIZE] = 0x00;
-			}
-
-			// update regs
-			m_reg[REG_0_STATUS] = 0x06;
-			if (m_reg[REG_1_MODE] != 0x0d)
-				m_reg[REG_4_RXSIZE] += rx_size;
-			else
-				m_reg[REG_4_RXSIZE] -= rx_size;
-			m_reg[REG_6_RXOFFSET] += rx_size;
-
-			// prevent overflow
-			m_reg[REG_4_RXSIZE] &= 0x0fff;
-			m_reg[REG_6_RXOFFSET] &= 0x0fff;
-
-			// fire interrupt
-			m_irq_cb(ASSERT_LINE);
-		}
-	}
-	else
-	{
-		// fire interrupt (again)
+		m_rx_irq_time = machine().time();
 		m_irq_cb(ASSERT_LINE);
 	}
 }
 
-unsigned namco_c139_device::read_frame(unsigned data_size)
+void namco_c139_device::check_tx()
 {
-	unsigned bytes_read = m_context->receive(&m_buffer[0], data_size);
-	if (bytes_read == UINT_MAX)
-	{
-		m_linktimer = 0x0100;
-		m_txblock = 0x00;
-		return 0;
-	}
-	return bytes_read;
-}
-
-void namco_c139_device::send_data(unsigned data_size)
-{
-	if (m_txblock == 0x01)
+	if (m_tx_busy || !m_reg[REG_TXSIZE] || (m_reg[REG_START] & 1))
 		return;
 
-	if (m_reg[REG_0_STATUS] == 0x06)
-		return;
-
-	unsigned tx_offset = m_reg[REG_7_TXOFFSET]; // tx offset in words
-	if ((m_reg_f3 & 0x02) == 0x02)
-		tx_offset >>= 1; // tx offset in bytes
-
-	unsigned tx_mask = 0x0fff;
-	if (m_reg[REG_1_MODE] == 0x0d)
-		tx_mask = 0x1fff; // allow txPointer to rxBuffer
-
-	unsigned tx_size = m_reg[REG_5_TXSIZE];
-	if (m_reg[REG_1_MODE] == 0x09)
+	// the words are taken now, the game may build its next frame while this one is on the line
+	unsigned const count = m_reg[REG_TXSIZE];
+	std::vector<uint16_t> words(count);
+	uint16_t address = m_reg[REG_TXOFFSET];
+	for (unsigned i = 0; i < count; i++)
 	{
-		tx_size = find_sync_bit(tx_offset, tx_mask);
-		if (tx_size == 0x01)
-		{
-			m_reg[REG_7_TXOFFSET] += 0x100;
-			tx_size = 0;
-		}
+		words[i] = m_ram[address];
+		address = next_address(address);
 	}
+	m_reg[REG_TXOFFSET] = address;
 
-	LOG("C139: tx_offset = %04x, tx_size == %02x\n", tx_offset, tx_size);
-	if (tx_size == 0)
-		return;
+	LOG("C139: send %d words\n", count);
+	if (m_local_peers.empty())
+		m_context->send(words);
+	else
+		for (namco_c139_device *peer : m_local_peers)
+			peer->deliver_local(words);
 
-	m_buffer[0] = m_linkid;
-	m_buffer[1] = tx_size & 0xff;
-	m_buffer[2] = (tx_size & 0xff00) >> 8;
-	m_buffer[0x1ff] = 1;
-
-	unsigned buf_offset = 3;
-	for (unsigned j = 0x00; j < tx_size; j++)
-	{
-		m_buffer[buf_offset] = m_ram[tx_offset & tx_mask] & 0xff;
-		m_buffer[buf_offset + 1] = 0;
-
-		tx_offset++;
-		buf_offset += 2;
-	}
-
-	// set bit-8 on last byte
-	m_buffer[buf_offset -1] |= 0x01;
-
-	// based on mode, reset tx counter
-	switch (m_reg[REG_1_MODE])
-	{
-		case 0x08:
-		case 0x09:
-			// do nothing
-			m_txblock = 0x01;
-			break;
-		case 0x0c:
-		case 0x0d:
-			m_reg[REG_5_TXSIZE] = 0;
-			m_txblock = 0x01;
-			break;
-		default:
-			// do nothing
-			break;
-	}
-
-	m_txsize = 0;
-	send_frame(data_size);
+	m_tx_busy = true;
+	m_tx_timer->adjust(WORD_TIME * count);
 }
 
-void namco_c139_device::send_frame(unsigned data_size)
+TIMER_CALLBACK_MEMBER(namco_c139_device::tx_done)
 {
-	unsigned bytes_sent = m_context->send(&m_buffer[0], data_size);
-	if (bytes_sent == UINT_MAX)
-	{
-		m_linktimer = 0x0100;
-		m_txblock = 0x00;
-	}
+	m_tx_busy = false;
+	m_reg[REG_TXSIZE] = 0;
+	update_irq();
 }
 
-unsigned namco_c139_device::find_sync_bit(unsigned tx_offset, unsigned tx_mask)
+void namco_c139_device::deliver_local(std::vector<uint16_t> const &words)
 {
-	// cybrcycc
-	if ((m_ram[(tx_offset) & tx_mask] & 0x01ff) == 0x1ff)
-		return 0;
+	m_local_rx.push_back(words);
+	check_rx();
+}
 
-	// hack to find sync bit in data area
-	for (unsigned i = 0; i < 0x08; i++)
+void namco_c139_device::check_rx()
+{
+	// one frame per receive interrupt: the next one waits until the game has acknowledged the
+	// cause and, when an interrupt was raised for it, cleared the receive mask again
+	if (m_rx_locked || (m_reg[REG_STATUS] & 2))
+		return;
+
+	std::vector<uint16_t> words;
+	if (!m_local_rx.empty())
 	{
-		unsigned subOffset = i * 0x80;
-		for (unsigned j = 0; j < 0x100; j++)
-		{
-			if (m_ram[(tx_offset + subOffset + j) & tx_mask] & 0x0100)
-			{
-				if (i > 0)
-					m_reg[REG_7_TXOFFSET] += subOffset * 2;
-				return j + 1;
-			}
-		}
+		words = std::move(m_local_rx.front());
+		m_local_rx.pop_front();
 	}
-	return 0;
+	else if (!m_local_peers.empty() || !m_context->receive(words))
+	{
+		return;
+	}
+
+	uint16_t address = m_reg[REG_RXOFFSET];
+	for (uint16_t const word : words)
+	{
+		m_ram[0x1000 | (address & 0x0fff)] = word;
+		address = next_address(address);
+	}
+	m_reg[REG_RXOFFSET] = address;
+	m_reg[REG_RXSIZE] = (m_reg[REG_RXSIZE] - words.size()) & 0x1fff;
+	m_reg[REG_STATUS] |= 2;
+
+	LOG("C139: received %d words\n", words.size());
+	update_irq();
+}
+
+void namco_c139_device::update_irq()
+{
+	if (!(m_reg[REG_MODE] & 8))
+		return;
+
+	// raising an interrupt masks its cause until the game clears the mask bit
+	bool fire = false;
+	if ((m_reg[REG_STATUS] & 2) && !(m_reg[REG_MODE] & 2))
+	{
+		m_reg[REG_MODE] |= 2;
+		m_rx_locked = true;
+		m_rx_irq_time = machine().time();
+		fire = true;
+	}
+	if (!m_tx_busy && !(m_reg[REG_MODE] & 4))
+	{
+		m_reg[REG_MODE] |= 4;
+		fire = true;
+	}
+
+	if (fire)
+		m_irq_cb(ASSERT_LINE);
 }
