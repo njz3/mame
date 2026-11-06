@@ -318,13 +318,14 @@ uint32_t taitojc_state::screen_update(screen_device &screen, bitmap_ind16 &bitma
 					m_hires->use_frame(*frame, [this] () { if (tc0780fpa_vk *const vk = m_tc0780fpa->vulkan()) vk->frame_ready(); });
 					m_hires->frame_done(cliprect);
 				}
+
+				// the frame replaces the native bitmap: nothing to compose there
+				return 0;
 			}
-			else
-			{
-				// the GPU failed: software from the next update on
-				osd_printf_warning("taitojc: Vulkan failed, hires3d continues in software\n");
-				m_tc0780fpa->vulkan_failed();
-			}
+
+			// the GPU failed: software from the next update on
+			osd_printf_warning("taitojc: Vulkan failed, hires3d continues in software\n");
+			m_tc0780fpa->vulkan_failed();
 		}
 		else
 		{

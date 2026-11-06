@@ -47,7 +47,7 @@ u32 const s_mix_frag[] = {
 constexpr VkFormat PEN_FORMAT = VK_FORMAT_R16_UINT;
 constexpr VkFormat DEPTH_FORMAT = VK_FORMAT_D32_SFLOAT;
 constexpr VkFormat DISPLAY_FORMAT = VK_FORMAT_B8G8R8A8_UNORM;
-constexpr float CLEAR_DEPTH = 0xffff / 65536.0f;    // the depth a swap clears to
+constexpr float CLEAR_DEPTH = 1.0f;                 // 0xffff, the depth a swap clears to
 constexpr u32 TEXTURE_PAGE = 0x1000;                // texture RAM uploaded in pages
 constexpr u32 TEXTURE_PAGES = TEXTURE_BYTES / TEXTURE_PAGE;
 constexpr int SLOTS = 3;
@@ -179,8 +179,8 @@ struct tc0780fpa_vk::impl : vk3d_context
 	void wait_slot(slot &target);
 	void wait_all();
 	void add_command(command_type type, u32 index);
-	void add_triangle(vertex const *v, int mode, texture const &tex, rectangle const &clip);
-	void add_quad(vertex const *v, int mode, texture const &tex, rectangle const &clip);
+	void add_triangle(vertex const *v, int mode, texture const &tex);
+	void add_quad(vertex const *v, int mode, texture const &tex);
 	u32 add_palette(rgb_t const *palette, u32 colors);
 	bool mix(push_constants const &push, int top, int bottom, rectangle const &visible, bitmap_rgb32 *&frame);
 	void begin_pass(VkCommandBuffer cmd, VkRenderPass const *variants, VkFramebuffer framebuffer, bool &ready, int w, int h);
@@ -565,101 +565,22 @@ void tc0780fpa_vk::impl::add_command(command_type type, u32 index)
 }
 
 
-void tc0780fpa_vk::impl::add_triangle(vertex const *v, int mode, texture const &tex, rectangle const &clip)
+void tc0780fpa_vk::impl::add_triangle(vertex const *v, int mode, texture const &tex)
 {
-	// poly_manager::render_triangle at the high resolution: sorted by Y, the
-	// rows covered
-	vertex hv[3];
-	for (int i = 0; i < 3; i++)
-	{
-		hv[i] = v[i];
-		hv[i].x *= scale;
-		hv[i].y *= scale;
-	}
-	rectangle const hclip(clip.left() * scale, (clip.right() + 1) * scale - 1, clip.top() * scale, (clip.bottom() + 1) * scale - 1);
-	vertex const *v1 = &hv[0];
-	vertex const *v2 = &hv[1];
-	vertex const *v3 = &hv[2];
-	if (v2->y < v1->y)
-		std::swap(v1, v2);
-	if (v3->y < v2->y)
-	{
-		std::swap(v2, v3);
-		if (v2->y < v1->y)
-			std::swap(v1, v2);
-	}
-	s32 const top = std::max(round_coordinate(v1->y), hclip.top());
-	s32 const bottom = std::min(round_coordinate(v3->y), hclip.bottom() + 1);
-	if (bottom - top <= 0)
-		return;
-
-	// the columns the extents may cover
-	float const minx = std::min(std::min(v1->x, v2->x), v3->x);
-	float const maxx = std::max(std::max(v1->x, v2->x), v3->x);
-	s32 const boxleft = std::max(round_coordinate(minx) - 1, hclip.left());
-	s32 const boxright = std::min(round_coordinate(maxx) + 2, hclip.right() + 1);
-	if (boxright <= boxleft)
-		return;
-
-	// slopes and parameter planes, as render_triangle computes them
-	float const dxdy_v1v2 = (v2->y == v1->y) ? 0.0f : (v2->x - v1->x) / (v2->y - v1->y);
-	float const dxdy_v1v3 = (v3->y == v1->y) ? 0.0f : (v3->x - v1->x) / (v3->y - v1->y);
-	float const dxdy_v2v3 = (v3->y == v2->y) ? 0.0f : (v3->x - v2->x) / (v3->y - v2->y);
-	float param_start[4], param_dpdx[4], param_dpdy[4];
-	float const a00 = v2->y - v3->y;
-	float const a01 = v3->x - v2->x;
-	float const a02 = v2->x*v3->y - v3->x*v2->y;
-	float const a10 = v3->y - v1->y;
-	float const a11 = v1->x - v3->x;
-	float const a12 = v3->x*v1->y - v1->x*v3->y;
-	float const a20 = v1->y - v2->y;
-	float const a21 = v2->x - v1->x;
-	float const a22 = v1->x*v2->y - v2->x*v1->y;
-	float const det = a02 + a12 + a22;
-	if (std::abs(det) < 0.00001f)
-	{
-		for (int i = 0; i < 4; i++)
-		{
-			param_dpdx[i] = 0.0f;
-			param_dpdy[i] = 0.0f;
-			param_start[i] = v1->p[i];
-		}
-	}
-	else
-	{
-		float const idet = 1.0f / det;
-		for (int i = 0; i < 4; i++)
-		{
-			param_dpdx[i] = idet * (v1->p[i]*a00 + v2->p[i]*a10 + v3->p[i]*a20);
-			param_dpdy[i] = idet * (v1->p[i]*a01 + v2->p[i]*a11 + v3->p[i]*a21);
-			param_start[i] = idet * (v1->p[i]*a02 + v2->p[i]*a12 + v3->p[i]*a22);
-		}
-	}
-
+	// the GPU rasterises it and interpolates its parameters
 	u32 const index = u32(tris.size() / TR_SIZE);
 	size_t const base = tris.size();
 	tris.resize(base + TR_SIZE);
 	u32 *const r = &tris[base];
 	r[PR_FLAGS] = u32(mode) | (u32(tex.wrap_x) << PF_WRAPX_SHIFT) | (u32(tex.wrap_y) << PF_WRAPY_SHIFT);
 	r[PR_TEXBASE] = u32(tex.base_x) | (u32(tex.base_y) << 16);
-	r[PR_TOP] = top;
-	r[PR_BOTTOM] = bottom;
-	r[PR_BOXLEFT] = boxleft;
-	r[PR_BOXRIGHT] = boxright;
-	r[PR_CLIPLEFT] = hclip.left();
-	r[PR_CLIPRIGHT] = hclip.right() + 1;
-	r[TR_V1X] = float_bits(v1->x);
-	r[TR_V1Y] = float_bits(v1->y);
-	r[TR_V2X] = float_bits(v2->x);
-	r[TR_V2Y] = float_bits(v2->y);
-	r[TR_DXDY13] = float_bits(dxdy_v1v3);
-	r[TR_DXDY12] = float_bits(dxdy_v1v2);
-	r[TR_DXDY23] = float_bits(dxdy_v2v3);
-	for (int i = 0; i < 4; i++)
+	for (int i = 0; i < 3; i++)
 	{
-		r[TR_START + i] = float_bits(param_start[i]);
-		r[TR_DPDX + i] = float_bits(param_dpdx[i]);
-		r[TR_DPDY + i] = float_bits(param_dpdy[i]);
+		u32 *const out = &r[TR_VERTS + i * TV_SIZE];
+		out[TV_X] = float_bits(v[i].x * scale);
+		out[TV_Y] = float_bits(v[i].y * scale);
+		for (int p = 0; p < 4; p++)
+			out[TV_P + p] = float_bits(v[i].p[p]);
 	}
 	add_command(CMD_TRIS, index);
 	prims_pending = true;
@@ -667,10 +588,12 @@ void tc0780fpa_vk::impl::add_triangle(vertex const *v, int mode, texture const &
 }
 
 
-void tc0780fpa_vk::impl::add_quad(vertex const *v, int mode, texture const &tex, rectangle const &clip)
+void tc0780fpa_vk::impl::add_quad(vertex const *v, int mode, texture const &tex)
 {
-	// poly_manager::render_polygon<4> at the high resolution: the rows
-	// covered
+	// the GPU rasterises its two triangles; the chip interpolates the
+	// parameters along the left and right edges of each row, which two
+	// triangles would not give on a quad that is not a parallelogram, so
+	// the shader evaluates render_polygon<4>'s edges
 	vertex hv[4];
 	for (int i = 0; i < 4; i++)
 	{
@@ -678,9 +601,7 @@ void tc0780fpa_vk::impl::add_quad(vertex const *v, int mode, texture const &tex,
 		hv[i].x *= scale;
 		hv[i].y *= scale;
 	}
-	rectangle const hclip(clip.left() * scale, (clip.right() + 1) * scale - 1, clip.top() * scale, (clip.bottom() + 1) * scale - 1);
-	float minx = hv[0].x;
-	float maxx = hv[0].x;
+	float zmin = hv[0].p[0];
 	int minv = 0;
 	int maxv = 0;
 	for (int i = 1; i < 4; i++)
@@ -689,12 +610,9 @@ void tc0780fpa_vk::impl::add_quad(vertex const *v, int mode, texture const &tex,
 			minv = i;
 		else if (hv[i].y > hv[maxv].y)
 			maxv = i;
-		minx = std::min(minx, hv[i].x);
-		maxx = std::max(maxx, hv[i].x);
+		zmin = std::min(zmin, hv[i].p[0]);
 	}
-	s32 const top = std::max(round_coordinate(hv[minv].y), hclip.top());
-	s32 const bottom = std::min(round_coordinate(hv[maxv].y), hclip.bottom() + 1);
-	if (bottom - top <= 0)
+	if (round_coordinate(hv[maxv].y) <= round_coordinate(hv[minv].y))
 		return;
 
 	// the edges forward and backward from the top vertex to the bottom one,
@@ -743,24 +661,18 @@ void tc0780fpa_vk::impl::add_quad(vertex const *v, int mode, texture const &tex,
 	int const lcount = forward_left ? fcount : bcount;
 	int const rcount = forward_left ? bcount : fcount;
 
-	// the columns the extents may cover
-	s32 const boxleft = std::max(round_coordinate(minx) - 1, hclip.left());
-	s32 const boxright = std::min(round_coordinate(maxx) + 2, hclip.right() + 1);
-	if (boxright <= boxleft)
-		return;
-
 	u32 const index = u32(quads.size() / QR_SIZE);
 	size_t const base = quads.size();
 	quads.resize(base + QR_SIZE, 0);
 	u32 *const r = &quads[base];
 	r[PR_FLAGS] = u32(mode) | (u32(tex.wrap_x) << PF_WRAPX_SHIFT) | (u32(tex.wrap_y) << PF_WRAPY_SHIFT) | (u32(lcount) << PF_LCOUNT_SHIFT) | (u32(rcount) << PF_RCOUNT_SHIFT);
 	r[PR_TEXBASE] = u32(tex.base_x) | (u32(tex.base_y) << 16);
-	r[PR_TOP] = top;
-	r[PR_BOTTOM] = bottom;
-	r[PR_BOXLEFT] = boxleft;
-	r[PR_BOXRIGHT] = boxright;
-	r[PR_CLIPLEFT] = hclip.left();
-	r[PR_CLIPRIGHT] = hclip.right() + 1;
+	for (int i = 0; i < 4; i++)
+	{
+		r[QR_CORNERS + i * 2] = float_bits(hv[i].x);
+		r[QR_CORNERS + i * 2 + 1] = float_bits(hv[i].y);
+	}
+	r[QR_ZMIN] = float_bits(zmin);
 	r[QR_MAXY] = float_bits(hv[maxv].y);
 	for (int side = 0; side < 2; side++)
 	{
@@ -976,7 +888,7 @@ bool tc0780fpa_vk::impl::flush(int readback_width, int readback_height)
 		push.scale = scale;
 		push.kind = is_quad ? KIND_QUAD : KIND_TRIANGLE;
 		vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
-		vkCmdDraw(cmd, c.count * 6, 1, 0, 0);
+		vkCmdDraw(cmd, c.count * (is_quad ? 6 : 3), 1, 0, 0);
 	}
 	if (current >= 0)
 		vkCmdEndRenderPass(cmd);
@@ -1144,12 +1056,12 @@ std::string const &tc0780fpa_vk::device_name() const
 }
 
 
-void tc0780fpa_vk::triangle(vertex const *v, int mode, texture const &tex, rectangle const &clip)
+void tc0780fpa_vk::triangle(vertex const *v, int mode, texture const &tex)
 {
 	impl &s = *m;
 	if (s.failed)
 		return;
-	s.add_triangle(v, mode, tex, clip);
+	s.add_triangle(v, mode, tex);
 
 	// send batches to the GPU as they fill, without waiting
 	if (s.tris.size() + s.quads.size() >= BATCH_RECORDS)
@@ -1157,12 +1069,12 @@ void tc0780fpa_vk::triangle(vertex const *v, int mode, texture const &tex, recta
 }
 
 
-void tc0780fpa_vk::quad(vertex const *v, int mode, texture const &tex, rectangle const &clip)
+void tc0780fpa_vk::quad(vertex const *v, int mode, texture const &tex)
 {
 	impl &s = *m;
 	if (s.failed)
 		return;
-	s.add_quad(v, mode, tex, clip);
+	s.add_quad(v, mode, tex);
 	if (s.tris.size() + s.quads.size() >= BATCH_RECORDS)
 		s.flush(0, 0);
 }

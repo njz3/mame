@@ -45,11 +45,15 @@ void tc0780fpa_renderer::swap_buffers()
 
 	m_current_fb ^= 1;
 
+	// on the GPU, nothing draws into the native buffers
+	if (m_vk)
+	{
+		m_vk->swap();
+		return;
+	}
+
 	m_fb[m_current_fb].fill(0, m_cliprect);
 	m_zb.fill(0xffff, m_cliprect);
-
-	if (m_vk)
-		m_vk->swap();
 }
 
 void tc0780fpa_renderer::draw(bitmap_ind16 &bitmap, const rectangle &cliprect, int scale)
@@ -253,7 +257,11 @@ void tc0780fpa_renderer::render(uint16_t *polygon_fifo, int length)
 			{
 				bool const solid = vert[0].p[1] == vert[1].p[1] &&
 					vert[1].p[1] == vert[2].p[1];
-				if (solid)
+				if (m_vk)
+				{
+					m_vk->triangle(vk_vertices(vert, 3, false).data(), solid ? tc0780fpa_vk::MODE_SOLID : tc0780fpa_vk::MODE_SHADE, {});
+				}
+				else if (solid)
 				{
 					// optimization: all colours the same -> render solid
 					render_triangle<2>(m_cliprect, render_delegate(&tc0780fpa_renderer::render_solid_scan, this), vert[0], vert[1], vert[2]);
@@ -262,8 +270,6 @@ void tc0780fpa_renderer::render(uint16_t *polygon_fifo, int length)
 				{
 					render_triangle<2>(m_cliprect, render_delegate(&tc0780fpa_renderer::render_shade_scan, this), vert[0], vert[1], vert[2]);
 				}
-				if (m_vk)
-					m_vk->triangle(vk_vertices(vert, 3, false).data(), solid ? tc0780fpa_vk::MODE_SOLID : tc0780fpa_vk::MODE_SHADE, {}, m_cliprect);
 			}
 			break;
 		}
@@ -292,7 +298,8 @@ void tc0780fpa_renderer::render(uint16_t *polygon_fifo, int length)
 			// 0x12: Vertex 3 X
 			// 0x13: Vertex 3 Z
 
-			tc0780fpa_polydata &extra = object_data().next();
+			tc0780fpa_polydata gpu_extra;
+			tc0780fpa_polydata &extra = m_vk ? gpu_extra : object_data().next();
 			uint16_t const texbase = polygon_fifo[ptr++];
 
 			extra.tex_base_x = ((texbase >> 0) & 0xff) << 4;
@@ -313,9 +320,10 @@ void tc0780fpa_renderer::render(uint16_t *polygon_fifo, int length)
 
 			if (vert[0].p[0] < 0x8000 && vert[1].p[0] < 0x8000 && vert[2].p[0] < 0x8000)
 			{
-				render_triangle<4>(m_cliprect, render_delegate(&tc0780fpa_renderer::render_texture_scan, this), vert[0], vert[1], vert[2]);
 				if (m_vk)
-					m_vk->triangle(vk_vertices(vert, 3, true).data(), tc0780fpa_vk::MODE_TEXTURE, { extra.tex_base_x, extra.tex_base_y, extra.tex_wrap_x, extra.tex_wrap_y }, m_cliprect);
+					m_vk->triangle(vk_vertices(vert, 3, true).data(), tc0780fpa_vk::MODE_TEXTURE, { extra.tex_base_x, extra.tex_base_y, extra.tex_wrap_x, extra.tex_wrap_y });
+				else
+					render_triangle<4>(m_cliprect, render_delegate(&tc0780fpa_renderer::render_texture_scan, this), vert[0], vert[1], vert[2]);
 			}
 			break;
 		}
@@ -354,7 +362,11 @@ void tc0780fpa_renderer::render(uint16_t *polygon_fifo, int length)
 				bool const solid = vert[0].p[1] == vert[1].p[1] &&
 					vert[1].p[1] == vert[2].p[1] &&
 					vert[2].p[1] == vert[3].p[1];
-				if (solid)
+				if (m_vk)
+				{
+					m_vk->quad(vk_vertices(vert, 4, false).data(), solid ? tc0780fpa_vk::MODE_SOLID : tc0780fpa_vk::MODE_SHADE, {});
+				}
+				else if (solid)
 				{
 					// optimization: all colours the same -> render solid
 					render_polygon<4, 2>(m_cliprect, render_delegate(&tc0780fpa_renderer::render_solid_scan, this), vert);
@@ -363,8 +375,6 @@ void tc0780fpa_renderer::render(uint16_t *polygon_fifo, int length)
 				{
 					render_polygon<4, 2>(m_cliprect, render_delegate(&tc0780fpa_renderer::render_shade_scan, this), vert);
 				}
-				if (m_vk)
-					m_vk->quad(vk_vertices(vert, 4, false).data(), solid ? tc0780fpa_vk::MODE_SOLID : tc0780fpa_vk::MODE_SHADE, {}, m_cliprect);
 			}
 			break;
 		}
@@ -399,7 +409,8 @@ void tc0780fpa_renderer::render(uint16_t *polygon_fifo, int length)
 			// 0x18: Vertex 4 X
 			// 0x19: Vertex 4 Z
 
-			tc0780fpa_polydata &extra = object_data().next();
+			tc0780fpa_polydata gpu_extra;
+			tc0780fpa_polydata &extra = m_vk ? gpu_extra : object_data().next();
 			uint16_t const texbase = polygon_fifo[ptr++];
 
 			extra.tex_base_x = ((texbase >> 0) & 0xff) << 4;
@@ -420,9 +431,10 @@ void tc0780fpa_renderer::render(uint16_t *polygon_fifo, int length)
 
 			if (vert[0].p[0] < 0xc000 && vert[1].p[0] < 0xc000 && vert[2].p[0] < 0xc000 && vert[3].p[0] < 0xc000)
 			{
-				render_polygon<4, 4>(m_cliprect, render_delegate(&tc0780fpa_renderer::render_texture_scan, this), vert);
 				if (m_vk)
-					m_vk->quad(vk_vertices(vert, 4, true).data(), tc0780fpa_vk::MODE_TEXTURE, { extra.tex_base_x, extra.tex_base_y, extra.tex_wrap_x, extra.tex_wrap_y }, m_cliprect);
+					m_vk->quad(vk_vertices(vert, 4, true).data(), tc0780fpa_vk::MODE_TEXTURE, { extra.tex_base_x, extra.tex_base_y, extra.tex_wrap_x, extra.tex_wrap_y });
+				else
+					render_polygon<4, 4>(m_cliprect, render_delegate(&tc0780fpa_renderer::render_texture_scan, this), vert);
 			}
 			break;
 		}
@@ -452,8 +464,8 @@ void tc0780fpa_device::device_start()
 	m_texture = std::make_unique<uint8_t[]>(0x400000);
 	m_poly_fifo = std::make_unique<uint16_t[]>(POLY_FIFO_SIZE);
 
-	// -hires3d: on the GPU unless -hires3d_renderer is software; the frame
-	// buffers of m_renderer then stay native for the native screen
+	// -hires3d: on the GPU unless -hires3d_renderer is software; m_renderer
+	// then stays native and draws nothing, unless the GPU fails
 	int const scale = std::clamp(machine().options().int_value(OPTION_HIRES3D), 1, 16);
 	if ((scale > 1) && (strcmp(machine().options().value(OPTION_HIRES3D_RENDERER), "software") != 0))
 	{

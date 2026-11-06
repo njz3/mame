@@ -7,12 +7,12 @@
     Vulkan renderer for the Taito TC0780FPA at a higher resolution (mame3d).
 
     With -hires3d, the two frame buffers (pens and depth) live on the GPU
-    at the high resolution.  The triangles and quads are drawn there by a
-    port of poly_manager's setup and the scanline renderers, with texture
-    RAM mirrored on the GPU, and the Taito JC screen is mixed there (native
-    layers under and over the 3D) and converted through the palette, then
-    read back.  The native frame buffers are still drawn by the software
-    renderer for the native screen.
+    at the high resolution.  The GPU rasterises the triangles and quads
+    themselves, and a fragment shader computes the chip's solid, shaded and
+    textured pixels, with texture RAM mirrored on the GPU.  The Taito JC
+    screen is mixed there (native layers under and over the 3D) and
+    converted through the palette, then read back.  Nothing is rasterised
+    on the CPU.
 
 ***************************************************************************/
 
@@ -55,9 +55,9 @@ public:
 
 	std::string const &device_name() const;
 
-	// render_triangle and render_polygon<4> with the native clip
-	void triangle(vertex const *v, int mode, texture const &tex, rectangle const &clip);
-	void quad(vertex const *v, int mode, texture const &tex, rectangle const &clip);
+	// a triangle or a quad of the chip
+	void triangle(vertex const *v, int mode, texture const &tex);
+	void quad(vertex const *v, int mode, texture const &tex);
 
 	// swap_buffers
 	void swap();
