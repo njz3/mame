@@ -30,11 +30,11 @@ Matériel visé, dans l'ordre :
 | 2 | Konami K001005 | gticlub, midnrun, windheat, jetwave | OK (gticlub, midnrun ×2) | OK (midnrun, gticlub) ; proche du natif |
 | 3 | 3dfx Voodoo 1/2 | sfrush, sfrushrk, calspeed, hyprdriv, vaportrx, roadburn, thrilld, racingj | OK (sfrush ×2 ×4, racingj ×2, roadburn ×2) ; coûteux en CPU | OK (même image que le logiciel) ; au niveau du natif en ×2 sur roadburn |
 | 4 | Midway V-Unit | crusnusa, crusnwld, offroadc | OK (3 jeux ×2 en démo 3D ; sommets entiers : bords natifs, textures HD) | OK (même image que le logiciel) ; ×4 60 s contre 81 s en logiciel |
-| 5 | Midway Zeus 2 | crusnexo | OK (crusnexo ×2, ×4, mode démo) | OK, vrais triangles, plus de raster CPU ; ×2 50 s contre 72 s en natif |
-| 6 | Namco System 21 | winrun, driveyes | OK (winrun, driveyes ×2) | OK, vrais quads, plus de raster CPU ; winrun ×4 22 s contre 29 s en natif |
-| 7 | Taito JC (TC0780FPA) | sidebs, sidebs2, dangcurv | OK (sidebs, sidebs2 ×2) | OK, vrais triangles et quads, plus de raster CPU ; ×4 77 s contre 79 s en natif |
-| 8 | Gaelco 3D | speedup, surfplnt, radikalb | OK (speedup, radikalb ×2) | OK, vrais triangles, plus de raster CPU ; CPU ×2 18 s contre 52 s en natif |
-| 9 | SNK HNG64 | roadedge, xrally | OK (roadedge, xrally ×2) | OK, vrais triangles, plus de raster CPU ; 2D au-dessus mélangée sur le GPU |
+| 5 | Midway Zeus 2 | crusnexo | OK (crusnexo ×2, ×4, mode démo) | OK, vrais triangles, plus de raster CPU ; temps CPU ×2 52 s contre 92 s en natif |
+| 6 | Namco System 21 | winrun, driveyes | OK (winrun, driveyes ×2) | OK, vrais quads, plus de raster CPU ; winrun, temps CPU ×4 14,5 s contre 23 s en natif |
+| 7 | Taito JC (TC0780FPA) | sidebs, sidebs2, dangcurv | OK (sidebs, sidebs2 ×2) | OK, vrais triangles et quads, plus de raster CPU ; temps CPU ×4 84,5 s contre 86 s en natif |
+| 8 | Gaelco 3D | speedup, surfplnt, radikalb | OK (speedup, radikalb ×2) | OK, vrais triangles, plus de raster CPU ; temps CPU ×2 18 s contre 52 s en natif |
+| 9 | SNK HNG64 | roadedge, xrally | OK (roadedge, xrally ×2) | OK, vrais triangles, plus de raster CPU, 2D au-dessus mélangée sur le GPU ; temps CPU ×4 75 s contre 88 s en natif |
 | — | Namco System 23 | motoxgo, raceon, finfurl | quand l'émulation de base marchera | |
 
 ## Architecture
@@ -587,3 +587,5 @@ Toutes les puces de la liste ont un rendu logiciel HD et un rendu Vulkan
 
     Le gain dépend de la part du raster dans le coût total : sidebs et roadedge
     passent surtout leur temps dans les processeurs émulés et la 2D.
+    Le temps réel varie trop d'un essai à l'autre pour conclure : sidebs ×4 a mis
+    77 s puis 101 s avec le même exécutable.
