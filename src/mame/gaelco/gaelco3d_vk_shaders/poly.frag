@@ -1,7 +1,7 @@
 // license:BSD-3-Clause
 // copyright-holders:njz3
-// Gaelco 3D triangles: render_triangle's extent of this pixel's row, then
-// render_noz_noperspective, render_normal or render_alphablend: plane
+// Gaelco 3D triangles: render_noz_noperspective, render_normal or
+// render_alphablend at this pixel: plane
 // equations of u/z, v/z and 1/z, 16-bit depth, texture mask and the
 // COLOR3D bilinear filter; the 50% blend as colour + 0.5 * destination
 #version 450
@@ -17,13 +17,6 @@ layout(location = 0, index = 0) out vec4 out_colour;
 layout(location = 0, index = 1) out vec4 out_factor;
 
 float F(uint offset) { return uintBitsToFloat(data[record + offset]); }
-
-// poly_manager::round_coordinate
-int round_coordinate(float value)
-{
-	float ipart = floor(value);
-	return int(ipart) + ((value - ipart > 0.5) ? 1 : 0);
-}
 
 uint texel(uint offset)
 {
@@ -69,40 +62,16 @@ void main()
 	int x = int(gl_FragCoord.x);
 	int y = pc.height - 1 - int(gl_FragCoord.y);
 
-	// the extent of this row
-	precise float fully = float(y) + 0.5;
-	precise float startx = F(GR_V1X) + (fully - F(GR_V1Y)) * F(GR_DXDY13);
-	precise float stopx;
-	if (fully < F(GR_V2Y))
-		stopx = F(GR_V1X) + (fully - F(GR_V1Y)) * F(GR_DXDY12);
-	else
-		stopx = F(GR_V2X) + (fully - F(GR_V2Y)) * F(GR_DXDY23);
-	int istartx = round_coordinate(startx);
-	int istopx = round_coordinate(stopx);
-	if (istartx > istopx)
-	{
-		int swap = istartx;
-		istartx = istopx;
-		istopx = swap;
-	}
-	istartx = max(istartx, int(data[record + GR_CLIPLEFT]));
-	istopx = min(istopx, int(data[record + GR_CLIPRIGHT]));
-	if ((x < istartx) || (x >= istopx))
-		discard;
-
-	// the plane equations at the first pixel of the extent, then this pixel
+	// the plane equations at this pixel
 	uint mode = data[record + GR_FLAGS];
 	float scanline = float(y);
-	float first = float(istartx);
-	float steps = float(x - istartx);
+	float column = float(x);
 	int u, v;
 	if (mode == GM_NOZ)
 	{
 		precise float zbase = 1.0 / F(GR_OOZ_BASE);
-		precise float uoz_step = F(GR_UOZ_DX) * zbase;
-		precise float voz_step = F(GR_VOZ_DX) * zbase;
-		precise float uoz = (F(GR_UOZ_BASE) + scanline * F(GR_UOZ_DY) + first * F(GR_UOZ_DX)) * zbase + steps * uoz_step;
-		precise float voz = (F(GR_VOZ_BASE) + scanline * F(GR_VOZ_DY) + first * F(GR_VOZ_DX)) * zbase + steps * voz_step;
+		precise float uoz = (F(GR_UOZ_BASE) + scanline * F(GR_UOZ_DY) + column * F(GR_UOZ_DX)) * zbase;
+		precise float voz = (F(GR_VOZ_BASE) + scanline * F(GR_VOZ_DY) + column * F(GR_VOZ_DX)) * zbase;
 		int zbufval = int(-F(GR_Z0) * zbase);
 		u = int(uoz);
 		v = int(voz);
@@ -110,12 +79,12 @@ void main()
 	}
 	else
 	{
-		precise float ooz = F(GR_OOZ_BASE) + scanline * F(GR_OOZ_DY) + first * F(GR_OOZ_DX) + steps * F(GR_OOZ_DX);
+		precise float ooz = F(GR_OOZ_BASE) + scanline * F(GR_OOZ_DY) + column * F(GR_OOZ_DX);
 		if (!(ooz > 0.0))
 			discard;
 		precise float z = 1.0 / ooz;
-		precise float uoz = F(GR_UOZ_BASE) + scanline * F(GR_UOZ_DY) + first * F(GR_UOZ_DX) + steps * F(GR_UOZ_DX);
-		precise float voz = F(GR_VOZ_BASE) + scanline * F(GR_VOZ_DY) + first * F(GR_VOZ_DX) + steps * F(GR_VOZ_DX);
+		precise float uoz = F(GR_UOZ_BASE) + scanline * F(GR_UOZ_DY) + column * F(GR_UOZ_DX);
+		precise float voz = F(GR_VOZ_BASE) + scanline * F(GR_VOZ_DY) + column * F(GR_VOZ_DX);
 		int zbufval = int(F(GR_Z0) * z);
 		u = int(uoz * z);
 		v = int(voz * z);

@@ -63,13 +63,6 @@ struct push_constants
 	u32 texture_size, mask_size, mask_offset;
 };
 
-// poly_manager::round_coordinate
-s32 round_coordinate(float value)
-{
-	float const ipart = std::floor(value);
-	return s32(ipart) + ((value - ipart > 0.5f) ? 1 : 0);
-}
-
 u32 float_bits(float value)
 {
 	u32 bits;
@@ -153,7 +146,7 @@ struct gaelco3d_vk::impl : vk3d_context
 	bool ensure_readback(int w, int h);
 	void wait_slot(slot &target);
 	void wait_all();
-	void add_triangle(int mode, plane const &p, u32 palette, vertex const &a, vertex const &b, vertex const &c, rectangle const &clip, u8 variant);
+	void add_triangle(int mode, plane const &p, u32 palette, vertex const &a, vertex const &b, vertex const &c, u8 variant);
 	int pick_entry();
 	void add_copy(int entry, int top, int bottom, rectangle const &visible);
 	void begin_pass(VkCommandBuffer cmd);
@@ -513,55 +506,20 @@ void gaelco3d_vk::impl::wait_all()
 //  recording
 //-------------------------------------------------
 
-void gaelco3d_vk::impl::add_triangle(int mode, plane const &p, u32 palette, vertex const &a, vertex const &b, vertex const &c, rectangle const &clip, u8 variant)
+void gaelco3d_vk::impl::add_triangle(int mode, plane const &p, u32 palette, vertex const &a, vertex const &b, vertex const &c, u8 variant)
 {
-	// poly_manager::render_triangle: sorted by Y, the rows covered
-	vertex const *v1 = &a;
-	vertex const *v2 = &b;
-	vertex const *v3 = &c;
-	if (v2->y < v1->y)
-		std::swap(v1, v2);
-	if (v3->y < v2->y)
-	{
-		std::swap(v2, v3);
-		if (v2->y < v1->y)
-			std::swap(v1, v2);
-	}
-	s32 const top = std::max(round_coordinate(v1->y), clip.top());
-	s32 const bottom = std::min(round_coordinate(v3->y), clip.bottom() + 1);
-	if (bottom - top <= 0)
-		return;
-
-	// the columns the extents may cover
-	float const minx = std::min(std::min(v1->x, v2->x), v3->x);
-	float const maxx = std::max(std::max(v1->x, v2->x), v3->x);
-	s32 const boxleft = std::max(round_coordinate(minx) - 1, clip.left());
-	s32 const boxright = std::min(round_coordinate(maxx) + 2, clip.right() + 1);
-	if (boxright <= boxleft)
-		return;
-
-	float const dxdy_v1v2 = (v2->y == v1->y) ? 0.0f : (v2->x - v1->x) / (v2->y - v1->y);
-	float const dxdy_v1v3 = (v3->y == v1->y) ? 0.0f : (v3->x - v1->x) / (v3->y - v1->y);
-	float const dxdy_v2v3 = (v3->y == v2->y) ? 0.0f : (v3->x - v2->x) / (v3->y - v2->y);
-
+	// the GPU rasterises it
 	u32 const index = u32(tris.size() / GR_SIZE);
 	size_t const base = tris.size();
 	tris.resize(base + GR_SIZE);
 	u32 *const r = &tris[base];
 	r[GR_FLAGS] = u32(mode);
-	r[GR_TOP] = top;
-	r[GR_BOTTOM] = bottom;
-	r[GR_BOXLEFT] = boxleft;
-	r[GR_BOXRIGHT] = boxright;
-	r[GR_CLIPLEFT] = clip.left();
-	r[GR_CLIPRIGHT] = clip.right() + 1;
-	r[GR_V1X] = float_bits(v1->x);
-	r[GR_V1Y] = float_bits(v1->y);
-	r[GR_V2X] = float_bits(v2->x);
-	r[GR_V2Y] = float_bits(v2->y);
-	r[GR_DXDY13] = float_bits(dxdy_v1v3);
-	r[GR_DXDY12] = float_bits(dxdy_v1v2);
-	r[GR_DXDY23] = float_bits(dxdy_v2v3);
+	r[GR_VERTS + 0] = float_bits(a.x);
+	r[GR_VERTS + 1] = float_bits(a.y);
+	r[GR_VERTS + 2] = float_bits(b.x);
+	r[GR_VERTS + 3] = float_bits(b.y);
+	r[GR_VERTS + 4] = float_bits(c.x);
+	r[GR_VERTS + 5] = float_bits(c.y);
 	r[GR_TEX] = p.tex;
 	r[GR_COLOR] = p.color;
 	r[GR_PALETTE] = palette;
@@ -764,7 +722,7 @@ bool gaelco3d_vk::impl::flush()
 		}
 		push_constants const push = { 1.0f / width, 1.0f / height, tri_base + c.first * GR_SIZE, value_base, height, texture_size, mask_size, texture_size / 4 };
 		vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
-		vkCmdDraw(cmd, c.count * 6, 1, 0, 0);
+		vkCmdDraw(cmd, c.count * 3, 1, 0, 0);
 	}
 	if (in_pass)
 		vkCmdEndRenderPass(cmd);
@@ -865,7 +823,7 @@ std::string const &gaelco3d_vk::device_name() const
 }
 
 
-void gaelco3d_vk::polygon(int mode, plane const &p, int numverts, vertex const *v, rectangle const &clip)
+void gaelco3d_vk::polygon(int mode, plane const &p, int numverts, vertex const *v)
 {
 	impl &s = *m;
 	if (s.failed || (numverts < 3))
@@ -886,7 +844,7 @@ void gaelco3d_vk::polygon(int mode, plane const &p, int numverts, vertex const *
 	bool const compare = (mode != MODE_NOZ) && (p.z0 >= 0.0f);
 	u8 const variant = (compare ? 1 : 0) | ((mode == MODE_ALPHA) ? 2 : 0);
 	for (int i = 2; i < numverts; i++)
-		s.add_triangle(mode, p, s.palette_offset, v[0], v[i - 1], v[i], clip, variant);
+		s.add_triangle(mode, p, s.palette_offset, v[0], v[i - 1], v[i], variant);
 
 	// send batches to the GPU as they fill, without waiting
 	if (s.tris.size() >= BATCH_TRIS * GR_SIZE)

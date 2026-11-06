@@ -8,11 +8,10 @@
     (mame3d).
 
     With -hires3d, the frame and depth buffers live on the GPU at the high
-    resolution.  The polygons are drawn there by a port of the scanline
-    renderers (plane equations, texture mask, COLOR3D filter, 50% blend)
-    with the texture ROM uploaded once, and the rows shown are read back.
-    The native buffers are still drawn by the software renderer for the
-    native screen.
+    resolution.  The GPU rasterises the polygons, and a fragment shader
+    computes the chip's pixels (plane equations, texture mask, COLOR3D
+    filter, 50% blend) with the texture ROM uploaded once.  The rows shown
+    are read back.  Nothing is rasterised on the CPU.
 
 ***************************************************************************/
 
@@ -58,9 +57,9 @@ public:
 
 	std::string const &device_name() const;
 
-	// a polygon of render_poly as render_triangle_fan draws it, vertices and
-	// clip at the high resolution
-	void polygon(int mode, plane const &p, int numverts, vertex const *v, rectangle const &clip);
+	// a polygon of render_poly, a triangle fan, vertices at the high
+	// resolution
+	void polygon(int mode, plane const &p, int numverts, vertex const *v);
 
 	// a palette write
 	void palette_changed();

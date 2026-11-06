@@ -60,7 +60,7 @@ gaelco3d_state::gaelco3d_renderer::gaelco3d_renderer(gaelco3d_state &state) :
 			dst[y * 4096 + x] = (src[(x / 1024) * (m_texmask_size / 8 / 4) + (y * 1024 + x % 1024) / 8] >> (x % 8)) & 1;
 
 	// -hires3d: on the GPU unless -hires3d_renderer is software; the buffers
-	// here then stay native for the native screen
+	// here then stay native and nothing draws into them, unless the GPU fails
 	int const width = state.m_screen->width();
 	int const height = state.m_screen->height();
 	if ((m_scale > 1) && (strcmp(state.machine().options().value(OPTION_HIRES3D_RENDERER), "software") != 0))
@@ -151,7 +151,8 @@ void gaelco3d_state::gaelco3d_renderer::render_poly(screen_device &screen, uint3
 	float const voz_base = tms320c3x_device::fp_to_float(polydata[7]) * 256.0f - midx * voz_dx - midy * voz_dy;
 	float const ooz_base = tms320c3x_device::fp_to_float(polydata[8]) - midx * ooz_dx - midy * ooz_dy;
 	float const uoz_base = tms320c3x_device::fp_to_float(polydata[9]) * 256.0f - midx * uoz_dx - midy * uoz_dy;
-	gaelco3d_object_data &object = object_data().next();
+	gaelco3d_object_data gpu_object;
+	gaelco3d_object_data &object = m_vk ? gpu_object : object_data().next();
 	int const color = (polydata[10] & 0x7f) << 8;
 	vertex_t vert[MAX_VERTICES];
 	gaelco3d_vk::vertex hvert[MAX_VERTICES];
@@ -211,6 +212,28 @@ void gaelco3d_state::gaelco3d_renderer::render_poly(screen_device &screen, uint3
 	/* if we have a valid number of verts, render them */
 	if (vertnum >= 3)
 	{
+		// on the GPU at the high resolution, with the same outermost vertices
+		if (m_vk)
+		{
+			float const hmaxx = float(screen.width()) * hscale;
+			float const hmaxy = float(screen.height()) * hscale;
+			for (int i = 0; i < vertnum; i++)
+			{
+				if (hvert[i].x > hmaxx - hscale && hvert[i].x < hmaxx)
+					hvert[i].x = hmaxx;
+				if (hvert[i].y > hmaxy - hscale && hvert[i].y < hmaxy)
+					hvert[i].y = hmaxy;
+			}
+			gaelco3d_vk::plane const p = { object.tex, uint32_t(color), z0,
+					ooz_base, ooz_dx / hscale, ooz_dy / hscale,
+					uoz_base, uoz_dx / hscale, uoz_dy / hscale,
+					voz_base, voz_dx / hscale, voz_dy / hscale };
+			int const mode = (color != 0x7f00 && z0 < 0 && ooz_dx == 0 && ooz_dy == 0) ? gaelco3d_vk::MODE_NOZ : (color != 0x7f00) ? gaelco3d_vk::MODE_NORMAL : gaelco3d_vk::MODE_ALPHA;
+			m_vk->polygon(mode, p, vertnum, hvert);
+			m_polygons += vertnum - 2;
+			return;
+		}
+
 		/* Prevent poly.h down-rounding from discarding the outermost vert coord */
 		float const maxx = float(screen.width()) * scale;
 		float const maxy = float(screen.height()) * scale;
@@ -236,27 +259,6 @@ void gaelco3d_state::gaelco3d_renderer::render_poly(screen_device &screen, uint3
 		/* color 0x7f seems to be hard-coded as a 50% alpha blend */
 		else
 			render_triangle_fan<0>(visarea, render_delegate(&gaelco3d_renderer::render_alphablend, this), vertnum, &vert[0]);
-
-		// and again on the GPU at the high resolution
-		if (m_vk)
-		{
-			float const hmaxx = float(screen.width()) * hscale;
-			float const hmaxy = float(screen.height()) * hscale;
-			for (int i = 0; i < vertnum; i++)
-			{
-				if (hvert[i].x > hmaxx - hscale && hvert[i].x < hmaxx)
-					hvert[i].x = hmaxx;
-				if (hvert[i].y > hmaxy - hscale && hvert[i].y < hmaxy)
-					hvert[i].y = hmaxy;
-			}
-			const rectangle hvisarea(vis.left() * m_vk_scale, (vis.right() + 1) * m_vk_scale - 1, vis.top() * m_vk_scale, (vis.bottom() + 1) * m_vk_scale - 1);
-			gaelco3d_vk::plane const p = { object.tex, uint32_t(color), z0,
-					ooz_base, ooz_dx / hscale, ooz_dy / hscale,
-					uoz_base, uoz_dx / hscale, uoz_dy / hscale,
-					voz_base, voz_dx / hscale, voz_dy / hscale };
-			int const mode = (color != 0x7f00 && z0 < 0 && ooz_dx == 0 && ooz_dy == 0) ? gaelco3d_vk::MODE_NOZ : (color != 0x7f00) ? gaelco3d_vk::MODE_NORMAL : gaelco3d_vk::MODE_ALPHA;
-			m_vk->polygon(mode, p, vertnum, hvert, hvisarea);
-		}
 
 		m_polygons += vertnum - 2;
 	}
@@ -528,13 +530,15 @@ uint32_t gaelco3d_state::screen_update(screen_device &screen, bitmap_rgb32 &bitm
 				m_hires->use_frame(*frame, [this] () { if (gaelco3d_vk *const vk = m_poly->vulkan()) vk->frame_ready(); });
 				m_hires->frame_done(cliprect);
 			}
+
+			// the frame replaces the native bitmap
+			m_video_changed = false;
+			return 0;
 		}
-		else
-		{
-			// the GPU failed: continue with the native frame magnified
-			osd_printf_warning("gaelco3d: Vulkan failed, hires3d continues in software\n");
-			m_poly->vulkan_failed();
-		}
+
+		// the GPU failed: continue with the native frame magnified
+		osd_printf_warning("gaelco3d: Vulkan failed, hires3d continues in software\n");
+		m_poly->vulkan_failed();
 	}
 	if (scale == 1)
 	{

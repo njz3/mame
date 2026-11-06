@@ -14,15 +14,3 @@ layout(push_constant) uniform push_t
 	uint mask_size;     // mask bits
 	uint mask_offset;   // first mask word in the texture buffer
 } pc;
-
-#ifdef VERTEX_SHADER
-// box of target pixels, two triangles from the vertex index
-vec4 box_position(float left, float top, float right, float bottom)
-{
-	uint corner = uint(gl_VertexIndex) % 6u;
-	bool r = (corner == 1u) || (corner == 3u) || (corner == 4u);
-	bool b = (corner == 2u) || (corner == 4u) || (corner == 5u);
-	vec2 pos = vec2(r ? right : left, b ? bottom : top);
-	return vec4(pos * pc.inv_size * 2.0 - 1.0, 0.0, 1.0);
-}
-#endif
