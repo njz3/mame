@@ -133,6 +133,9 @@ public:
 	std::unique_ptr<uint32_t[]> m_waveram;
 	std::unique_ptr<uint32_t[]> m_frameColor;
 	std::unique_ptr<int32_t[]> m_frameDepth;
+	attotime m_native_until = attotime::zero;   // Vulkan: draw natively too until then
+	uint32_t m_frame_reads = 0;
+	bool native_raster() const { return !m_vk || (machine().time() < m_native_until); }
 
 	// -hires3d: a copy of the frame buffer at m_hires_scale times the native
 	// resolution, with the same row layout; the polygons are drawn into both,
@@ -326,6 +329,13 @@ public:
 	// Read from frame buffer
 	void frame_read()
 	{
+		// on the GPU, the native frame buffer is drawn only for a while after
+		// the CPU reads it
+		if (m_vk)
+		{
+			m_native_until = machine().time() + attotime::from_seconds(2);
+			m_frame_reads++;
+		}
 		uint32_t addr = frame_addr_from_phys_addr(m_zeusbase[0x51]);
 		m_zeusbase[0x58] = m_frameColor[addr];
 		m_zeusbase[0x59] = m_frameColor[addr + 1];

@@ -1,6 +1,6 @@
 // license:BSD-3-Clause
 // copyright-holders:njz3
-// Zeus 2 triangles: render_triangle's extent of this pixel's row and the
+// Zeus 2 triangles, rasterised by the GPU: the first pixel of this row, the
 // parameters at the pixel (integer depth steps, perspective-correct texture
 // coordinates), then render_poly_8bit: depth floor, solid, RGB555, alpha
 // and palette texels with the bilinear filter of rgbaint_t, and the pixel
@@ -129,6 +129,8 @@ void main()
 	int x = int(gl_FragCoord.x) - int(data[record + TR_WINX]);
 	int y = int(gl_FragCoord.y) - int(data[record + TR_WINY]);
 	state = pc.states + data[record + TR_STATE] * PS_SIZE;
+	if ((y < int(data[record + TR_TOP])) || (y >= int(data[record + TR_BOTTOM])))
+		discard;
 
 	// the extent of this row
 	precise float fully = float(y) + 0.5;

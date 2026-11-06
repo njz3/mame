@@ -6,10 +6,12 @@
 
     Data shared by zeus2_vk.cpp and its shaders, as 32-bit word offsets.
 
-    A triangle record holds poly_manager::render_triangle's setup in
-    high-resolution pixels relative to the render window: the fragment
-    shader rebuilds the extent of its row and the parameters at its pixel
-    from it, then runs render_poly_8bit with the state record.
+    A triangle record holds its vertices, for the GPU to rasterise, and
+    poly_manager::render_triangle's setup, in high-resolution pixels
+    relative to the render window: the fragment shader rebuilds the
+    parameters at its pixel from it (the chip's depth steps start from the
+    first pixel of the row), then runs render_poly_8bit with the state
+    record.
 
 ***************************************************************************/
 
@@ -17,16 +19,16 @@
 #define TR_STATE        0       // state record index
 #define TR_TOP          1       // window rows top .. bottom - 1
 #define TR_BOTTOM       2
-#define TR_BOXLEFT      3       // window columns of the drawn box
-#define TR_BOXRIGHT     4
-#define TR_CLIPLEFT     5       // clip columns left .. right - 1
-#define TR_CLIPRIGHT    6
-#define TR_WINX         7       // target pixel of the window origin
-#define TR_WINY         8
-#define TR_V1X          9       // floats: top and middle vertices
-#define TR_V1Y          10
-#define TR_V2X          11
-#define TR_V2Y          12
+#define TR_CLIPLEFT     3       // clip columns left .. right - 1
+#define TR_CLIPRIGHT    4
+#define TR_WINX         5       // target pixel of the window origin
+#define TR_WINY         6
+#define TR_V1X          7       // floats: vertices sorted by Y
+#define TR_V1Y          8
+#define TR_V2X          9
+#define TR_V2Y          10
+#define TR_V3X          11
+#define TR_V3Y          12
 #define TR_DXDY13       13      // floats: edge slopes
 #define TR_DXDY12       14
 #define TR_DXDY23       15

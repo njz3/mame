@@ -209,6 +209,8 @@ void zeus2_device::device_reset()
 #endif
 void zeus2_device::device_stop()
 {
+	if (m_vk)
+		osd_printf_verbose("zeus2: %u frame buffer reads by the CPU\n", m_frame_reads);
 #if DUMP_WAVE_RAM
 	std::string fileName = "waveram_";
 	fileName += machine().system().name;
@@ -278,14 +280,6 @@ uint32_t zeus2_device::screen_update(screen_device &screen, bitmap_rgb32 &bitmap
 	//if (!machine().input().code_pressed(KEYCODE_W))
 	if (1)
 	{
-		/* normal update case */
-		for (y = cliprect.top(); y <= cliprect.bottom(); y++)
-		{
-			uint32_t *colorptr = &m_frameColor[frame_addr_from_xy(0, y, false)];
-			std::copy(colorptr + cliprect.left(), colorptr + cliprect.right() + 1, &bitmap.pix(y, cliprect.left()));
-		}
-
-		// high-resolution frame from the magnified copy
 		bool const hires_active = (m_hires_scale > 1) && m_hires->active();
 		if (hires_active && m_vk)
 		{
@@ -299,15 +293,25 @@ uint32_t zeus2_device::screen_update(screen_device &screen, bitmap_rgb32 &bitmap
 					m_hires->use_frame(*frame);
 					m_hires->frame_done(cliprect);
 				}
+
+				// the frame replaces the native bitmap
+				return 0;
 			}
-			else
-			{
-				// the GPU failed: continue in software from the native frame buffer
-				osd_printf_warning("zeus2: Vulkan failed, hires3d continues in software\n");
-				m_vk.reset();
-				hires_software_start();
-			}
+
+			// the GPU failed: continue in software from the native frame buffer
+			osd_printf_warning("zeus2: Vulkan failed, hires3d continues in software\n");
+			m_vk.reset();
+			hires_software_start();
 		}
+
+		/* normal update case */
+		for (y = cliprect.top(); y <= cliprect.bottom(); y++)
+		{
+			uint32_t *colorptr = &m_frameColor[frame_addr_from_xy(0, y, false)];
+			std::copy(colorptr + cliprect.left(), colorptr + cliprect.right() + 1, &bitmap.pix(y, cliprect.left()));
+		}
+
+		// high-resolution frame from the magnified copy
 		if (hires_active && !m_vk)
 		{
 			int const scale = m_hires_scale;
@@ -952,12 +956,15 @@ void zeus2_device::zeus2_register_update(offs_t offset, uint32_t oldval, int log
 				}
 				if (logit)
 					logerror(" -- Clearing buffer: numPixels: %08X addr: %08X reg51: %08X", numPixels, addr, m_zeusbase[0x51]);
-				for (int count = 0; count < numPixels; count++) {
-					// Crusn wraps the frame buffer during fill so need to mask address
-					m_frameColor[(addr + count) & (WAVERAM1_WIDTH * WAVERAM1_HEIGHT * 2 - 1)] = m_fill_color;
-					m_frameDepth[(addr + count) & (WAVERAM1_WIDTH * WAVERAM1_HEIGHT * 2 - 1)] = m_fill_depth;
-					if (m_hiresColor)
-						hires_write(addr + count, m_fill_color, true, m_fill_depth);
+				if (native_raster())
+				{
+					for (int count = 0; count < numPixels; count++) {
+						// Crusn wraps the frame buffer during fill so need to mask address
+						m_frameColor[(addr + count) & (WAVERAM1_WIDTH * WAVERAM1_HEIGHT * 2 - 1)] = m_fill_color;
+						m_frameDepth[(addr + count) & (WAVERAM1_WIDTH * WAVERAM1_HEIGHT * 2 - 1)] = m_fill_depth;
+						if (m_hiresColor)
+							hires_write(addr + count, m_fill_color, true, m_fill_depth);
+					}
 				}
 				if (m_vk)
 					m_vk->fill(addr, numPixels, m_fill_color, m_fill_depth);
@@ -1901,7 +1908,11 @@ void zeus2_renderer::zeus2_render_poly(vertex_t *vert, int numverts, uint32_t te
 			return;
 	}
 
-	zeus2_poly_extra_data& extra = this->object_data().next();
+	// on the GPU, the native frame buffer is only drawn when the CPU reads it:
+	// the rest of the time, nothing here queues work for the software renderer
+	bool const native = m_state->native_raster();
+	zeus2_poly_extra_data gpu_extra{};
+	zeus2_poly_extra_data& extra = native ? this->object_data().next() : gpu_extra;
 
 	extra.ucode_src = m_state->m_curUCodeSrc;
 	extra.tex_src = m_state->zeus_texbase;
@@ -1962,9 +1973,10 @@ void zeus2_renderer::zeus2_render_poly(vertex_t *vert, int numverts, uint32_t te
 		break;
 	}
 
-	render_triangle_fan<4>(m_state->zeus_cliprect, render_delegate(&zeus2_renderer::render_poly_8bit, this), numverts, clipvert);
+	if (native)
+		render_triangle_fan<4>(m_state->zeus_cliprect, render_delegate(&zeus2_renderer::render_poly_8bit, this), numverts, clipvert);
 
-	// and again into the high-resolution copy, on the GPU or in software
+	// and into the high-resolution copy, on the GPU or in software
 	int const scale = m_state->m_hires_scale;
 	if (m_state->m_vk)
 	{

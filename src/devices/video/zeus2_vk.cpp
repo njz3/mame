@@ -66,6 +66,7 @@ struct command
 	u32 first;          // record or copy region
 	u32 count;
 	int entry;          // copy: read-back entry
+	VkRect2D scissor;   // triangles: the clip in the render window
 };
 
 struct push_constants
@@ -193,7 +194,7 @@ struct zeus2_vk::impl : vk3d_context
 	void wait_slot(slot &target);
 	void wait_all();
 	void check_resync();
-	void add_command(command_type type, u8 variant, u32 index);
+	void add_command(command_type type, u8 variant, u32 index, VkRect2D const &scissor);
 	void add_span(u32 x, u32 y, u32 count, u32 value, u32 flags, bool depth_write);
 	void add_triangle(u32 state_index, vertex const &a, vertex const &b, vertex const &c, rectangle const &clip, s32 winx, s32 winy, u8 variant);
 	u32 state_record(state const &st);
@@ -577,12 +578,14 @@ void zeus2_vk::impl::check_resync()
 }
 
 
-void zeus2_vk::impl::add_command(command_type type, u8 variant, u32 index)
+void zeus2_vk::impl::add_command(command_type type, u8 variant, u32 index, VkRect2D const &scissor)
 {
 	if (!commands.empty())
 	{
 		command &last = commands.back();
-		if ((last.type == type) && (last.variant == variant) && (last.first + last.count == index))
+		if ((last.type == type) && (last.variant == variant) && (last.first + last.count == index) &&
+				(last.scissor.offset.x == scissor.offset.x) && (last.scissor.offset.y == scissor.offset.y) &&
+				(last.scissor.extent.width == scissor.extent.width) && (last.scissor.extent.height == scissor.extent.height))
 		{
 			last.count++;
 			return;
@@ -594,6 +597,7 @@ void zeus2_vk::impl::add_command(command_type type, u8 variant, u32 index)
 	cmd.first = index;
 	cmd.count = 1;
 	cmd.entry = -1;
+	cmd.scissor = scissor;
 	commands.push_back(cmd);
 }
 
@@ -607,7 +611,7 @@ void zeus2_vk::impl::add_span(u32 x, u32 y, u32 count, u32 value, u32 flags, boo
 	spans.push_back(value);
 	spans.push_back(flags);
 	touch(y * scale, (y + 1) * scale);
-	add_command(CMD_SPANS, depth_write ? 1 : 0, index);
+	add_command(CMD_SPANS, depth_write ? 1 : 0, index, VkRect2D{});
 }
 
 
@@ -715,8 +719,6 @@ void zeus2_vk::impl::add_triangle(u32 state_index, vertex const &a, vertex const
 	r[TR_STATE] = state_index;
 	r[TR_TOP] = top;
 	r[TR_BOTTOM] = bottom;
-	r[TR_BOXLEFT] = boxleft;
-	r[TR_BOXRIGHT] = boxright;
 	r[TR_CLIPLEFT] = clip.left();
 	r[TR_CLIPRIGHT] = clip.right() + 1;
 	r[TR_WINX] = winx;
@@ -725,6 +727,8 @@ void zeus2_vk::impl::add_triangle(u32 state_index, vertex const &a, vertex const
 	r[TR_V1Y] = float_bits(v1->y);
 	r[TR_V2X] = float_bits(v2->x);
 	r[TR_V2Y] = float_bits(v2->y);
+	r[TR_V3X] = float_bits(v3->x);
+	r[TR_V3Y] = float_bits(v3->y);
 	r[TR_DXDY13] = float_bits(dxdy_v1v3);
 	r[TR_DXDY12] = float_bits(dxdy_v1v2);
 	r[TR_DXDY23] = float_bits(dxdy_v2v3);
@@ -735,7 +739,14 @@ void zeus2_vk::impl::add_triangle(u32 state_index, vertex const &a, vertex const
 		r[TR_DPDY + i] = float_bits(param_dpdy[i]);
 	}
 	touch(winy + top, winy + bottom);
-	add_command(CMD_TRIS, variant, index);
+
+	// the GPU fills the triangle: only within the clip, not all the frame buffer
+	s32 const scissor_left = std::clamp(winx + clip.left(), 0, width);
+	s32 const scissor_top = std::clamp(winy + clip.top(), 0, height);
+	s32 const scissor_right = std::clamp(winx + clip.right() + 1, 0, width);
+	s32 const scissor_bottom = std::clamp(winy + clip.bottom() + 1, 0, height);
+	VkRect2D const scissor{ { scissor_left, scissor_top }, { u32(std::max(scissor_right - scissor_left, 0)), u32(std::max(scissor_bottom - scissor_top, 0)) } };
+	add_command(CMD_TRIS, variant, index, scissor);
 	tris_pending = true;
 	tri_count++;
 }
@@ -982,6 +993,8 @@ bool zeus2_vk::impl::flush()
 			in_pass = true;
 			bound = VK_NULL_HANDLE;
 		}
+		VkRect2D const whole{ { 0, 0 }, { u32(width), u32(height) } };
+		vkCmdSetScissor(cmd, 0, 1, (c.type == CMD_TRIS) ? &c.scissor : &whole);
 		VkPipeline const pipeline = (c.type == CMD_TRIS) ? tri_pipelines[c.variant] : span_pipelines[c.variant];
 		if (pipeline != bound)
 		{
@@ -991,7 +1004,7 @@ bool zeus2_vk::impl::flush()
 		u32 const base = (c.type == CMD_TRIS) ? (tri_base + c.first * TR_SIZE) : (span_base + c.first * SR_SIZE);
 		push_constants const push = { 1.0f / width, 1.0f / height, base, state_base, value_base, scale };
 		vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
-		vkCmdDraw(cmd, c.count * 6, 1, 0, 0);
+		vkCmdDraw(cmd, c.count * ((c.type == CMD_TRIS) ? 3 : 6), 1, 0, 0);
 	}
 	if (in_pass)
 		vkCmdEndRenderPass(cmd);
