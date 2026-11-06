@@ -81,13 +81,6 @@ struct command
 	push_constants mix;
 };
 
-// poly_manager::round_coordinate
-s32 round_coordinate(float value)
-{
-	float const ipart = std::floor(value);
-	return s32(ipart) + ((value - ipart > 0.5f) ? 1 : 0);
-}
-
 u32 float_bits(float value)
 {
 	u32 bits;
@@ -244,8 +237,16 @@ hng64_vk::impl::~impl()
 
 bool hng64_vk::impl::init(std::string &error)
 {
-	if (!init_device(error))
+	// depth clamping: the chip does not clip polygons in Z
+	VkPhysicalDeviceFeatures wanted{};
+	wanted.depthClamp = VK_TRUE;
+	if (!init_device(error, &wanted))
 		return false;
+	if (!enabled_features().depthClamp)
+	{
+		error = "the GPU lacks depthClamp";
+		return false;
+	}
 
 	// render passes: the frame buffers stay in the general layout, so that
 	// one can be drawn into while the other is read by the mix
@@ -399,6 +400,7 @@ VkPipeline hng64_vk::impl::make_pipeline(u32 const *vertex, size_t vertex_size, 
 	viewport.viewportCount = 1;
 	viewport.scissorCount = 1;
 	VkPipelineRasterizationStateCreateInfo raster{ VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
+	raster.depthClampEnable = VK_TRUE;
 	raster.polygonMode = VK_POLYGON_MODE_FILL;
 	raster.cullMode = VK_CULL_MODE_NONE;
 	raster.lineWidth = 1.0f;
@@ -565,105 +567,27 @@ void hng64_vk::impl::add_command(command_type type, u32 index)
 
 void hng64_vk::impl::add_triangle(state const &st, vertex const &a, vertex const &b, vertex const &c)
 {
-	// poly_manager::render_triangle at the high resolution, clipped to the
-	// buffer (0 .. size inclusive, as drawShaded sets it): sorted by Y, the
-	// rows covered
-	rectangle const hclip(0, width, 0, height);
-	vertex hv[3] = { a, b, c };
-	for (vertex &v : hv)
-	{
-		v.x *= scale;
-		v.y *= scale;
-	}
-	vertex const *v1 = &hv[0];
-	vertex const *v2 = &hv[1];
-	vertex const *v3 = &hv[2];
-	if (v2->y < v1->y)
-		std::swap(v1, v2);
-	if (v3->y < v2->y)
-	{
-		std::swap(v2, v3);
-		if (v2->y < v1->y)
-			std::swap(v1, v2);
-	}
-	s32 const top = std::max(round_coordinate(v1->y), hclip.top());
-	s32 const bottom = std::min(std::min(round_coordinate(v3->y), hclip.bottom() + 1), height);
-	if (bottom - top <= 0)
-		return;
-
-	// the columns the extents may cover
-	float const minx = std::min(std::min(v1->x, v2->x), v3->x);
-	float const maxx = std::max(std::max(v1->x, v2->x), v3->x);
-	s32 const boxleft = std::max(round_coordinate(minx) - 1, hclip.left());
-	s32 const boxright = std::min(std::min(round_coordinate(maxx) + 2, hclip.right() + 1), width);
-	if (boxright <= boxleft)
-		return;
-
-	// slopes and parameter planes, as render_triangle computes them
-	float const dxdy_v1v2 = (v2->y == v1->y) ? 0.0f : (v2->x - v1->x) / (v2->y - v1->y);
-	float const dxdy_v1v3 = (v3->y == v1->y) ? 0.0f : (v3->x - v1->x) / (v3->y - v1->y);
-	float const dxdy_v2v3 = (v3->y == v2->y) ? 0.0f : (v3->x - v2->x) / (v3->y - v2->y);
-	float param_start[5], param_dpdx[5], param_dpdy[5];
-	float const a00 = v2->y - v3->y;
-	float const a01 = v3->x - v2->x;
-	float const a02 = v2->x*v3->y - v3->x*v2->y;
-	float const a10 = v3->y - v1->y;
-	float const a11 = v1->x - v3->x;
-	float const a12 = v3->x*v1->y - v1->x*v3->y;
-	float const a20 = v1->y - v2->y;
-	float const a21 = v2->x - v1->x;
-	float const a22 = v1->x*v2->y - v2->x*v1->y;
-	float const det = a02 + a12 + a22;
-	if (std::abs(det) < 0.00001f)
-	{
-		for (int i = 0; i < 5; i++)
-		{
-			param_dpdx[i] = 0.0f;
-			param_dpdy[i] = 0.0f;
-			param_start[i] = v1->p[i];
-		}
-	}
-	else
-	{
-		float const idet = 1.0f / det;
-		for (int i = 0; i < 5; i++)
-		{
-			param_dpdx[i] = idet * (v1->p[i]*a00 + v2->p[i]*a10 + v3->p[i]*a20);
-			param_dpdy[i] = idet * (v1->p[i]*a01 + v2->p[i]*a11 + v3->p[i]*a21);
-			param_start[i] = idet * (v1->p[i]*a02 + v2->p[i]*a12 + v3->p[i]*a22);
-		}
-	}
-
+	// the GPU rasterises it, interpolates its parameters and tests its depth
 	u32 const index = u32(tris.size() / TR_SIZE);
 	size_t const base = tris.size();
 	tris.resize(base + TR_SIZE);
 	u32 *const r = &tris[base];
 	r[TR_FLAGS] = (st.flat ? TF_FLAT : 0) | (st.tex4bpp ? TF_4BPP : 0) | (st.blend ? TF_BLEND : 0);
-	r[TR_TOP] = top;
-	r[TR_BOTTOM] = bottom;
-	r[TR_BOXLEFT] = boxleft;
-	r[TR_BOXRIGHT] = boxright;
-	r[TR_CLIPLEFT] = hclip.left();
-	r[TR_CLIPRIGHT] = hclip.right() + 1;
-	r[TR_V1X] = float_bits(v1->x);
-	r[TR_V1Y] = float_bits(v1->y);
-	r[TR_V2X] = float_bits(v2->x);
-	r[TR_V2Y] = float_bits(v2->y);
-	r[TR_DXDY13] = float_bits(dxdy_v1v3);
-	r[TR_DXDY12] = float_bits(dxdy_v1v2);
-	r[TR_DXDY23] = float_bits(dxdy_v2v3);
-	for (int i = 0; i < 5; i++)
-	{
-		r[TR_START + i] = float_bits(param_start[i]);
-		r[TR_DPDX + i] = float_bits(param_dpdx[i]);
-		r[TR_DPDY + i] = float_bits(param_dpdy[i]);
-	}
 	r[TR_TEXINDEX] = st.tex_index;
 	r[TR_PALOFFSET] = st.pal_offset;
 	r[TR_COLORINDEX] = st.color_index;
 	r[TR_TEXPAGE] = st.tex_page_small;
 	r[TR_TEXSCROLL] = (st.texscrollx & 0xffff) | (st.texscrolly << 16);
 	r[TR_TEXMASK] = (st.tex_mask_x & 0xffff) | (st.tex_mask_y << 16);
+	vertex const *const corners[3] = { &a, &b, &c };
+	for (int i = 0; i < 3; i++)
+	{
+		u32 *const out = &r[TR_VERTS + i * TV_SIZE];
+		out[TV_X] = float_bits(corners[i]->x * scale);
+		out[TV_Y] = float_bits(corners[i]->y * scale);
+		for (int p = 0; p < 5; p++)
+			out[TV_P + p] = float_bits(corners[i]->p[p]);
+	}
 	add_command(CMD_TRIS, index);
 	prim_count++;
 }
@@ -856,7 +780,7 @@ bool hng64_vk::impl::flush(int readback_width, int readback_height)
 		push.values = value_base;
 		push.scale = scale;
 		vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
-		vkCmdDraw(cmd, c.count * 6, 1, 0, 0);
+		vkCmdDraw(cmd, c.count * 3, 1, 0, 0);
 	}
 	if (current >= 0)
 		vkCmdEndRenderPass(cmd);

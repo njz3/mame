@@ -126,14 +126,31 @@ void hng64_state::videoram_w(offs_t offset, u32 data, u32 mem_mask)
     and zoom
 -------------------------------------------------*/
 
+// With -hires3d on the GPU, the layers over the 3D are drawn over a mark
+// (GPU_LAYERS_EMPTY) without knowing the 3D: the alpha of a pixel then tells
+// the GPU how to mix it. 0xff: opaque, else added to (alpha / 128) times what
+// is under it. It does not change anything for the native screen.
+static constexpr u32 GPU_LAYERS_EMPTY = 0x80000000;
+
+static inline u32 layer_add_blend(u32 d, u32 s)
+{
+	return add_blend_r32(d, s) | (d & 0xff000000);
+}
+
+static inline u32 layer_alpha_blend(u32 d, u32 s, u8 level)
+{
+	const u32 a = d >> 24;
+	return alpha_blend_r32(d, s, level) | (((a == 0xff) ? a : (a >> 1)) << 24);
+}
+
 #define HNG64_ROZ_PLOT_PIXEL(INPUT_VAL) \
 do { \
 	if (drawformat == 1) \
-		*dest = clut[INPUT_VAL]; \
+		*dest = clut[INPUT_VAL] | 0xff000000; \
 	else if (drawformat == 2) \
-		*dest = add_blend_r32(*dest, clut[INPUT_VAL]); \
+		*dest = layer_add_blend(*dest, clut[INPUT_VAL]); \
 	else if (drawformat == 3) \
-		*dest = alpha_blend_r32(*dest, clut[INPUT_VAL], alpha); \
+		*dest = layer_alpha_blend(*dest, clut[INPUT_VAL], alpha); \
 } while (0)
 
 void hng64_state::tilemap_draw_roz_core_line(
@@ -735,13 +752,13 @@ void hng64_state::mixsprites_test(screen_device& screen, bitmap_rgb32& bitmap, c
 					if (srcpix & 0x8000)
 					{
 						if (spriteblendtype)
-							*spritedst = alpha_blend_r32(*spritedst, spriteclut[srcpix & 0x0fff], 0x80);
+							*spritedst = layer_alpha_blend(*spritedst, spriteclut[srcpix & 0x0fff], 0x80);
 						else
-							*spritedst = add_blend_r32(*spritedst, spriteclut[srcpix & 0x0fff]);
+							*spritedst = layer_add_blend(*spritedst, spriteclut[srcpix & 0x0fff]);
 					}
 					else
 					{
-						*spritedst = spriteclut[srcpix & 0x0fff];
+						*spritedst = spriteclut[srcpix & 0x0fff] | 0xff000000;
 					}
 				}
 			}
@@ -961,18 +978,24 @@ u32 hng64_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, cons
 		if ((m_hires_bottom.width() != bitmap.width()) || (m_hires_bottom.height() != bitmap.height()))
 			m_hires_bottom.allocate(bitmap.width(), bitmap.height());
 		copybitmap(m_hires_bottom, bitmap, 0, 0, 0, 0, cliprect);
+
+		// the layers over the 3D, for the mix, not knowing the 3D
+		bitmap.fill(GPU_LAYERS_EMPTY, cliprect);
 	}
-	else if (hires)
+	else
 	{
-		m_hires->upscale(bitmap, m_hires->frame_bitmap(), cliprect, false);
-		blit_3d(m_hires->frame_bitmap(), m_hires->scaled(cliprect), m_hires->scale());
-	}
-	blit_3d(bitmap, cliprect, 1);
-	if (hires)
-	{
-		if ((m_below.width() != bitmap.width()) || (m_below.height() != bitmap.height()))
-			m_below.allocate(bitmap.width(), bitmap.height());
-		copybitmap(m_below, bitmap, 0, 0, 0, 0, cliprect);
+		if (hires)
+		{
+			m_hires->upscale(bitmap, m_hires->frame_bitmap(), cliprect, false);
+			blit_3d(m_hires->frame_bitmap(), m_hires->scaled(cliprect), m_hires->scale());
+		}
+		blit_3d(bitmap, cliprect, 1);
+		if (hires)
+		{
+			if ((m_below.width() != bitmap.width()) || (m_below.height() != bitmap.height()))
+				m_below.allocate(bitmap.width(), bitmap.height());
+			copybitmap(m_below, bitmap, 0, 0, 0, 0, cliprect);
+		}
 	}
 
 	// tilemaps with 'priority' 0x00 - 0x0f are always above the 3d? - could bit 0x10 really be a 'relative to 3d' bit, rather than a 'relative to other tilemaps' bit?
@@ -995,15 +1018,8 @@ u32 hng64_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, cons
 
 	if (vk)
 	{
-		// on the GPU: the pixels the layers above the 3D change (alpha 0
-		// elsewhere), mixed there with the 3D blit and the layers under it
-		for (int y = cliprect.top(); y <= cliprect.bottom(); y++)
-		{
-			u32 *const top = &m_below.pix(y);
-			u32 const *const after = &bitmap.pix(y);
-			for (int x = cliprect.left(); x <= cliprect.right(); x++)
-				top[x] = (after[x] != top[x]) ? (after[x] | 0xff000000) : 0;
-		}
+		// on the GPU: the layers above the 3D, mixed there with the 3D blit
+		// and the layers under it
 		const rectangle &visarea = m_screen->visible_area();
 		const int ysize = visarea.bottom() - visarea.top();
 		int xscroll = (m_fbscroll[0] >> 21);
@@ -1015,7 +1031,7 @@ u32 hng64_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, cons
 		b.yinc = ysize ? ((512 << 16) / ysize) : 0;
 		b.palbase = BIT(m_tcram[0x4c / 4], 16) ? 0x800 : 0x000;
 		bitmap_rgb32 *frame = nullptr;
-		if (vk->mix(m_hires_bottom, m_below, b, reinterpret_cast<rgb_t const *>(m_palette_3d->pens()), m_palette_3d->entries(), cliprect, screen.visible_area(), frame))
+		if (vk->mix(m_hires_bottom, bitmap, b, reinterpret_cast<rgb_t const *>(m_palette_3d->pens()), m_palette_3d->entries(), cliprect, screen.visible_area(), frame))
 		{
 			if (frame)
 			{

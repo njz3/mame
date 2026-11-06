@@ -8,12 +8,12 @@
     (mame3d).
 
     With -hires3d, the 3D colour and depth buffers live on the GPU at the
-    high resolution.  The polygons are drawn there by a port of
-    render_triangle and the scanline renderers with the texture ROM
-    uploaded once, and the screen is mixed there (native layers under the
-    3D, the 3D blit with its scroll, stretch, palette and blend, then the
-    layers over it) and read back.  The native buffers are still drawn by
-    the software renderer for the native screen.
+    high resolution.  The GPU rasterises the polygons, interpolates their
+    parameters and tests their depth; a fragment shader computes the chip's
+    pixels with the texture ROM uploaded once.  The screen is mixed there
+    (native layers under the 3D, the 3D blit with its scroll, stretch,
+    palette and blend, then the layers over it) and read back.  Nothing is
+    rasterised on the CPU.
 
 ***************************************************************************/
 
@@ -72,7 +72,8 @@ public:
 	void clear();
 
 	// a screen update with the native screen under the 3D (bottom) and the
-	// layers over it (top, alpha 0 where they leave the pixel); once the
+	// layers over it (top: alpha 0xff when opaque, else added to alpha / 128
+	// times what is under them); once the
 	// bottom of the visible area is reached, frame is a bitmap in
 	// high-resolution screen coordinates over the read-back memory, intact
 	// until the next frame is shown, else nullptr; false if the GPU failed

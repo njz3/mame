@@ -2,8 +2,7 @@
 // copyright-holders:njz3
 // the HNG64 screen at the high resolution: the native layers under the 3D,
 // the 3D blitted over them (blit_3d: scroll, vertical stretch, 3D palette
-// with its 16 brightness levels, 50% blend), then the pixels the layers
-// over the 3D change
+// with its 16 brightness levels, 50% blend), then the layers over the 3D
 #version 450
 #extension GL_GOOGLE_include_directive : require
 
@@ -32,7 +31,7 @@ void main()
 	int sy = y / pc.scale;
 
 	// native pixels: the screen under the 3D, then the layers over it
-	// (alpha 0 where they leave the pixel)
+	// (alpha 0xff when opaque, else added to alpha / 128 times what is under)
 	uint offset = pc.values + pc.base + uint(((sy - pc.native_top) * pc.native_width + (sx - pc.native_left)) * 2);
 	uint dest = data[offset];
 	uint over = data[offset + 1u];
@@ -49,7 +48,16 @@ void main()
 			dest = ((srcpix & 0x0800u) != 0u) ? alpha_blend_r32(dest, color, 0x80u) : color;
 		}
 	}
-	if ((over >> 24) != 0u)
+	uint coverage = over >> 24;
+	if (coverage == 0xffu)
+	{
 		dest = over;
+	}
+	else
+	{
+		uvec3 under = (uvec3((dest >> 16) & 0xffu, (dest >> 8) & 0xffu, dest & 0xffu) * coverage) >> 7u;
+		uvec3 result = min(under + uvec3((over >> 16) & 0xffu, (over >> 8) & 0xffu, over & 0xffu), uvec3(0xffu));
+		dest = (result.r << 16) | (result.g << 8) | result.b;
+	}
 	out_color = vec4(float((dest >> 16) & 0xffu), float((dest >> 8) & 0xffu), float(dest & 0xffu), 255.0) * (1.0 / 255.0);
 }

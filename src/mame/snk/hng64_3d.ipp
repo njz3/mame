@@ -12,7 +12,7 @@ hng64_poly_renderer::hng64_poly_renderer(hng64_state& state)
 	, m_scale(std::clamp(state.machine().options().int_value(OPTION_HIRES3D), 1, 16))
 {
 	// -hires3d: on the GPU unless -hires3d_renderer is software; the buffers
-	// here then stay native for the native screen
+	// here then stay native and nothing draws into them, unless the GPU fails
 	if ((m_scale > 1) && (strcmp(state.machine().options().value(OPTION_HIRES3D_RENDERER), "software") != 0) && (state.m_texturerom.bytes() >= 0x1000000))
 	{
 		std::string error;
@@ -1069,15 +1069,19 @@ bool hng64_state::command3d(const u16* packet)
 void hng64_state::clear3d()
 {
 	if (hng64_vk *const vk = m_poly_renderer->vulkan())
-		vk->clear();
-
-	// Reset the buffers...
-	//const rectangle& visarea = m_screen->visible_area();
-	const int bufferSize = m_poly_renderer->size() * m_poly_renderer->size();
-	for (int i = 0; i < bufferSize; i++)
 	{
-		m_poly_renderer->depthBuffer3d()[i] = 100.0f;
-		m_poly_renderer->colorBuffer3d()[i] = 0;
+		vk->clear();
+	}
+	else
+	{
+		// Reset the buffers...
+		//const rectangle& visarea = m_screen->visible_area();
+		const int bufferSize = m_poly_renderer->size() * m_poly_renderer->size();
+		for (int i = 0; i < bufferSize; i++)
+		{
+			m_poly_renderer->depthBuffer3d()[i] = 100.0f;
+			m_poly_renderer->colorBuffer3d()[i] = 0;
+		}
 	}
 
 	m_paletteState3d = 0;
@@ -1462,6 +1466,30 @@ void hng64_poly_renderer::render_flat_scanline(s32 scanline, const extent_t& ext
 
 void hng64_poly_renderer::drawShaded(polygon *p)
 {
+	// on the GPU at the high resolution: nothing to rasterize here
+	if (m_vk)
+	{
+		hng64_vk::state const st = { p->flatShade, p->tex4bpp != 0, p->blend, p->texIndex, p->palOffset, p->colorIndex,
+				p->texPageSmall, p->texscrollx, p->texscrolly, p->tex_mask_x, p->tex_mask_y };
+		hng64_vk::vertex v[std::size(p->vert)];
+		for (int j = 0; j < p->n; j++)
+		{
+			const polyVert &pv = p->vert[j];
+			if (p->flatShade)
+			{
+				v[j] = { pv.clipCoords[0], pv.clipCoords[1], { pv.clipCoords[2], 0.0f, 0.0f, 0.0f, 0.0f } };
+			}
+			else
+			{
+				// The perspective-correct texture divide, as below
+				const float oow = 1.0f / pv.clipCoords[3];
+				v[j] = { pv.clipCoords[0], pv.clipCoords[1], { pv.clipCoords[2], oow, pv.light * oow, pv.texCoords[0] * oow, pv.texCoords[1] * oow } };
+			}
+		}
+		m_vk->polygon(st, p->n, v);
+		return;
+	}
+
 	// Polygon information for the rasterizer
 	hng64_poly_data rOptions;
 	rOptions.tex4bpp = p->tex4bpp;
@@ -1555,22 +1583,5 @@ void hng64_poly_renderer::drawShaded(polygon *p)
 
 			render_triangle<7>(visibleArea, render_delegate(&hng64_poly_renderer::render_texture_scanline, this), pVert[0], pVert[1], pVert[2]);
 		}
-	}
-
-	// and again on the GPU at the high resolution
-	if (m_vk)
-	{
-		hng64_vk::state const st = { p->flatShade, p->tex4bpp != 0, p->blend, p->texIndex, p->palOffset, p->colorIndex,
-				p->texPageSmall, p->texscrollx, p->texscrolly, p->tex_mask_x, p->tex_mask_y };
-		hng64_vk::vertex v[std::size(p->vert)];
-		for (int j = 0; j < p->n; j++)
-		{
-			const polyVert &pv = p->vert[j];
-			if (p->flatShade)
-				v[j] = { pv.clipCoords[0], pv.clipCoords[1], { pv.clipCoords[2], 0.0f, 0.0f, 0.0f, 0.0f } };
-			else
-				v[j] = { pv.clipCoords[0], pv.clipCoords[1], { pv.clipCoords[2], pv.clipCoords[3], pv.light, pv.texCoords[0], pv.texCoords[1] } };
-		}
-		m_vk->polygon(st, p->n, v);
 	}
 }
