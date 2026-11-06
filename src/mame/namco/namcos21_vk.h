@@ -8,11 +8,10 @@
     (mame3d).
 
     With -hires3d, the two frame buffers (pens and depth) live on the GPU
-    at the high resolution.  The quads are drawn there with the rows and
-    columns the software rasterizer fills, and the screen is mixed there
-    (Winning Run's 2D layer, or Driver's Eyes' native sprites) and
-    converted through the palette, then read back.  The native frame
-    buffers are still drawn by the software renderer for the emulation.
+    at the high resolution.  The GPU rasterises the quads and tests their
+    depth, and the screen is mixed there (Winning Run's 2D layer, or
+    Driver's Eyes' native sprites) and converted through the palette, then
+    read back.  Nothing is rasterised on the CPU.
 
 ***************************************************************************/
 
@@ -46,7 +45,7 @@ public:
 
 	// a quad of blit_single_quad: vertices in high-resolution frame buffer
 	// pixels, pen and depth
-	void quad(double const *x, double const *y, u16 color, int zsort);
+	void quad(float const *x, float const *y, u16 color, int zsort);
 
 	// swap_and_clear_poly_framebuffer
 	void swap();

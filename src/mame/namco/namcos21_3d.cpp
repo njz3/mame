@@ -37,10 +37,11 @@ void namcos21_3d_device::device_start()
 	assert(m_num_palettes != 0);
 	assert(m_framebuffer_size > 0);
 
-	m_scale = std::clamp(machine().options().int_value(OPTION_HIRES3D), 1, 16);
+	m_scale = m_hires_supported ? std::clamp(machine().options().int_value(OPTION_HIRES3D), 1, 16) : 1;
 
 	// -hires3d: on the GPU unless -hires3d_renderer is software; the frame
-	// buffers here then stay native for the emulation
+	// buffers here then stay native and nothing draws into them, unless the
+	// GPU fails
 	if ((m_scale > 1) && (strcmp(machine().options().value(OPTION_HIRES3D_RENDERER), "software") != 0))
 	{
 		std::string error;
@@ -78,6 +79,12 @@ void namcos21_3d_device::device_start()
 
 void namcos21_3d_device::swap_and_clear_poly_framebuffer()
 {
+	if (m_vk)
+	{
+		m_vk->swap();
+		return;
+	}
+
 	// swap work and visible framebuffers
 	m_poly_framebuffer_z.swap(m_poly_framebuffer_z2);
 	m_poly_framebuffer_pens.swap(m_poly_framebuffer_pens2);
@@ -93,9 +100,6 @@ void namcos21_3d_device::swap_and_clear_poly_framebuffer()
 			for (int x = 0; x < m_poly_frame_width; x++)
 				m_native_z[y * m_poly_frame_width + x] = m_poly_framebuffer_z2[size_t(y * m_scale) * m_fb_width + x * m_scale];
 	}
-
-	if (m_vk)
-		m_vk->swap();
 }
 
 void namcos21_3d_device::copy_visible_poly_framebuffer(bitmap_ind16 &bitmap, const rectangle &cliprect, int scale)
@@ -291,6 +295,19 @@ void namcos21_3d_device::blit_single_quad(int sx[4], int sy[4], int zcode[4], u1
 	const int depth = zsort >> 2 & m_penmask;
 	color += m_depth_reverse ? depth : -depth;
 
+	// on the GPU at the high resolution: nothing to rasterize here
+	if (m_vk)
+	{
+		float x[4], y[4];
+		for (int i = 0; i < 4; i++)
+		{
+			x[i] = (m_poly_frame_width / 2 + sx[i]) * m_hires_scale;
+			y[i] = (m_poly_frame_height / 2 + sy[i]) * m_hires_scale;
+		}
+		m_vk->quad(x, y, color, zsort);
+		return;
+	}
+
 	n21_vertex v[4];
 
 	for (int i = 0; i < 4; i++)
@@ -302,18 +319,6 @@ void namcos21_3d_device::blit_single_quad(int sx[4], int sy[4], int zcode[4], u1
 
 	rendertri(&v[0], &v[1], &v[2], color, zsort);
 	rendertri(&v[2], &v[3], &v[0], color, zsort);
-
-	// and again on the GPU at the high resolution
-	if (m_vk)
-	{
-		double x[4], y[4];
-		for (int i = 0; i < 4; i++)
-		{
-			x[i] = (m_poly_frame_width / 2 + sx[i]) * m_hires_scale;
-			y[i] = (m_poly_frame_height / 2 + sy[i]) * m_hires_scale;
-		}
-		m_vk->quad(x, y, color, zsort);
-	}
 }
 
 void namcos21_3d_device::draw_direct_quad(const u16 *source, u16 color)

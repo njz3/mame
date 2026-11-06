@@ -572,13 +572,14 @@ u32 namcos21_state::screen_update(screen_device &screen, bitmap_ind16 &bitmap, c
 				m_hires->use_frame(*frame, [this] () { if (namcos21_vk *const vk = m_namcos21_3d->vulkan()) vk->frame_ready(); });
 				m_hires->frame_done(cliprect);
 			}
+
+			// the frame replaces the native bitmap
+			return 0;
 		}
-		else
-		{
-			// the GPU failed: continue in software, with the native 3D magnified
-			osd_printf_warning("namcos21: Vulkan failed, hires3d continues in software\n");
-			m_namcos21_3d->vulkan_failed();
-		}
+
+		// the GPU failed: continue in software, with the native 3D magnified
+		osd_printf_warning("namcos21: Vulkan failed, hires3d continues in software\n");
+		m_namcos21_3d->vulkan_failed();
 	}
 	if (m_hires->active() && !m_namcos21_3d->vulkan())
 	{
@@ -972,6 +973,7 @@ void namcos21_state::winrun(machine_config &config)
 	m_namcos21_3d->set_framebuffer_size(496, 480);
 	m_namcos21_3d->set_num_palettes(0x20);
 	m_namcos21_3d->set_depth_reverse(true);
+	m_namcos21_3d->set_hires_supported(true);
 
 	// sound hardware
 	SPEAKER(config, "speaker", 4).corners();

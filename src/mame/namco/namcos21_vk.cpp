@@ -81,6 +81,13 @@ struct command
 	push_constants mix;
 };
 
+u32 float_bits(float value)
+{
+	u32 bits;
+	std::memcpy(&bits, &value, 4);
+	return bits;
+}
+
 } // anonymous namespace
 
 
@@ -100,18 +107,6 @@ struct namcos21_vk::impl : vk3d_context
 		bitmap_rgb32 view;      // over host, for the display
 		int slot = -1;          // batch that copies it
 		bool ready = false;
-	};
-
-	struct edge
-	{
-		double x;
-		double z;
-	};
-
-	struct vertex
-	{
-		double x, y;
-		double z;
 	};
 
 	int scale = 1;
@@ -157,7 +152,6 @@ struct namcos21_vk::impl : vk3d_context
 
 	std::vector<u32> tris;
 	std::vector<u32> values;
-	std::vector<u32> rows;              // spans of the triangle being set up
 	std::vector<command> commands;
 	u32 palette_offset = 0;             // last palette of the batch
 	u32 palette_colors = 0;
@@ -178,8 +172,7 @@ struct namcos21_vk::impl : vk3d_context
 	bool ensure_display(int w, int h);
 	void wait_slot(slot &target);
 	void wait_all();
-	void add_span(edge const *e1, edge const *e2, int sy, int first);
-	void rendertri(vertex const *v0, vertex const *v1, vertex const *v2, u16 color, int zsort);
+	void add_quad(float const *x, float const *y, u16 color, int zsort);
 	u32 add_palette(rgb_t const *palette, u32 colors);
 	bool mix(push_constants const &push, int top, int bottom, rectangle const &visible, bitmap_rgb32 *&frame);
 	void begin_pass(VkCommandBuffer cmd, VkRenderPass const *variants, VkFramebuffer framebuffer, bool &ready, int w, int h);
@@ -544,159 +537,20 @@ void namcos21_vk::impl::wait_all()
 //  recording
 //-------------------------------------------------
 
-// renderscanline_flat: the columns filled in a row
-void namcos21_vk::impl::add_span(edge const *e1, edge const *e2, int sy, int first)
+void namcos21_vk::impl::add_quad(float const *x, float const *y, u16 color, int zsort)
 {
-	if (e1->x > e2->x)
-		std::swap(e1, e2);
-	int x0 = int(e1->x);
-	int x1 = int(e2->x);
-	if (x1 - x0)
-	{
-		x0 = std::max(x0, 0);
-		x1 = std::min(x1, width);
-		if (x1 > x0)
-			rows[sy - first] = u32(x0) | (u32(x1) << 16);
-	}
-}
-
-
-// namcos21_3d_device::rendertri, keeping the spans instead of filling them
-void namcos21_vk::impl::rendertri(vertex const *v0, vertex const *v1, vertex const *v2, u16 color, int zsort)
-{
-	// first, sort so that v0->y <= v1->y <= v2->y
-	for (;;)
-	{
-		if (v0->y > v1->y)
-			std::swap(v0, v1);
-		else if (v1->y > v2->y)
-			std::swap(v1, v2);
-		else
-			break;
-	}
-
-	int ystart = int(v0->y);
-	int yend = int(v2->y);
-	int dy = yend - ystart;
-	if (!dy)
-		return;
-
-	// rows the two halves may fill
-	int const first = std::max(ystart, 0);
-	int const last = std::min(yend, height);
-	if (last <= first)
-		return;
-	rows.assign(last - first, 0);
-
-	edge e1; // short edge (top and bottom)
-	edge e2; // long (common) edge
-
-	double dx2dy = (v2->x - v0->x) / dy;
-	double dz2dy = (v2->z - v0->z) / dy;
-
-	double dx1dy;
-	double dz1dy;
-
-	e2.x = v0->x;
-	e2.z = v0->z;
-	int crop = -ystart;
-	if (crop > 0)
-	{
-		e2.x += dx2dy * crop;
-		e2.z += dz2dy * crop;
-	}
-
-	ystart = int(v0->y);
-	yend = int(v1->y);
-	dy = yend - ystart;
-	if (dy)
-	{
-		e1.x = v0->x;
-		e1.z = v0->z;
-
-		dx1dy = (v1->x - v0->x) / dy;
-		dz1dy = (v1->z - v0->z) / dy;
-
-		crop = -ystart;
-		if (crop > 0)
-		{
-			e1.x += dx1dy * crop;
-			e1.z += dz1dy * crop;
-			ystart = 0;
-		}
-		yend = std::min(yend, height);
-
-		for (int y = ystart; y < yend; y++)
-		{
-			add_span(&e1, &e2, y, first);
-
-			e2.x += dx2dy;
-			e2.z += dz2dy;
-
-			e1.x += dx1dy;
-			e1.z += dz1dy;
-		}
-	}
-
-	ystart = int(v1->y);
-	yend = int(v2->y);
-	dy = yend - ystart;
-	if (dy)
-	{
-		e1.x = v1->x;
-		e1.z = v1->z;
-
-		dx1dy = (v2->x - v1->x) / dy;
-		dz1dy = (v2->z - v1->z) / dy;
-
-		crop = -ystart;
-		if (crop > 0)
-		{
-			e1.x += dx1dy * crop;
-			e1.z += dz1dy * crop;
-			ystart = 0;
-		}
-		yend = std::min(yend, height);
-
-		for (int y = ystart; y < yend; y++)
-		{
-			add_span(&e1, &e2, y, first);
-
-			e2.x += dx2dy;
-			e2.z += dz2dy;
-
-			e1.x += dx1dy;
-			e1.z += dz1dy;
-		}
-	}
-
-	// the rows and columns actually filled
-	int top = 0;
-	while ((top < int(rows.size())) && !rows[top])
-		top++;
-	int bottom = int(rows.size());
-	while ((bottom > top) && !rows[bottom - 1])
-		bottom--;
-	if (top == bottom)
-		return;
-	u32 left = ~u32(0);
-	u32 right = 0;
-	for (int i = top; i < bottom; i++)
-		if (rows[i])
-		{
-			left = std::min(left, rows[i] & 0xffff);
-			right = std::max(right, rows[i] >> 16);
-		}
-
+	// the GPU rasterises its two triangles and tests its depth
 	u32 const index = u32(tris.size() / TR_SIZE);
-	tris.push_back(first + top);
-	tris.push_back(first + bottom);
-	tris.push_back(left);
-	tris.push_back(right);
-	tris.push_back(color);
-	tris.push_back(zsort);
-	tris.push_back(u32(values.size()));
-	values.insert(values.end(), rows.begin() + top, rows.begin() + bottom);
+	size_t const base = tris.size();
+	tris.resize(base + TR_SIZE);
+	u32 *const r = &tris[base];
+	r[TR_COLOR] = color;
+	r[TR_DEPTH] = float_bits(float(zsort) * (1.0f / 65536.0f));
+	for (int i = 0; i < 4; i++)
+	{
+		r[TR_CORNERS + i * 2] = float_bits(x[i]);
+		r[TR_CORNERS + i * 2 + 1] = float_bits(y[i]);
+	}
 	tri_count++;
 
 	if (!commands.empty())
@@ -908,7 +762,7 @@ bool namcos21_vk::impl::flush(int readback_width, int readback_height)
 		push.values = value_base;
 		push.scale = scale;
 		vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
-		vkCmdDraw(cmd, c.count * 6, 1, 0, 0);
+		vkCmdDraw(cmd, c.count * 6, 1, 0, 0);       // two triangles a quad
 	}
 	if (current >= 0)
 		vkCmdEndRenderPass(cmd);
@@ -1075,16 +929,12 @@ std::string const &namcos21_vk::device_name() const
 }
 
 
-void namcos21_vk::quad(double const *x, double const *y, u16 color, int zsort)
+void namcos21_vk::quad(float const *x, float const *y, u16 color, int zsort)
 {
 	impl &s = *m;
 	if (s.failed)
 		return;
-	impl::vertex v[4];
-	for (int i = 0; i < 4; i++)
-		v[i] = { x[i], y[i], 0.0 };
-	s.rendertri(&v[0], &v[1], &v[2], color, zsort);
-	s.rendertri(&v[2], &v[3], &v[0], color, zsort);
+	s.add_quad(x, y, color, zsort);
 
 	// send batches to the GPU as they fill, without waiting
 	if ((s.tris.size() >= BATCH_TRIS * TR_SIZE) || (s.values.size() >= BATCH_VALUES))

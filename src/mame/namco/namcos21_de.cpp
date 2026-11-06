@@ -48,6 +48,15 @@ TODO:
 #include "speaker.h"
 
 
+namespace {
+
+// -hires3d on the GPU: the top sprites are drawn over 0xffff; no pen reaches
+// this value, and 0xffff is not one of the marks made from it
+constexpr u16 GPU_SPRITE_MARK = 0x8000;
+
+} // anonymous namespace
+
+
 DECLARE_DEVICE_TYPE(NAMCO_DE_PCB, namco_de_pcbstack_device)
 
 
@@ -218,6 +227,7 @@ void namco_de_pcbstack_device::device_add_mconfig(machine_config &config)
 	PALETTE(config, m_palette).set_format(palette_device::xBRG_888, 0x10000/2);
 
 	NAMCOS21_3D(config, m_namcos21_3d);
+	m_namcos21_3d->set_hires_supported(true);
 	m_namcos21_3d->set_framebuffer_size(496, 480);
 	m_namcos21_3d->set_num_palettes(0x20);
 	m_namcos21_3d->set_depth_reverse(false);
@@ -269,6 +279,14 @@ bool namco_de_pcbstack_device::sprite_mix_callback(u16 &dest, u8 &destpri, u16 c
 	if (srcpri == pri)
 	{
 		src ^= 0xf00;
+
+		// -hires3d on the GPU: over the mark of the top sprites, these pens
+		// depend on the 3D under them: the GPU applies them, see mix.frag
+		if ((dest >= GPU_SPRITE_MARK) && (((src & 0xff) == 0xff) || ((src & 0xff) <= 0x01)))
+		{
+			dest = GPU_SPRITE_MARK | (src & 0xf00) | (((src & 0xff) == 0xff) ? 0x02 : (src & 0x01));
+			return true;
+		}
 
 		switch (src & 0xff)
 		{
@@ -324,11 +342,35 @@ u32 namco_de_pcbstack_device::screen_update(screen_device &screen, bitmap_ind16 
 	rectangle const hclip = m_hires->scaled(cliprect);
 	if (vk)
 	{
+		// on the GPU: the screen under the 3D, and the top sprites over a
+		// mark (0xffff where they leave the pixel)
 		if ((m_bottom.width() != bitmap.width()) || (m_bottom.height() != bitmap.height()))
 			m_bottom.allocate(bitmap.width(), bitmap.height());
 		copybitmap(m_bottom, bitmap, 0, 0, 0, 0, cliprect);
+		bitmap.fill(0xffff, cliprect);
+		m_c355spr->draw(screen, bitmap, cliprect, 15);
+
+		bitmap_rgb32 *frame = nullptr;
+		if (vk->mix_sprites(m_bottom, bitmap, m_palette->palette()->entry_list_adjusted(), m_palette->entries(), cliprect, screen.visible_area(), frame))
+		{
+			if (frame)
+			{
+				m_hires->use_frame(*frame, [this] () { if (namcos21_vk *const vk = m_namcos21_3d->vulkan()) vk->frame_ready(); });
+				m_hires->frame_done(cliprect);
+			}
+		}
+		else
+		{
+			// the GPU failed: software from the next update on
+			osd_printf_warning("namcos21_de: Vulkan failed, hires3d continues in software\n");
+			m_namcos21_3d->vulkan_failed();
+		}
+
+		// the frame replaces the native bitmap
+		return 0;
 	}
-	else if (hires)
+
+	if (hires)
 	{
 		if ((m_hires_ind.width() != screen.width() * scale) || (m_hires_ind.height() != screen.height() * scale))
 			m_hires_ind.allocate(screen.width() * scale, screen.height() * scale);
@@ -345,34 +387,7 @@ u32 namco_de_pcbstack_device::screen_update(screen_device &screen, bitmap_ind16 
 	}
 	m_c355spr->draw(screen, bitmap, cliprect, 15);
 
-	if (vk)
-	{
-		// on the GPU: the pixels the top sprites change (0xffff elsewhere)
-		// over the 3D and the native screen under it
-		for (int y = cliprect.top(); y <= cliprect.bottom(); y++)
-		{
-			u16 *const top = &m_below.pix(y);
-			u16 const *const after = &bitmap.pix(y);
-			for (int x = cliprect.left(); x <= cliprect.right(); x++)
-				top[x] = (after[x] != top[x]) ? after[x] : 0xffff;
-		}
-		bitmap_rgb32 *frame = nullptr;
-		if (vk->mix_sprites(m_bottom, m_below, m_palette->palette()->entry_list_adjusted(), m_palette->entries(), cliprect, screen.visible_area(), frame))
-		{
-			if (frame)
-			{
-				m_hires->use_frame(*frame, [this] () { if (namcos21_vk *const vk = m_namcos21_3d->vulkan()) vk->frame_ready(); });
-				m_hires->frame_done(cliprect);
-			}
-		}
-		else
-		{
-			// the GPU failed: software from the next update on
-			osd_printf_warning("namcos21_de: Vulkan failed, hires3d continues in software\n");
-			m_namcos21_3d->vulkan_failed();
-		}
-	}
-	else if (hires)
+	if (hires)
 	{
 		for (int y = cliprect.top(); y <= cliprect.bottom(); y++)
 		{

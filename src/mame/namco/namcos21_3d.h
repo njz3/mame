@@ -28,6 +28,9 @@ public:
 
 	void set_depth_reverse(bool reverse) { m_depth_reverse = reverse; }
 
+	// the driver shows -hires3d frames; the others stay native
+	void set_hires_supported(bool supported) { m_hires_supported = supported; }
+
 	int width() { return m_poly_frame_width; }
 	int height() { return m_poly_frame_height; }
 
@@ -92,6 +95,7 @@ private:
 	// GPU draws at m_hires_scale times the native size
 	std::unique_ptr<namcos21_vk> m_vk;
 	int m_hires_scale = 1;
+	bool m_hires_supported = false;
 };
 
 DECLARE_DEVICE_TYPE(NAMCOS21_3D, namcos21_3d_device)

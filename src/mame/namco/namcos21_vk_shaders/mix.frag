@@ -73,11 +73,26 @@ void main()
 		// sprites' pixel, 0xffff where they leave it
 		uint native = data[pc.values + pc.base + uint((sy - pc.native_top) * pc.native_width + (sx - pc.native_left))];
 		dest = native >> 16;
-		if (dest == 0xffffu)
+		if (dest >= 0x8000u)
 		{
-			dest = pen_3d(x, y);
-			if (dest == 0u)
-				dest = native & 0xffffu;
+			uint under = pen_3d(x, y);
+			if (under == 0u)
+				under = native & 0xffffu;
+			if (dest == 0xffffu)
+			{
+				dest = under;
+			}
+			else
+			{
+				// sprite_mix_callback's pens that depend on what is under them
+				uint op = dest & 3u;
+				if (op == 2u)
+					dest = (under == 0xffu) ? ((dest & 0xf00u) | 0xffu) : under;
+				else if (under != 0xffu)
+					dest = ((op == 1u) ? 0x6000u : 0x4000u) | (under & 0x1fffu);
+				else
+					dest = (dest & 0xf00u) | op;
+			}
 		}
 	}
 	uint color = data[pc.values + pc.palette + ((dest < pc.colors) ? dest : 0u)];

@@ -8,16 +8,11 @@
 
 ***************************************************************************/
 
-// triangle record: the rows rendertri fills, each with its span of columns
-// computed on the CPU exactly as the software rasterizer steps its edges
-#define TR_TOP          0       // rows top .. bottom - 1
-#define TR_BOTTOM       1
-#define TR_LEFT         2       // columns of the drawn box
-#define TR_RIGHT        3
-#define TR_COLOR        4       // pen
-#define TR_DEPTH        5       // zsort
-#define TR_ROWS         6       // first row span (left | right << 16), from the values base
-#define TR_SIZE         7
+// quad record, drawn as two triangles
+#define TR_COLOR        0       // pen
+#define TR_DEPTH        1       // float: zsort as a depth attachment value
+#define TR_CORNERS      2       // floats: X, Y of the four corners
+#define TR_SIZE         10
 
 // mix modes
 #define MIX_LAYER       0       // Winning Run: GPU 2D layer and 3D by priority
