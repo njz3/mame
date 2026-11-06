@@ -15,6 +15,8 @@ pour vérifier l'image, et de repli sans Vulkan ou pour les cas non traduits.
 
 Exclus, car déjà rendus nativement en 3D par d'autres émulateurs :
 
+- Sega Model 1 : Supermodel, sm2-emu (le rendu HD déjà écrit ici reste dans le
+  code, mais n'est plus suivi)
 - Sega Model 2 : sm2-emu
 - Sega Model 3 : Supermodel
 - Naomi, Naomi 2, Atomiswave (PowerVR2) : Flycast
@@ -24,16 +26,15 @@ Matériel visé, dans l'ordre :
 
 | # | Matériel | Jeux | Rendu logiciel HD | Rendu Vulkan |
 |---|---|---|---|---|
-| 1 | Sega Model 1 | vr, vformula | OK (vr ×2, ×4) | OK (vr ×2, ×4) ; relecture lente |
-| 2 | Namco System 22 / Super 22 | ridgerac, ridgera2, raverace, acedrive, victlap, cybrcycc, dirtdash, alpinerd | OK (ridgerac, dirtdash ×2) | OK (5 jeux ×2) ; plus rapide que le natif |
-| 3 | Konami K001005 | gticlub, midnrun, windheat, jetwave | OK (gticlub, midnrun ×2) | OK (midnrun, gticlub) ; proche du natif |
-| 4 | 3dfx Voodoo 1/2 | sfrush, sfrushrk, calspeed, hyprdriv, vaportrx, roadburn, thrilld, racingj | OK (sfrush ×2 ×4, racingj ×2, roadburn ×2) ; coûteux en CPU | OK (même image que le logiciel) ; au niveau du natif en ×2 sur roadburn |
-| 5 | Midway V-Unit | crusnusa, crusnwld, offroadc | OK (3 jeux ×2 en démo 3D ; sommets entiers : bords natifs, textures HD) | OK (même image que le logiciel) ; ×4 60 s contre 81 s en logiciel |
-| 6 | Midway Zeus 2 | crusnexo | OK (crusnexo ×2, ×4, mode démo) | OK (même image que le logiciel, aux arrondis des mélanges près) ; ×4 107 s contre 334 s en logiciel |
-| 7 | Namco System 21 | winrun, driveyes | OK (winrun, driveyes ×2) | OK (même image que le logiciel) ; ×2 près du natif |
-| 8 | Taito JC (TC0780FPA) | sidebs, sidebs2, dangcurv | OK (sidebs, sidebs2 ×2) | OK (sidebs ×2, même image que le logiciel à 0,07 % près) |
-| 9 | Gaelco 3D | speedup, surfplnt, radikalb | OK (speedup, radikalb ×2) | OK (même image que le logiciel) ; ×4 38 s contre 108 s en logiciel |
-| 10 | SNK HNG64 | roadedge, xrally | OK (roadedge, xrally ×2) | OK (même image que le logiciel à 0,5 % près) ; ×2 près du natif |
+| 1 | Namco System 22 / Super 22 | ridgerac, ridgera2, raverace, acedrive, victlap, cybrcycc, dirtdash, alpinerd | OK (ridgerac, dirtdash ×2) | OK (5 jeux ×2) ; plus rapide que le natif |
+| 2 | Konami K001005 | gticlub, midnrun, windheat, jetwave | OK (gticlub, midnrun ×2) | OK (midnrun, gticlub) ; proche du natif |
+| 3 | 3dfx Voodoo 1/2 | sfrush, sfrushrk, calspeed, hyprdriv, vaportrx, roadburn, thrilld, racingj | OK (sfrush ×2 ×4, racingj ×2, roadburn ×2) ; coûteux en CPU | OK (même image que le logiciel) ; au niveau du natif en ×2 sur roadburn |
+| 4 | Midway V-Unit | crusnusa, crusnwld, offroadc | OK (3 jeux ×2 en démo 3D ; sommets entiers : bords natifs, textures HD) | OK (même image que le logiciel) ; ×4 60 s contre 81 s en logiciel |
+| 5 | Midway Zeus 2 | crusnexo | OK (crusnexo ×2, ×4, mode démo) | OK, vrais triangles, plus de raster CPU ; ×2 50 s contre 72 s en natif |
+| 6 | Namco System 21 | winrun, driveyes | OK (winrun, driveyes ×2) | OK, vrais quads, plus de raster CPU ; winrun ×4 22 s contre 29 s en natif |
+| 7 | Taito JC (TC0780FPA) | sidebs, sidebs2, dangcurv | OK (sidebs, sidebs2 ×2) | OK, vrais triangles et quads, plus de raster CPU ; ×4 77 s contre 79 s en natif |
+| 8 | Gaelco 3D | speedup, surfplnt, radikalb | OK (speedup, radikalb ×2) | OK, vrais triangles, plus de raster CPU ; CPU ×2 18 s contre 52 s en natif |
+| 9 | SNK HNG64 | roadedge, xrally | OK (roadedge, xrally ×2) | OK, vrais triangles, plus de raster CPU ; 2D au-dessus mélangée sur le GPU |
 | — | Namco System 23 | motoxgo, raceon, finfurl | quand l'émulation de base marchera | |
 
 ## Architecture
@@ -186,7 +187,10 @@ Toutes les puces de la liste ont un rendu logiciel HD et un rendu Vulkan
 2. HNG64 : comprendre les 5 ms d'attente du GPU par image sur xrally.
 3. Refaire les mesures au calme (une partie a été faite pendant que d'autres
    MAME tournaient sur le portable).
-4. Namco System 23, quand son émulation de base marchera.
+4. Faire calculer la géométrie par le GPU là où MAME la calcule en C++ : Zeus 2,
+   HNG64, System 22 (DSP esclave simulé). Ailleurs, elle vient de DSP ou de CPU
+   émulés, dont le coût reste.
+5. Namco System 23, quand son émulation de base marchera.
 - 2026-10-31 : **Namco System 21** en logiciel HD.
   - `namcos21_3d` : tampons × N, sommets (entiers) mis à l'échelle, ce qui
     affine les arêtes. Une copie native de la profondeur visible reste
@@ -536,3 +540,50 @@ Toutes les puces de la liste ont un rendu logiciel HD et un rendu Vulkan
     contre 168 s en logiciel ; xrally natif 126 s, ×2 132 s contre 138 s.
     L'émulation elle-même est lourde, le gain est donc faible. xrally attend
     le GPU 28 s (5 ms par image) : à examiner.
+- 2026-11-07 : **Vraie 3D sur le GPU pour cinq puces** (Taito JC, Gaelco 3D,
+  HNG64, System 21, Zeus 2). Avant, le CPU rastérisait toujours en natif et le
+  GPU redessinait chaque triangle dans une boîte, le shader recalculant
+  l'étendue de chaque ligne.
+  - Le GPU rastérise maintenant les primitives elles-mêmes, et le raster CPU
+    est coupé. Le V-Unit reste tel quel : sommets entiers, mémoire vidéo lue
+    par le CPU, et rendu de toute façon peu coûteux.
+  - Taito JC : les triangles sont interpolés par le GPU. Les quads restent
+    évalués le long de leurs arêtes dans le shader, car deux triangles feraient
+    un pli sur un quad qui n'est pas un parallélogramme. La profondeur reste
+    calculée par pixel (arrondi du matériel), mais une borne inférieure donnée
+    au GPU lui permet de rejeter les pixels cachés avant le shader.
+  - HNG64 : paramètres et profondeur interpolés par le GPU, plus d'écriture de
+    profondeur dans le shader. Les couches 2D au-dessus de la 3D peuvent s'y
+    mélanger (alpha, addition) : dessinées sur une marque, elles portent dans
+    leur alpha ce qu'il faut garder du dessous, et le GPU fait le mélange.
+  - System 21 : les quads sont dessinés avec un décalage d'un demi-pixel, qui
+    reprend les pixels remplis par `rendertri` (arêtes prises en haut de ligne).
+    Les stylos 0, 1 et 0xff des sprites du dessus de Driver's Eyes dépendent de
+    ce qu'ils couvrent : ils sont notés dans le stylo et appliqués par le GPU.
+    `namcos21_c67` et `gal3` n'affichent pas d'image HD : `set_hires_supported`
+    les laisse en natif (Cyber Sled vérifié).
+  - Zeus 2 : le CPU peut lire le tampon image (534 000 lectures au démarrage de
+    crusnexo). Le raster natif reprend donc 2 secondes après chaque lecture,
+    comme pour le Voodoo. Sinon, plus rien n'est mis en file pour le rendu
+    logiciel : `object_data().next()` sans `wait()` devenait très lent (611 s
+    au lieu de 50 s). Un scissor limite les triangles à la fenêtre de rendu.
+  - Contrôle contre le logiciel HD, pixels au-delà de 24, pire capture : sidebs
+    0,05 %, dangcurv 0,00 %, speedup 0,00 %, radikalb 0,05 %, roadedge 0,09 %,
+    xrally 0,02 %, winrun 0,35 %, driveyes 0,26 %, crusnexo 0,01 %. Repli
+    logiciel relancé sur les cinq puces. Sauvegarde puis rechargement d'état
+    sans plantage sur les cinq puces, mais crusnexo y restait sur l'écran de
+    calibration, sans 3D.
+  - Temps CPU total (tous les threads), avant puis après, durée émulée fixe,
+    portable, un seul essai par mesure :
+
+    | Jeu | Natif | ×2 avant | ×2 après | ×4 avant | ×4 après |
+    |---|---|---|---|---|---|
+    | sidebs (90 s) | 86,0 | 89,2 | 85,1 | 90,5 | 84,5 |
+    | speedup (60 s) | 52,1 | 44,0 | 18,1 | 51,7 | 23,9 |
+    | roadedge (60 s) | 88,1 | 92,2 | 88,6 | 85,8 | 74,7 |
+    | winrun (60 s) | 23,2 | 21,2 | 19,0 | 23,0 | 14,5 |
+    | driveyes (60 s) | 64,7 | 71,2 | 57,3 | 70,2 | 63,8 |
+    | crusnexo (120 s) | 91,8 | 102,5 | 52,2 | 103,9 | 51,5 |
+
+    Le gain dépend de la part du raster dans le coût total : sidebs et roadedge
+    passent surtout leur temps dans les processeurs émulés et la 2D.
