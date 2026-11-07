@@ -113,6 +113,20 @@ Matériel visé, dans l'ordre :
      lisent finis (anneau de requêtes D3D11 ; sinon l'image est relue).
    - Branché sur System 22, System 21, Taito JC, HNG64, Gaelco 3D, K001005 et
      Voodoo (1/2, Banshee, Voodoo 3). Pas encore : V-Unit, Zeus 2, Model 1.
+8. **Options d'affichage**, comme dans les autres émulateurs des bornes
+   (`render.cpp`, `place_view()`) :
+   - `-aspect_ratio original|4:3|16:9|4:3_stretch|16:9_stretch|4:3_crop|16:9_crop`
+     (`4:3_letterbox` = `4:3`) : le cadre où l'écran est montré, centré avec des
+     bandes noires ; l'écran y garde sa forme, le remplit, ou le couvre en
+     étant coupé. `-crop_position -100..100` choisit la partie gardée.
+   - `-widescreen` : image 16:9 pour les puces dont MAME fait la projection
+     3D (System 22, HNG64, Zeus 2), sur le rendu Vulkan seulement, même en
+     `-hires3d 1`. `hires3d_output` ajoute `pad()` colonnes HD de chaque côté
+     de l'écran natif, et l'écran est montré en 16:9 (`view_widening()`).
+   - `-widescreen_2d 4:3|stretch` : les couches 2D au milieu à leur forme, ou
+     étirées sur toute la largeur.
+   - `-widescreen_bg` : les tilemaps sous la 3D dessinées aussi sur les côtés
+     (HNG64 ; System 22 n'en a pas, son fond est la couleur de fond ou la 3D).
 
 ## Compilation
 
@@ -213,6 +227,9 @@ Toutes les puces de la liste ont un rendu logiciel HD et un rendu Vulkan
    sf2049 ni cartfury).
 4. System 23, Taito Type Zero et Konami Cobra, quand leur émulation marchera.
    Le GPU PS1 seulement si une HD sans sous-pixel convient.
+5. HNG64 en logiciel aux échelles qui ne sont pas des puissances de 2 (×3,
+   ×5…) : remplacer les masques `taille - 1` des rastériseurs et de
+   `blit_3d` (le chemin GPU est déjà corrigé).
 - 2026-10-31 : **Namco System 21** en logiciel HD.
   - `namcos21_3d` : tampons × N, sommets (entiers) mis à l'échelle, ce qui
     affine les arêtes. Une copie native de la profondeur visible reste
@@ -691,3 +708,42 @@ Toutes les puces de la liste ont un rendu logiciel HD et un rendu Vulkan
     l'émulation faisaient planter le pilote, les requêtes ne finissaient pas, et
     un keyed mutex donnait une image noire (le dessin avait lieu après la
     libération du verrou).
+- 2026-11-07 (nuit) : **options d'affichage et hack 16:9**.
+  - `-aspect_ratio` et `-crop_position`, avec les mêmes valeurs que les autres
+    émulateurs des bornes (voir le point 8 de l'architecture). Vérifié dans
+    une fenêtre de 640x480 : en 16:9, cadre de 640x360 avec l'image 4:3
+    entre deux bandes ; `_stretch` remplit, `_crop` couvre, et
+    `-crop_position -100` garde le haut. Le rendu GPU suit la taille de la
+    fenêtre comme le rendu logiciel : bgfx étire la texture de l'image.
+  - `-widescreen` (rendu Vulkan, aussi en `-hires3d 1`), pour les puces dont
+    MAME fait la projection :
+    - System 22 : les polygones projetés sont décalés de `pad`, et les
+      fenêtres 3D qui touchent un bord de l'écran vont jusqu'au bord de
+      l'image ; les sprites, les polygones directs et la couche texte restent
+      au milieu ou sont étirés. ridgerac : la piste continue sur les côtés,
+      sans couture, et le point de fuite ne bouge pas.
+    - HNG64 : tampons 3D plus larges de `pad` de chaque côté, frustum élargi
+      d'autant (x divisé avant le clip puis remultiplié), mélange avec les
+      couches du dessus au milieu ou étirées. `-widescreen_bg` dessine aussi
+      les tilemaps sous la 3D au-delà des bords de l'écran (bitmaps avec
+      marge), pas les sprites. Le ciel de roadedge continue sans couture ;
+      la course de xrally s'élargit aussi.
+    - Zeus 2 : chaque ligne de l'image du tampon a `pad` colonnes de plus de
+      chaque côté ; les polygones dont le clip touche un bord de l'écran
+      continuent, et les remplissages de lignes entières effacent aussi les
+      côtés. Le Zeus 2 dessine sa 2D en polygones : le HUD reste au milieu,
+      `-widescreen_2d stretch` n'y change rien. crusnexo : la 3D s'élargit,
+      le menu et le tableau de bord restent au milieu avec du noir autour.
+  - Limites propres au hack : ce que le jeu met hors de l'écran devient
+    visible (un panneau 3D au bord de l'écran de choix de roadedge, la ville
+    3D derrière l'intro 2D de xrally) ; une tilemap qui ne déborde pas laisse
+    du noir ; avec `-widescreen_bg` et `-widescreen_2d stretch`, les couches
+    2D sous la 3D ne sont pas étirées et se décalent de celles du dessus sur
+    les écrans de menus.
+  - Le crash à la sortie en fenêtre venait de `view_widening()`, appelé
+    pendant la destruction de la fenêtre alors que les périphériques étaient
+    déjà arrêtés : les écrans arrêtés sont ignorés.
+  - Vu en route : le rendu logiciel du HNG64 en ×3 (taille de tampon qui
+    n'est pas une puissance de 2) masque ses coordonnées avec `taille - 1`
+    et montre des bandes répétées ; le chemin GPU passe maintenant par un
+    modulo et est correct en ×3. Le chemin logiciel n'est pas corrigé.
