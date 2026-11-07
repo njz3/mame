@@ -50,8 +50,10 @@ public:
 	// show bitmap for the frame being drawn instead of the frame bitmap
 	// (frame_bitmap() then returns it); it is in the same coordinates and
 	// must stay intact until the next frame is shown; ready, if given, is
-	// called just before the renderer takes the bitmap (a GPU read-back
-	// can complete meanwhile, while the other screens are updated)
+	// called just before the renderer reads the bitmap, after the throttle
+	// (a GPU read-back can complete meanwhile), or when the next frame
+	// takes the texture if the renderer did not read it; the bitmap must
+	// not be written by the CPU once it is given
 	void use_frame(bitmap_rgb32 &bitmap, std::function<void ()> &&ready = nullptr);
 
 	// the update covering cliprect is finished; the frame is shown once
@@ -87,6 +89,11 @@ public:
 	// and returns true, or returns false to keep the native bitmap
 	static bool update_texture(screen_device &screen, render_texture &texture);
 
+	// called by the renderer before it reads a texture: calls the ready
+	// callbacks of the frames given to the screens, so a GPU read-back runs
+	// while the emulation is throttled instead of stalling it
+	static void complete_reads();
+
 private:
 	void begin_frame();
 
@@ -100,6 +107,7 @@ private:
 	bitmap_rgb32 *m_published = nullptr;    // finished frame to show
 	std::function<void ()> m_draw_ready;    // their ready callbacks
 	std::function<void ()> m_published_ready;
+	std::function<void ()> m_texture_ready; // for the frame in the texture, not called yet
 	int m_shown = -1;                       // own bitmap shown, or -1
 	u64 m_frame = ~u64(0);
 };

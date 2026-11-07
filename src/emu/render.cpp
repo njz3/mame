@@ -43,6 +43,7 @@
 #include "drivenum.h"
 #include "emuopts.h"
 #include "fileio.h"
+#include "hires3d.h"
 #include "rendfont.h"
 #include "rendlay.h"
 #include "rendutil.h"
@@ -447,6 +448,9 @@ void render_texture::hq_scale(bitmap_argb32 &dest, bitmap_argb32 &source, const 
 
 void render_texture::get_scaled(u32 dwidth, u32 dheight, render_texinfo &texinfo, render_primitive_list &primlist, u32 flags)
 {
+	// -hires3d: finish the GPU read-backs of the frames handed to the screens
+	hires3d_output::complete_reads();
+
 	// source width/height come from the source bounds
 	int swidth = m_sbounds.width();
 	int sheight = m_sbounds.height();

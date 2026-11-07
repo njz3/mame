@@ -27,6 +27,9 @@ namespace {
 // outputs of the running machine, looked up by the screens
 std::vector<hires3d_output *> s_outputs;
 
+// some texture ready callback has not been called yet
+bool s_reads_pending = false;
+
 } // anonymous namespace
 
 
@@ -259,11 +262,18 @@ bool hires3d_output::update_texture(screen_device &screen, render_texture &textu
 	{
 		if ((&output->m_screen == &screen) && output->m_published)
 		{
-			if (output->m_published_ready)
+			// the frame the renderer did not read is finished first; the
+			// new one is waited for when the renderer reads it
+			if (output->m_texture_ready)
 			{
-				output->m_published_ready();
-				output->m_published_ready = nullptr;
+				std::function<void ()> const ready = std::move(output->m_texture_ready);
+				output->m_texture_ready = nullptr;
+				ready();
 			}
+			output->m_texture_ready = std::move(output->m_published_ready);
+			output->m_published_ready = nullptr;
+			if (output->m_texture_ready)
+				s_reads_pending = true;
 			texture.set_bitmap(*output->m_published, output->scaled(screen.visible_area()), TEXFORMAT_RGB32);
 			output->m_shown = (output->m_published == &output->m_bitmap[0]) ? 0 : (output->m_published == &output->m_bitmap[1]) ? 1 : -1;
 			output->m_published = nullptr;
@@ -271,4 +281,21 @@ bool hires3d_output::update_texture(screen_device &screen, render_texture &textu
 		}
 	}
 	return false;
+}
+
+
+void hires3d_output::complete_reads()
+{
+	if (!s_reads_pending)
+		return;
+	s_reads_pending = false;
+	for (hires3d_output *output : s_outputs)
+	{
+		if (output->m_texture_ready)
+		{
+			std::function<void ()> const ready = std::move(output->m_texture_ready);
+			output->m_texture_ready = nullptr;
+			ready();
+		}
+	}
 }
