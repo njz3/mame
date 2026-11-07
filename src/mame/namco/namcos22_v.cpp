@@ -292,6 +292,30 @@ inline void namcos22_renderer::dispatch_scanline_poly(scanline_func callback, in
 
 /*********************************************************************************************/
 
+// -widescreen: a high-resolution clip rectangle in the wider frame; the 3D
+// windows that reach an edge of the screen go on to the edge of the frame
+rectangle namcos22_renderer::wide_clip(const rectangle &clip, const rectangle &native, const rectangle &visible, bool is3d) const
+{
+	if (!m_pad)
+		return clip;
+	rectangle result = clip;
+	if (is3d || !m_stretch2d)
+	{
+		result.min_x += m_pad;
+		result.max_x += m_pad;
+		if (is3d && (native.left() <= visible.left()))
+			result.min_x = visible.left() * m_scale;
+		if (is3d && (native.right() >= visible.right()))
+			result.max_x = (visible.right() + 1) * m_scale - 1 + 2 * m_pad;
+	}
+	else
+	{
+		result.min_x = int(floor(wide_2d(poly3d_t(clip.min_x))));
+		result.max_x = int(ceil(wide_2d(poly3d_t(clip.max_x + 1)))) - 1;
+	}
+	return result;
+}
+
 void namcos22_renderer::poly3d_drawquad(screen_device &screen, bitmap_rgb32 &bitmap, struct namcos22_scenenode *node)
 {
 	vertex_t v[4];
@@ -305,7 +329,7 @@ void namcos22_renderer::poly3d_drawquad(screen_device &screen, bitmap_rgb32 &bit
 	const int cy = 240 + node->data.quad.vy;
 	m_cliprect.set(cx + node->data.quad.vl, cx - node->data.quad.vr - 1, cy + node->data.quad.vu, cy - node->data.quad.vd - 1);
 	m_cliprect &= screen.visible_area();
-	m_cliprect = scaled(m_cliprect);
+	m_cliprect = wide_clip(scaled(m_cliprect), m_cliprect, screen.visible_area(), !direct);
 	const poly3d_t scale = m_scale;
 
 	// non-direct case: project and z-clip
@@ -329,7 +353,7 @@ void namcos22_renderer::poly3d_drawquad(screen_device &screen, bitmap_rgb32 &bit
 		for (vertnum = 0; vertnum < clipverts; vertnum++)
 		{
 			const poly3d_t ooz = 1.0 / clipv[vertnum].p[0];
-			clipv[vertnum].x = (cx + clipv[vertnum].x * ooz) * scale;
+			clipv[vertnum].x = (cx + clipv[vertnum].x * ooz) * scale + m_pad;
 			clipv[vertnum].y = (cy - clipv[vertnum].y * ooz) * scale;
 			clipv[vertnum].p[0] = ooz;
 			clipv[vertnum].p[1] = (clipv[vertnum].p[1] + 0.5) * ooz; // u
@@ -345,7 +369,7 @@ void namcos22_renderer::poly3d_drawquad(screen_device &screen, bitmap_rgb32 &bit
 		for (vertnum = 0; vertnum < 4; vertnum++)
 		{
 			const poly3d_t ooz = node->data.quad.v[vertnum].z;
-			clipv[vertnum].x = (cx + node->data.quad.v[vertnum].x) * scale;
+			clipv[vertnum].x = wide_2d((cx + node->data.quad.v[vertnum].x) * scale);
 			clipv[vertnum].y = (cy - node->data.quad.v[vertnum].y) * scale;
 			clipv[vertnum].p[0] = ooz;
 			clipv[vertnum].p[1] = (node->data.quad.v[vertnum].u + 0.5) * ooz;
@@ -481,11 +505,11 @@ void namcos22_renderer::poly3d_drawsprite(
 	if (sprite_screen_width && sprite_screen_height)
 	{
 		const poly3d_t scale = m_scale;
-		const poly3d_t fsx = sx * scale;
+		const poly3d_t fsx = wide_2d(sx * scale);
 		const poly3d_t fsy = sy * scale;
 		const poly3d_t fwidth = gfx->width();
 		const poly3d_t fheight = gfx->height();
-		const poly3d_t fsw = sprite_screen_width * scale;
+		const poly3d_t fsw = sprite_screen_width * scale * (m_stretch2d ? m_stretch : 1);
 		const poly3d_t fsh = sprite_screen_height * scale;
 
 		namcos22_object_data local{};
@@ -613,7 +637,7 @@ void namcos22_renderer::render_sprite(screen_device &screen, bitmap_rgb32 &bitma
 	// scene clip
 	m_cliprect.set(node->data.sprite.cx_min, node->data.sprite.cx_max, node->data.sprite.cy_min, node->data.sprite.cy_max);
 	m_cliprect &= screen.visible_area();
-	m_cliprect = scaled(m_cliprect);
+	m_cliprect = wide_clip(scaled(m_cliprect), m_cliprect, screen.visible_area(), false);
 
 	int offset = 0;
 
@@ -749,10 +773,14 @@ void namcos22_renderer::render_scene_nodes(screen_device &screen, bitmap_rgb32 &
 	}
 }
 
-void namcos22_renderer::render_scene_vk(screen_device &screen, namcos22_vk &vk, int scale)
+void namcos22_renderer::render_scene_vk(screen_device &screen, namcos22_vk &vk, int scale, int pad, bool stretch2d)
 {
 	m_vk = &vk;
 	m_scale = scale;
+	m_pad = pad;
+	m_stretch2d = stretch2d;
+	m_wide_left = screen.visible_area().left() * scale;
+	m_stretch = poly3d_t(screen.visible_area().width() * scale + 2 * pad) / poly3d_t(screen.visible_area().width() * scale);
 
 	struct namcos22_scenenode *node = &m_scenenode_root;
 	for (int i = NAMCOS22_RADIX_BUCKETS - 1; i >= 0; i--)
@@ -761,6 +789,8 @@ void namcos22_renderer::render_scene_vk(screen_device &screen, namcos22_vk &vk, 
 		node->data.nonleaf.next[i] = nullptr;
 	}
 	m_vk = nullptr;
+	m_pad = 0;
+	m_stretch2d = false;
 }
 
 void namcos22_renderer::render_scene(screen_device &screen, bitmap_rgb32 &bitmap, bitmap_ind8 &primap, int scale)
@@ -2684,6 +2714,7 @@ namcos22_vk *namcos22_state::vulkan()
 		{
 			std::string error;
 			m_vk = namcos22_vk::create(error);
+			m_hires->allow_widescreen(m_vk != nullptr);
 			if (m_vk)
 			{
 				// the sprites are Super System 22 only
@@ -2713,6 +2744,7 @@ bool namcos22_state::show_vk_frame(screen_device &screen, const rectangle &clipr
 	{
 		osd_printf_verbose("namcos22: Vulkan frame failed, drawing in software\n");
 		m_vk.reset();
+		m_hires->allow_widescreen(false);
 		return false;
 	}
 	m_hires->use_frame(*frame, [this, frame] () { if (m_vk) m_vk->frame_ready(frame); }, m_vk->shared_texture(frame));
@@ -2732,6 +2764,8 @@ u32 namcos22s_state::screen_update_namcos22s(screen_device &screen, bitmap_rgb32
 	if (m_hires->active() && vulkan())
 	{
 		const int scale = m_hires->scale();
+		const int pad = m_hires->pad();
+		const bool stretch2d = m_hires->stretch_2d();
 		screen.priority().fill(0, cliprect);
 		rgbaint_t bg_color(0, nthbyte(m_mixer, 0x08), nthbyte(m_mixer, 0x09), nthbyte(m_mixer, 0x0a));
 		if (BIT(m_mixer_flags, 0) && m_screen_fade_factor)
@@ -2740,7 +2774,7 @@ u32 namcos22s_state::screen_update_namcos22s(screen_device &screen, bitmap_rgb32
 			bg_color.blend(fade_color, 0xff - m_screen_fade_factor);
 		}
 		const rgb_t background = rgb_t(bg_color.get_r(), bg_color.get_g(), bg_color.get_b());
-		m_vk->begin_frame(screen.visible_area(), scale, background);
+		m_vk->begin_frame(screen.visible_area(), scale, background, pad, stretch2d);
 
 		const u8 layer = nthbyte(m_mixer, 0x1f);
 		const bool text = BIT(layer, 2);
@@ -2752,7 +2786,7 @@ u32 namcos22s_state::screen_update_namcos22s(screen_device &screen, bitmap_rgb32
 		}
 		if (BIT(layer, 1)) draw_sprites();
 		if (BIT(layer, 0)) draw_polygons();
-		m_poly->render_scene_vk(screen, *m_vk, scale);
+		m_poly->render_scene_vk(screen, *m_vk, scale, pad, stretch2d);
 
 		namcos22_vk::mix_params mix{};
 		mix.super = true;
@@ -2840,10 +2874,12 @@ u32 namcos22_state::screen_update_namcos22(screen_device &screen, bitmap_rgb32 &
 	if (m_hires->active() && vulkan())
 	{
 		const int scale = m_hires->scale();
+		const int pad = m_hires->pad();
+		const bool stretch2d = m_hires->stretch_2d();
 		screen.priority().fill(0, cliprect);
-		m_vk->begin_frame(screen.visible_area(), scale, m_palette->pen(m_bg_palbase | 0xff));
+		m_vk->begin_frame(screen.visible_area(), scale, m_palette->pen(m_bg_palbase | 0xff), pad, stretch2d);
 		draw_polygons();
-		m_poly->render_scene_vk(screen, *m_vk, scale);
+		m_poly->render_scene_vk(screen, *m_vk, scale, pad, stretch2d);
 		apply_text_scroll();
 		m_text_tilemap->set_palette_offset(m_text_palbase);
 		m_text_tilemap->draw(screen, *m_mix_bitmap, cliprect, 0, 2, 3);
@@ -3028,4 +3064,7 @@ void namcos22_state::video_start()
 
 	m_poly = std::make_unique<namcos22_renderer>(*this);
 	m_hires = std::make_unique<hires3d_output>(*m_screen);
+
+	// -widescreen on the GPU renderer only (allowed until it fails to start)
+	m_hires->allow_widescreen(strcmp(machine().options().value(OPTION_HIRES3D_RENDERER), "software") != 0);
 }

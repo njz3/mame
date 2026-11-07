@@ -56,6 +56,7 @@ struct push_constants
 	s32 scale, pass;
 	u32 vertices, records, palette, text, textpri, params, gamma, spot;
 	s32 native_width;
+	s32 pad, stretch2d;     // -widescreen
 };
 
 struct batch
@@ -101,6 +102,8 @@ struct namcos22_vk::impl : vk3d_context
 	// targets
 	rectangle visible;
 	int scale = 1;
+	int pad = 0;                // -widescreen: pixels added on each side
+	bool stretch2d = false;     // the text layer stretched over them
 	int width = 0;
 	int height = 0;
 	image color;
@@ -626,10 +629,10 @@ void namcos22_vk::set_sprite_memory(u8 const *data, size_t bytes)
 }
 
 
-void namcos22_vk::begin_frame(rectangle const &visible, int scale, rgb_t background)
+void namcos22_vk::begin_frame(rectangle const &visible, int scale, rgb_t background, int pad, bool stretch2d)
 {
 	impl &s = *m;
-	int const width = visible.width() * scale;
+	int const width = visible.width() * scale + 2 * pad;
 	int const height = visible.height() * scale;
 	if ((width != s.width) || (height != s.height) || (scale != s.scale))
 	{
@@ -646,6 +649,8 @@ void namcos22_vk::begin_frame(rectangle const &visible, int scale, rgb_t backgro
 	}
 	s.visible = visible;
 	s.background = background;
+	s.pad = pad;
+	s.stretch2d = stretch2d;
 	s.records.clear();
 	s.vertices.clear();
 	s.batches.clear();
@@ -861,6 +866,8 @@ bitmap_rgb32 *namcos22_vk::end_frame(pen_t const *palette, size_t entries, bitma
 	push.gamma = gamma;
 	push.spot = spot;
 	push.native_width = nwidth;
+	push.pad = s.pad;
+	push.stretch2d = s.stretch2d ? 1 : 0;
 	VkRect2D const full{ { 0, 0 }, { u32(s.width), u32(s.height) } };
 	VkViewport const viewport{ 0.0f, 0.0f, float(s.width), float(s.height), 0.0f, 1.0f };
 

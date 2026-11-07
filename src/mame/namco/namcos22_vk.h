@@ -86,10 +86,12 @@ public:
 	void set_texture_memory(u16 const *tilemap, u8 const *tileattr, u8 const *ayx, u8 const *tiledata, size_t tiledata_bytes);
 	void set_sprite_memory(u8 const *data, size_t bytes);
 
-	// a frame of the visible area at scale times its size; polygons are
-	// convex fans of 3 to 6 vertices drawn in order, clipped to clip
-	// (screen pixels at the high resolution)
-	void begin_frame(rectangle const &visible, int scale, rgb_t background);
+	// a frame of the visible area at scale times its size, with pad more
+	// pixels on each side (-widescreen; the text layer is then mixed in the
+	// middle, or stretched over the whole width); polygons are convex fans
+	// of 3 to 6 vertices drawn in order, clipped to clip (screen pixels at
+	// the high resolution, the padding included)
+	void begin_frame(rectangle const &visible, int scale, rgb_t background, int pad = 0, bool stretch2d = false);
 	void polygon(draw const &d, vertex const *v, int count, rectangle const &clip);
 
 	// mix the native text layer and its priority map (screen coordinates),

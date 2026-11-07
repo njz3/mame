@@ -57,10 +57,17 @@ bool super_mix(uint text, uint prival, ivec3 dest, out ivec3 rgb)
 void main()
 {
 	ivec2 xy = ivec2(gl_FragCoord.xy);
-	ivec2 nxy = xy / pc.scale;
-	uint nindex = uint(nxy.y * pc.native_width + nxy.x);
-	uint text = frame_u16(pc.text, nindex);
-	uint textpri = frame_u8(pc.textpri, nindex);
+
+	// the native text pixel: in the middle of a -widescreen frame (none on
+	// the sides), or stretched over its whole width
+	int nx = (pc.stretch2d != 0)
+			? int(floor((float(xy.x) + 0.5) * float(pc.native_width) * pc.inv_size.x))
+			: ((xy.x - pc.pad >= 0) ? (xy.x - pc.pad) / pc.scale : -1);
+	ivec2 nxy = ivec2(nx, xy.y / pc.scale);
+	bool outside = (nx < 0) || (nx >= pc.native_width);
+	uint nindex = uint(nxy.y * pc.native_width + max(nx, 0));
+	uint text = outside ? 0u : frame_u16(pc.text, nindex);
+	uint textpri = outside ? 0u : frame_u8(pc.textpri, nindex);
 	bool super = P(NM_SUPER) != 0u;
 	out_pri = 0u;
 

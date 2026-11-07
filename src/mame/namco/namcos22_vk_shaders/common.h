@@ -23,6 +23,8 @@ layout(push_constant) uniform push_t
 	uint gamma;         // 3 x 256 words
 	uint spot;          // 0x800 u16
 	int native_width;
+	int pad;            // -widescreen: pixels added on each side
+	int stretch2d;      // the text layer stretched over them
 } pc;
 
 // bytes and words packed in uint arrays

@@ -160,8 +160,11 @@ public:
 	// scale > 1 draws at that multiple of the native resolution (-hires3d)
 	void render_scene(screen_device &screen, bitmap_rgb32 &bitmap, bitmap_ind8 &primap, int scale);
 
-	// same, handing the polygons and sprites to the GPU renderer
-	void render_scene_vk(screen_device &screen, namcos22_vk &vk, int scale);
+	// same, handing the polygons and sprites to the GPU renderer; with
+	// -widescreen, the frame has pad more pixels on each side: the 3D is
+	// projected over them, the 2D (sprites, direct polygons) stays in the
+	// middle or is stretched over the whole width (stretch2d)
+	void render_scene_vk(screen_device &screen, namcos22_vk &vk, int scale, int pad = 0, bool stretch2d = false);
 	struct namcos22_scenenode *new_scenenode(running_machine &machine, u32 zsort, namcos22_scenenode_type type);
 
 	void init();
@@ -179,6 +182,14 @@ private:
 	bitmap_rgb32 m_vk_unused;               // destination of the nodes drawn on the GPU
 
 	rectangle scaled(const rectangle &r) const { return rectangle(r.left() * m_scale, (r.right() + 1) * m_scale - 1, r.top() * m_scale, (r.bottom() + 1) * m_scale - 1); }
+
+	// -widescreen (see render_scene_vk)
+	int m_pad = 0;
+	bool m_stretch2d = false;
+	poly3d_t m_wide_left = 0;               // left edge of the visible area (high resolution)
+	poly3d_t m_stretch = 1;                 // stretch of the 2D
+	poly3d_t wide_2d(poly3d_t x) const { return m_stretch2d ? (m_wide_left + (x - m_wide_left) * m_stretch) : (x + m_pad); }
+	rectangle wide_clip(const rectangle &clip, const rectangle &native, const rectangle &visible, bool is3d) const;
 
 	static u8 nthbyte(const u32 *src, int n) { return util::big_endian_cast<u8>(src)[n]; }
 	static u16 nthword(const u32 *src, int n) { return util::big_endian_cast<u16>(src)[n]; }
