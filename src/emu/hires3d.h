@@ -40,6 +40,11 @@
 #define OPTION_ASPECT_RATIO "aspect_ratio"
 #define OPTION_CROP_POSITION "crop_position"
 
+// mame3d widescreen hack, for the chips whose 3D is projected in MAME
+#define OPTION_WIDESCREEN "widescreen"
+#define OPTION_WIDESCREEN_2D "widescreen_2d"
+#define OPTION_WIDESCREEN_BG "widescreen_bg"
+
 class device_palette_interface;
 class screen_device;
 class vk3d_renderer;
@@ -85,6 +90,23 @@ public:
 	// scale factor requested with -hires3d (1 = native resolution)
 	int scale() const { return m_scale; }
 
+	// -widescreen: a chip whose 3D is projected in MAME can draw a 16:9 frame
+	// (allow_widescreen(), once its renderer can); the frame then has pad()
+	// more high-resolution pixels on each side of the native screen, which
+	// is shown at 16:9: the 3D gets a wider field of view, the 2D stays in
+	// the middle at its own shape or is stretched over the whole width
+	// (stretch_2d()), and background tilemaps may be drawn over the whole
+	// width (wide_bg()); it works at the native resolution too
+	void allow_widescreen(bool allow) { m_wide_allowed = allow; }
+	bool wide() const { return m_wide_option && m_wide_allowed && (m_wide_factor > 1.0f); }
+	int pad() const;
+	bool stretch_2d() const { return m_stretch_2d; }
+	bool wide_bg() const { return m_wide_bg; }
+
+	// for the renderer: the factor the shape of the screens is multiplied by
+	// (the widescreen frames are wider than the screen)
+	static float view_widening();
+
 	// true when the driver should draw a high-resolution frame
 	bool active() const;
 
@@ -114,7 +136,7 @@ public:
 	// the bottom of the visible area has been drawn
 	void frame_done(const rectangle &cliprect);
 
-	// native rectangle to high-resolution rectangle
+	// native rectangle to high-resolution rectangle (moved by pad())
 	rectangle scaled(const rectangle &native) const;
 
 	// magnify the cliprect area of a native bitmap into dest; when
@@ -172,6 +194,11 @@ private:
 
 	screen_device &m_screen;
 	int m_scale;
+	bool m_wide_option = false;             // -widescreen
+	bool m_wide_allowed = false;            // the chip can draw it
+	bool m_stretch_2d = false;              // -widescreen_2d stretch
+	bool m_wide_bg = false;                 // -widescreen_bg
+	float m_wide_factor = 1.0f;             // 16:9 over the shape of the screen
 	std::unique_ptr<vk3d_renderer> m_vulkan;
 	bool m_vulkan_tried = false;
 	bitmap_rgb32 m_bitmap[2];

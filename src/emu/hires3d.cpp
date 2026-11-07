@@ -18,6 +18,7 @@
 #include "vk3d.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <vector>
 
@@ -41,6 +42,15 @@ hires3d_output::hires3d_output(screen_device &screen)
 	, m_scale(std::clamp(screen.machine().options().int_value(OPTION_HIRES3D), 1, 16))
 {
 	s_outputs.push_back(this);
+
+	// -widescreen: 16:9 over the physical shape of the screen
+	emu_options const &options = screen.machine().options();
+	m_wide_option = options.bool_value(OPTION_WIDESCREEN);
+	m_stretch_2d = !std::strcmp(options.value(OPTION_WIDESCREEN_2D), "stretch");
+	m_wide_bg = options.bool_value(OPTION_WIDESCREEN_BG);
+	std::pair<unsigned, unsigned> const aspect = screen.physical_aspect();
+	if ((aspect.first > 0) && (aspect.second > 0))
+		m_wide_factor = std::max((16.0f / 9.0f) / (float(aspect.first) / float(aspect.second)), 1.0f);
 }
 
 
@@ -52,7 +62,26 @@ hires3d_output::~hires3d_output()
 
 bool hires3d_output::active() const
 {
-	return (m_scale > 1) && m_screen.machine().render().is_live(m_screen);
+	return ((m_scale > 1) || wide()) && m_screen.machine().render().is_live(m_screen);
+}
+
+
+int hires3d_output::pad() const
+{
+	return wide() ? int(std::lround(float(m_screen.visible_area().width() * m_scale) * (m_wide_factor - 1.0f) / 2.0f)) : 0;
+}
+
+
+float hires3d_output::view_widening()
+{
+	// (the windows are destroyed after the devices are stopped, and resized)
+	for (hires3d_output *output : s_outputs)
+		if (output->m_screen.started() && output->wide() && output->active())
+		{
+			float const width = float(output->m_screen.visible_area().width() * output->m_scale);
+			return (width + 2.0f * float(output->pad())) / width;
+		}
+	return 1.0f;
 }
 
 
@@ -70,7 +99,7 @@ void hires3d_output::begin_frame()
 	}
 	if (m_draw == &m_bitmap[m_current])
 	{
-		int const width = m_screen.width() * m_scale;
+		int const width = m_screen.width() * m_scale + 2 * pad();
 		int const height = m_screen.height() * m_scale;
 		if ((m_draw->width() != width) || (m_draw->height() != height))
 			m_draw->allocate(width, height);
@@ -109,8 +138,9 @@ void hires3d_output::frame_done(const rectangle &cliprect)
 
 rectangle hires3d_output::scaled(const rectangle &native) const
 {
+	int const p = pad();
 	return rectangle(
-			native.left() * m_scale, (native.right() + 1) * m_scale - 1,
+			native.left() * m_scale + p, (native.right() + 1) * m_scale - 1 + p,
 			native.top() * m_scale, (native.bottom() + 1) * m_scale - 1);
 }
 
@@ -118,7 +148,32 @@ rectangle hires3d_output::scaled(const rectangle &native) const
 void hires3d_output::upscale(const bitmap_rgb32 &source, bitmap_rgb32 &dest, const rectangle &cliprect, bool transparent) const
 {
 	int const scale = m_scale;
-	int const left = cliprect.left() * scale;
+	if (wide() && m_stretch_2d)
+	{
+		// stretched over the whole width of the frame
+		rectangle const &visible = m_screen.visible_area();
+		int const p = pad();
+		int const first = visible.left() * scale;
+		int const width = visible.width() * scale + 2 * p;
+		int const left = first + (cliprect.left() - visible.left()) * width / visible.width();
+		int const right = first + (cliprect.right() + 1 - visible.left()) * width / visible.width();
+		for (int y = cliprect.top(); y <= cliprect.bottom(); y++)
+		{
+			u32 const *const src = &source.pix(y);
+			for (int sub = 0; sub < scale; sub++)
+			{
+				u32 *const dst = &dest.pix(y * scale + sub);
+				for (int x = left; x < right; x++)
+				{
+					u32 const pixel = src[visible.left() + (x - first) * visible.width() / width];
+					if (!transparent || (pixel & 0xff000000))
+						dst[x] = pixel;
+				}
+			}
+		}
+		return;
+	}
+	int const left = cliprect.left() * scale + pad();
 	size_t const bytes = size_t(cliprect.width()) * scale * sizeof(u32);
 	for (int y = cliprect.top(); y <= cliprect.bottom(); y++)
 	{
@@ -146,7 +201,7 @@ void hires3d_output::upscale(const bitmap_rgb32 &source, bitmap_rgb32 &dest, con
 				{
 					for (int sub = 0; sub < scale; sub++)
 					{
-						u32 *const dst = &dest.pix(y * scale + sub, x * scale);
+						u32 *const dst = &dest.pix(y * scale + sub, x * scale + left - cliprect.left() * scale);
 						for (int i = 0; i < scale; i++)
 							dst[i] = pixel;
 					}
@@ -283,7 +338,9 @@ bool hires3d_output::update_texture(screen_device &screen, render_texture &textu
 				s_reads_pending = true;
 			output->m_texture_texture = std::move(output->m_published_texture);
 			output->m_published_texture = gpu_texture();
-			rectangle const area = output->scaled(screen.visible_area());
+			rectangle area = output->scaled(screen.visible_area());
+			area.min_x -= output->pad();
+			area.max_x += output->pad();
 			output->m_texture_base = &output->m_published->pix(area.top(), area.left());
 			texture.set_bitmap(*output->m_published, area, TEXFORMAT_RGB32);
 			output->m_shown = (output->m_published == &output->m_bitmap[0]) ? 0 : (output->m_published == &output->m_bitmap[1]) ? 1 : -1;

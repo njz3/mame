@@ -1440,7 +1440,8 @@ void render_target::compute_visible_area(s32 target_width, s32 target_height, fl
 			if (m_keepaspect)
 			{
 				// start with the aspect ratio of the square pixel layout
-				width = current_view().effective_aspect();
+				// (-widescreen frames are wider)
+				width = current_view().effective_aspect() * hires3d_output::view_widening();
 				height = 1.0f;
 
 				// first apply target orientation
@@ -1476,7 +1477,7 @@ void render_target::compute_visible_area(s32 target_width, s32 target_height, fl
 			// get source size and aspect
 			s32 src_width, src_height;
 			compute_minimum_size(src_width, src_height);
-			float src_aspect = current_view().effective_aspect();
+			float src_aspect = current_view().effective_aspect() * hires3d_output::view_widening();
 
 			// apply orientation if required
 			if (target_orientation & ORIENTATION_SWAP_XY)
@@ -1667,7 +1668,7 @@ view_place place_view(render_target &target, s32 width, s32 height, float pixel_
 	default:
 		{
 			// the view at its own shape, covering the frame
-			float view_aspect = target.current_view().effective_aspect();
+			float view_aspect = target.current_view().effective_aspect() * hires3d_output::view_widening();
 			if (orientation & ORIENTATION_SWAP_XY)
 				view_aspect = 1.0f / view_aspect;
 			float const view_pixels = view_aspect / pixel_aspect;
