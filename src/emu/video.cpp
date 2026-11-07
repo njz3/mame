@@ -15,6 +15,7 @@
 #include "debugger.h"
 #include "emuopts.h"
 #include "fileio.h"
+#include "hires3d.h"
 #include "main.h"
 #include "output.h"
 #include "screen.h"
@@ -1061,6 +1062,8 @@ void video_manager::create_snapshot_bitmap(screen_device *screen)
 		m_snap_bitmap.resize(width, height);
 
 	// render the screen there
+	// -hires3d: frames shown from GPU textures are copied into their bitmaps
+	hires3d_output::read_gpu_textures();
 	render_primitive_list &primlist = m_snap_target->get_primitives();
 	primlist.acquire_lock();
 	if (machine().options().snap_bilinear())

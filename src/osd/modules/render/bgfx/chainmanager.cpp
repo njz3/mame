@@ -16,6 +16,7 @@
 
 #include "emucore.h"
 #include "render.h"
+#include "hires3d.h"
 #include "../frontend/mame/ui/slider.h"
 
 #include "modules/lib/osdobj_common.h"
@@ -29,6 +30,7 @@
 #include "chain.h"
 #include "chainreader.h"
 #include "slider.h"
+#include "sharedtexture.h"
 #include "target.h"
 #include "texture.h"
 
@@ -576,8 +578,56 @@ uint32_t chain_manager::update_screen_textures(uint32_t view, render_primitive *
 		const std::string screen_name = "screen" + screen_index;
 		const std::string palette_name = "palette" + screen_index;
 		const std::string &full_name = (needs_conversion || needs_adjust) ? source_name : screen_name;
+		// -hires3d: a frame left on the GPU is drawn from its shared texture
+		// (which is then the screen texture: the uploaded one is dropped)
+		bgfx_texture_handle_provider *shared = nullptr;
+		if (src_format == TEXFORMAT_RGB32)
+		{
+			if (int const id = hires3d_output::gpu_texture_of(prim.m_prim->texture.base))
+			{
+				bgfx_shared_textures *const textures = bgfx_shared_textures::instance();
+				shared = textures ? textures->provider(id, tex_width, tex_height, prim.m_rowpixels) : nullptr;
+				if (!shared)
+					hires3d_output::read_gpu_texture(prim.m_prim->texture.base);
+			}
+		}
+		if (shared)
+		{
+			if (texture)
+			{
+				m_textures.remove_provider(full_name);
+				m_screen_textures[screen] = nullptr;
+				texture = nullptr;
+			}
+			m_textures.add_provider(full_name, *shared);
+			if (palette_data)
+			{
+				uint16_t palette_width = uint16_t(std::min(palette_length, 256U));
+				uint16_t palette_height = uint16_t(std::max((palette_length + 255) / 256, 1U));
+				const uint32_t palette_size = palette_width * palette_height * 4;
+				m_palette_temp.resize(palette_size);
+				memcpy(&m_palette_temp[0], palette_data, palette_length * 4);
+				const bgfx::Memory *palmem = bgfx::copy(&m_palette_temp[0], palette_size);
+				if (palette)
+				{
+					palette->update(palmem);
+				}
+				else
+				{
+					auto newpal = std::make_unique<bgfx_texture>(palette_name, bgfx::TextureFormat::BGRA8, palette_width, 0, palette_height, palmem, BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT, palette_width * 4);
+					palette = newpal.get();
+					m_textures.add_provider(palette_name, std::move(newpal));
+					while (screen >= m_screen_palettes.size())
+					{
+						m_screen_palettes.emplace_back(nullptr);
+					}
+					m_screen_palettes[screen] = palette;
+				}
+			}
+		}
+
 		// the GPU texture is rowpixels wide, and rowpixels can change without the visible area changing (e.g. a new htotal)
-		if (texture && (texture->width() != tex_width || texture->height() != tex_height || texture->rowpixels() != prim.m_rowpixels))
+		if (!shared && texture && (texture->width() != tex_width || texture->height() != tex_height || texture->rowpixels() != prim.m_rowpixels))
 		{
 			m_textures.remove_provider(full_name);
 			m_textures.remove_provider(palette_name);
@@ -589,10 +639,14 @@ uint32_t chain_manager::update_screen_textures(uint32_t view, render_primitive *
 		uint16_t pitch = prim.m_rowpixels;
 		int width_div_factor = 1;
 		int width_mul_factor = 1;
-		const bgfx::Memory* mem = bgfx_util::mame_texture_data_to_bgfx_texture_data(dst_format, prim.m_flags & PRIMFLAG_TEXFORMAT_MASK,
+		const bgfx::Memory* mem = shared ? nullptr : bgfx_util::mame_texture_data_to_bgfx_texture_data(dst_format, prim.m_flags & PRIMFLAG_TEXFORMAT_MASK,
 			prim.m_rowpixels, prim.m_prim->texture.width_margin, tex_height, prim.m_prim->texture.palette, prim.m_prim->texture.base, pitch, width_div_factor, width_mul_factor);
 
-		if (!texture)
+		if (shared)
+		{
+			// drawn from the shared texture
+		}
+		else if (!texture)
 		{
 			uint32_t flags = BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT;
 			if (!PRIMFLAG_GET_TEXWRAP(prim.m_flags))

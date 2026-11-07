@@ -30,6 +30,7 @@
 #define VK3D_INSTANCE_FUNCTIONS(X) \
 	X(vkDestroyInstance) \
 	X(vkEnumeratePhysicalDevices) \
+	X(vkEnumerateDeviceExtensionProperties) \
 	X(vkGetPhysicalDeviceProperties) \
 	X(vkGetPhysicalDeviceFeatures) \
 	X(vkGetPhysicalDeviceQueueFamilyProperties) \
@@ -95,6 +96,8 @@
 	X(vkCmdCopyBuffer) \
 	X(vkCmdCopyBufferToImage) \
 	X(vkCmdCopyImageToBuffer) \
+	X(vkCmdCopyImage) \
+	X(vkCmdClearColorImage) \
 	X(vkCmdBeginRenderPass) \
 	X(vkCmdEndRenderPass) \
 	X(vkCmdBindPipeline) \
@@ -138,6 +141,11 @@ public:
 	bool init_device(std::string &error, VkPhysicalDeviceFeatures const *wanted = nullptr);
 	VkPhysicalDeviceFeatures const &enabled_features() const { return m_enabled; }
 
+	// the device can import Windows memory handles (Vulkan 1.1 and
+	// VK_KHR_external_memory_win32), and the LUID of its adapter
+	bool external_memory() const { return m_external_memory; }
+	u8 const *luid() const { return m_luid; }
+
 	// memory helpers
 	int find_memory(u32 type_bits, VkMemoryPropertyFlags required, VkMemoryPropertyFlags preferred) const;
 	bool create_buffer(buffer &buf, VkDeviceSize size, VkBufferUsageFlags usage, bool readback_cached); // host visible, mapped
@@ -161,6 +169,11 @@ public:
 	VK3D_DEVICE_FUNCTIONS(VK3D_DECLARE)
 #undef VK3D_DECLARE
 
+	// functions of Vulkan 1.1 and of extensions, nullptr when missing
+	PFN_vkGetPhysicalDeviceProperties2 vkGetPhysicalDeviceProperties2 = nullptr;
+	PFN_vkGetPhysicalDeviceImageFormatProperties2 vkGetPhysicalDeviceImageFormatProperties2 = nullptr;
+	PFN_vkVoidFunction vkGetMemoryWin32HandlePropertiesKHR = nullptr; // see vk3d_share.cpp
+
 	VkInstance instance = VK_NULL_HANDLE;
 	VkPhysicalDevice physical = VK_NULL_HANDLE;
 	VkPhysicalDeviceMemoryProperties memory_properties{};
@@ -178,6 +191,8 @@ private:
 	bool load_device_functions();
 
 	VkPhysicalDeviceFeatures m_enabled{};
+	bool m_external_memory = false;
+	u8 m_luid[8]{};
 	std::vector<VkShaderModule> m_modules;
 };
 

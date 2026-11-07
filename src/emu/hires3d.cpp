@@ -30,6 +30,9 @@ std::vector<hires3d_output *> s_outputs;
 // some texture ready callback has not been called yet
 bool s_reads_pending = false;
 
+// the GPU sink of the OSD renderer
+hires3d_gpu_sink *s_gpu_sink = nullptr;
+
 } // anonymous namespace
 
 
@@ -63,6 +66,7 @@ void hires3d_output::begin_frame()
 		m_current = (m_shown == 0) ? 1 : 0;
 		m_draw = &m_bitmap[m_current];
 		m_draw_ready = nullptr;
+		m_draw_texture = gpu_texture();
 	}
 	if (m_draw == &m_bitmap[m_current])
 	{
@@ -81,11 +85,12 @@ bitmap_rgb32 &hires3d_output::frame_bitmap()
 }
 
 
-void hires3d_output::use_frame(bitmap_rgb32 &bitmap, std::function<void ()> &&ready)
+void hires3d_output::use_frame(bitmap_rgb32 &bitmap, std::function<void ()> &&ready, gpu_texture &&texture)
 {
 	begin_frame();
 	m_draw = &bitmap;
 	m_draw_ready = std::move(ready);
+	m_draw_texture = std::move(texture);
 }
 
 
@@ -96,6 +101,8 @@ void hires3d_output::frame_done(const rectangle &cliprect)
 		m_published = m_draw;
 		m_published_ready = std::move(m_draw_ready);
 		m_draw_ready = nullptr;
+		m_published_texture = std::move(m_draw_texture);
+		m_draw_texture = gpu_texture();
 	}
 }
 
@@ -274,13 +281,80 @@ bool hires3d_output::update_texture(screen_device &screen, render_texture &textu
 			output->m_published_ready = nullptr;
 			if (output->m_texture_ready)
 				s_reads_pending = true;
-			texture.set_bitmap(*output->m_published, output->scaled(screen.visible_area()), TEXFORMAT_RGB32);
+			output->m_texture_texture = std::move(output->m_published_texture);
+			output->m_published_texture = gpu_texture();
+			rectangle const area = output->scaled(screen.visible_area());
+			output->m_texture_base = &output->m_published->pix(area.top(), area.left());
+			texture.set_bitmap(*output->m_published, area, TEXFORMAT_RGB32);
 			output->m_shown = (output->m_published == &output->m_bitmap[0]) ? 0 : (output->m_published == &output->m_bitmap[1]) ? 1 : -1;
 			output->m_published = nullptr;
 			return true;
 		}
 	}
 	return false;
+}
+
+
+void hires3d_output::set_gpu_sink(hires3d_gpu_sink *sink)
+{
+	s_gpu_sink = sink;
+	if (!sink)
+	{
+		// the textures are gone: the frames shown from them are lost
+		for (hires3d_output *output : s_outputs)
+			output->m_texture_texture = output->m_published_texture = output->m_draw_texture = gpu_texture();
+	}
+}
+
+
+hires3d_gpu_sink *hires3d_output::gpu_sink()
+{
+	return s_gpu_sink;
+}
+
+
+int hires3d_output::gpu_texture_of(void const *base)
+{
+	for (hires3d_output *output : s_outputs)
+		if (output->m_texture_texture.id && (output->m_texture_base == base))
+			return output->m_texture_texture.id;
+	return 0;
+}
+
+
+bool hires3d_output::gpu_texture_in_use(int id)
+{
+	for (hires3d_output *output : s_outputs)
+		if ((output->m_texture_texture.id == id) || (output->m_published_texture.id == id) || (output->m_draw_texture.id == id))
+			return true;
+	return false;
+}
+
+
+void hires3d_output::read_gpu_textures()
+{
+	// the frames are read once their GPU work is done; each is then in its
+	// bitmap and drawn from there
+	complete_reads();
+	for (hires3d_output *output : s_outputs)
+	{
+		if (output->m_texture_texture.id && output->m_texture_texture.read)
+			output->m_texture_texture.read();
+		output->m_texture_texture = gpu_texture();
+	}
+}
+
+
+void hires3d_output::read_gpu_texture(void const *base)
+{
+	for (hires3d_output *output : s_outputs)
+		if (output->m_texture_texture.id && (output->m_texture_base == base))
+		{
+			complete_reads();
+			if (output->m_texture_texture.read)
+				output->m_texture_texture.read();
+			output->m_texture_texture = gpu_texture();
+		}
 }
 
 

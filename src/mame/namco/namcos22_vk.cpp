@@ -19,6 +19,7 @@
 #include "namcos22_vk.h"
 
 #include "vk3d_context.h"
+#include "vk3d_share.h"
 
 #include <algorithm>
 #include <cstring>
@@ -116,6 +117,9 @@ struct namcos22_vk::impl : vk3d_context
 	osd_ticks_t wait_ticks = 0;
 	u32 frames = 0;
 
+	// textures of the display the frames are copied into instead
+	std::unique_ptr<vk3d_share> share;
+
 	// ROM data, then the data of each frame
 	std::vector<u32> texture_data;
 	std::vector<u32> sprite_data;
@@ -196,6 +200,7 @@ bool namcos22_vk::impl::init(std::string &error)
 		error = "the GPU lacks independentBlend";
 		return false;
 	}
+	share = std::make_unique<vk3d_share>(*this);
 
 	// scene pass: colour and priority, sampled by the mix pass afterwards
 	{
@@ -906,21 +911,31 @@ bitmap_rgb32 *namcos22_vk::end_frame(pen_t const *palette, size_t entries, bitma
 	s.vkCmdDraw(cmd, 3, 1, 0, 0);
 	s.vkCmdEndRenderPass(cmd);
 
-	// read back into the next entry of the ring
+	// into a texture of the display, or read back into the next entry of
+	// the ring; screen pixel (x, y) at the high resolution is target pixel
+	// (x - left, y - top)
+	s32 const left = s.visible.left() * s.scale;
+	s32 const top = s.visible.top() * s.scale;
+	vk3d_share::target *const shared = s.share->acquire(rectangle(left, left + s.width - 1, top, top + s.height - 1));
 	impl::readback_entry &entry = s.readback[s.next_readback];
-	s.next_readback = (s.next_readback + 1) % READBACKS;
-	VkBufferImageCopy copy{};
-	copy.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-	copy.imageExtent = { u32(s.width), u32(s.height), 1 };
-	s.vkCmdCopyImageToBuffer(cmd, s.display.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, entry.host.handle, 1, &copy);
-	VkBufferMemoryBarrier host{ VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER };
-	host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-	host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
-	host.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	host.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	host.buffer = entry.host.handle;
-	host.size = VK_WHOLE_SIZE;
-	s.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &host, 0, nullptr);
+	if (shared)
+		s.share->record(cmd, *shared, s.display.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 0, 0);
+	else
+	{
+		s.next_readback = (s.next_readback + 1) % READBACKS;
+		VkBufferImageCopy copy{};
+		copy.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+		copy.imageExtent = { u32(s.width), u32(s.height), 1 };
+		s.vkCmdCopyImageToBuffer(cmd, s.display.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, entry.host.handle, 1, &copy);
+		VkBufferMemoryBarrier host{ VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER };
+		host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+		host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+		host.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		host.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		host.buffer = entry.host.handle;
+		host.size = VK_WHOLE_SIZE;
+		s.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &host, 0, nullptr);
+	}
 	s.vkEndCommandBuffer(cmd);
 
 	// sent without waiting: frame_ready() waits when the renderer reads it
@@ -929,6 +944,8 @@ bitmap_rgb32 *namcos22_vk::end_frame(pen_t const *palette, size_t entries, bitma
 	submit.pCommandBuffers = &cmd;
 	s.vkResetFences(s.device, 1, &sl.fence);
 	bool const ok = s.vkQueueSubmit(s.queue, 1, &submit, sl.fence) == VK_SUCCESS;
+	if (ok && shared)
+		s.share->submitted(*shared, true);
 	sl.busy = ok;
 	if (upload_rom)
 	{
@@ -940,13 +957,14 @@ bitmap_rgb32 *namcos22_vk::end_frame(pen_t const *palette, size_t entries, bitma
 	}
 	if (!ok)
 		return nullptr;
+	s.frames++;
+	if (shared)
+	{
+		s.share->tag(*shared) = slot_index;
+		return &s.share->bitmap(*shared);
+	}
 	entry.slot = slot_index;
 	entry.ready = false;
-	s.frames++;
-
-	// screen pixel (x, y) at the high resolution is target pixel (x - left, y - top)
-	s32 const left = s.visible.left() * s.scale;
-	s32 const top = s.visible.top() * s.scale;
 	u32 *const base = reinterpret_cast<u32 *>(entry.host.mapped) - (ptrdiff_t(top) * s.width + left);
 	entry.view.wrap(base, left + s.width, top + s.height, s.width);
 	return &entry.view;
@@ -956,6 +974,16 @@ bitmap_rgb32 *namcos22_vk::end_frame(pen_t const *palette, size_t entries, bitma
 void namcos22_vk::frame_ready(bitmap_rgb32 const *frame)
 {
 	impl &s = *m;
+
+	// a frame in a texture of the display: its batch must be done
+	if (vk3d_share::target *const shared = s.share->find(frame))
+	{
+		int const slot = s.share->tag(*shared);
+		if (slot >= 0)
+			s.wait_slot(s.slots[slot]);
+		return;
+	}
+
 	impl::readback_entry *found = nullptr;
 	for (impl::readback_entry &entry : s.readback)
 		if (&entry.view == frame)
@@ -973,4 +1001,12 @@ void namcos22_vk::frame_ready(bitmap_rgb32 const *frame)
 		s.vkInvalidateMappedMemoryRanges(s.device, 1, &range);
 	}
 	entry.ready = true;
+}
+
+
+hires3d_output::gpu_texture namcos22_vk::shared_texture(bitmap_rgb32 const *frame)
+{
+	impl &s = *m;
+	vk3d_share::target *const shared = s.share->find(frame);
+	return shared ? s.share->texture(*shared) : hires3d_output::gpu_texture();
 }

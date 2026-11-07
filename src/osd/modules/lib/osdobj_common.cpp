@@ -162,6 +162,7 @@ const options_entry osd_options::s_option_entries[] =
 	{ OSDOPTION_BGFX_SHADOW_MASK,                "slot-mask.png",   core_options::option_type::STRING,   "shadow mask texture name" },
 	{ OSDOPTION_BGFX_LUT,                        "lut-default.png", core_options::option_type::STRING,   "LUT texture name" },
 	{ OSDOPTION_BGFX_AVI_NAME,                   OSDOPTVAL_AUTO,    core_options::option_type::PATH,     "filename for BGFX output logging" },
+	{ OSDOPTION_BGFX_HIRES3D_SHARE,              "1",               core_options::option_type::BOOLEAN,  "with -hires3d, draw the frames of the Vulkan 3D renderers from textures they share (Direct3D 11) instead of reading them back; BGFX then draws on the emulation thread" },
 
 	// End of list
 	{ nullptr }

@@ -92,6 +92,7 @@
 #define OSDOPTION_BGFX_SHADOW_MASK      "bgfx_shadow_mask"
 #define OSDOPTION_BGFX_LUT              "bgfx_lut"
 #define OSDOPTION_BGFX_AVI_NAME         "bgfx_avi_name"
+#define OSDOPTION_BGFX_HIRES3D_SHARE    "bgfx_hires3d_share"
 
 #define OSDOPTVAL_AUTO                  "auto"
 #define OSDOPTVAL_NONE                  "none"
@@ -171,6 +172,7 @@ public:
 	const char *bgfx_shadow_mask() const { return value(OSDOPTION_BGFX_SHADOW_MASK); }
 	const char *bgfx_lut() const { return value(OSDOPTION_BGFX_LUT); }
 	const char *bgfx_avi_name() const { return value(OSDOPTION_BGFX_AVI_NAME); }
+	bool bgfx_hires3d_share() const { return bool_value(OSDOPTION_BGFX_HIRES3D_SHARE); }
 
 	static const options_entry s_option_entries[];
 };

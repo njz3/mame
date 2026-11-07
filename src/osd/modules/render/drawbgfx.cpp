@@ -12,6 +12,7 @@
 #include "bgfx/effect.h"
 #include "bgfx/effectmanager.h"
 #include "bgfx/shadermanager.h"
+#include "bgfx/sharedtexture.h"
 #include "bgfx/slider.h"
 #include "bgfx/target.h"
 #include "bgfx/target.h"
@@ -30,6 +31,8 @@
 // emu
 #include "emu.h"
 #include "config.h"
+#include "emuopts.h"
+#include "hires3d.h"
 #include "render.h"
 #include "rendutil.h"
 
@@ -250,6 +253,7 @@ void video_bgfx::exit()
 	if (m_bgfx_library_initialized)
 	{
 		osd_printf_verbose("Shutting down BGFX library\n");
+		bgfx_shared_textures::stop();
 		imguiDestroy();
 		bgfx::shutdown();
 		m_bgfx_library_initialized = false;
@@ -294,6 +298,7 @@ void video_bgfx::last_renderer_destroyed()
 	if (m_bgfx_library_initialized)
 	{
 		osd_printf_verbose("No more renderers - shutting down BGFX library\n");
+		bgfx_shared_textures::stop();
 		imguiDestroy();
 		bgfx::shutdown();
 		m_bgfx_library_initialized = false;
@@ -365,6 +370,16 @@ bool video_bgfx::init_bgfx_library(osd_window &window)
 	else
 		osd_printf_warning("Unknown BGFX backend type '%s', going with auto-detection.\n", backend);
 
+	// -hires3d: bgfx draws on this thread instead of its own, so that the
+	// frames of the GPU renderers can be shared with it (its Direct3D 11
+	// device is single-threaded, and the textures are made and tracked from
+	// the emulation); bgfx remembers this, so it is kept for the next starts
+	static bool s_single_threaded = false;
+	if ((window.machine().options().int_value(OPTION_HIRES3D) > 1) && m_options->bgfx_hires3d_share())
+		s_single_threaded = true;
+	if (s_single_threaded)
+		bgfx::renderFrame();
+
 	if (!bgfx::init(init))
 		return false;
 
@@ -381,6 +396,10 @@ bool video_bgfx::init_bgfx_library(osd_window &window)
 	ScreenVertex::init();
 
 	imguiCreate();
+
+	// -hires3d: the GPU renderers can hand their frames over without read-back
+	if (s_single_threaded && m_options->bgfx_hires3d_share())
+		bgfx_shared_textures::start();
 
 	return true;
 }
@@ -972,6 +991,23 @@ void renderer_bgfx::render_textured_quad(render_primitive* prim, bgfx::Transient
 	float u[4] = { prim->texcoords.tl.u, prim->texcoords.tr.u, prim->texcoords.bl.u, prim->texcoords.br.u };
 	float v[4] = { prim->texcoords.tl.v, prim->texcoords.tr.v, prim->texcoords.bl.v, prim->texcoords.br.v };
 
+	// -hires3d: a frame left on the GPU is drawn from its shared texture,
+	// which is a row of the frame bitmap wide
+	bgfx_texture_handle_provider *shared = nullptr;
+	if (PRIMFLAG_GET_SCREENTEX(prim->flags) && ((prim->flags & PRIMFLAG_TEXFORMAT_MASK) == PRIMFLAG_TEXFORMAT(TEXFORMAT_RGB32)))
+	{
+		if (int const id = hires3d_output::gpu_texture_of(prim->texture.base))
+		{
+			bgfx_shared_textures *const textures = bgfx_shared_textures::instance();
+			shared = textures ? textures->provider(id, prim->texture.width, prim->texture.height, prim->texture.rowpixels) : nullptr;
+			if (!shared)
+				hires3d_output::read_gpu_texture(prim->texture.base);
+		}
+	}
+	if (shared)
+		for (float &value : u)
+			value *= float(prim->texture.width) / float(prim->texture.rowpixels);
+
 	vertex(&vertices[0], x[0], y[0], 0, rgba, u[0], v[0]);
 	vertex(&vertices[1], x[1], y[1], 0, rgba, u[1], v[1]);
 	vertex(&vertices[2], x[3], y[3], 0, rgba, u[3], v[3]);
@@ -990,7 +1026,11 @@ void renderer_bgfx::render_textured_quad(render_primitive* prim, bgfx::Transient
 	uint16_t tex_height(prim->texture.height);
 
 	bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
-	if (is_screen)
+	if (shared)
+	{
+		texture = shared->texture();
+	}
+	else if (is_screen)
 	{
 		const bgfx::Memory* mem = bgfx_util::mame_texture_data_to_bgra32(prim->flags & PRIMFLAG_TEXFORMAT_MASK
 			, tex_width, tex_height, prim->texture.rowpixels, prim->texture.palette, prim->texture.base);
@@ -1007,7 +1047,7 @@ void renderer_bgfx::render_textured_quad(render_primitive* prim, bgfx::Transient
 
 	uint32_t blend = PRIMFLAG_GET_BLENDMODE(prim->flags);
 	bgfx::setVertexBuffer(0,buffer);
-	bgfx::setTexture(0, effects[blend]->uniform("s_tex")->handle(), texture);
+	bgfx::setTexture(0, effects[blend]->uniform("s_tex")->handle(), texture, shared ? texture_flags : UINT32_MAX);
 
 	bgfx_uniform* inv_view_dims = effects[blend]->uniform("u_inv_view_dims");
 	if (inv_view_dims)
@@ -1019,7 +1059,7 @@ void renderer_bgfx::render_textured_quad(render_primitive* prim, bgfx::Transient
 
 	effects[blend]->submit(m_ortho_view->get_index());
 
-	if (is_screen)
+	if (is_screen && !shared)
 	{
 		bgfx::destroy(texture);
 	}
@@ -1389,7 +1429,12 @@ int renderer_bgfx::draw(int update)
 
 	if (window().index() == osd_common_t::window_list().size() - 1)
 	{
+		bgfx_shared_textures *const shared = bgfx_shared_textures::instance();
+		if (shared)
+			shared->before_frame();
 		bgfx::frame();
+		if (shared)
+			shared->after_frame();
 	}
 
 	return 0;
@@ -1453,7 +1498,12 @@ bool renderer_bgfx::update_dimensions()
 		bgfx::setViewClear(s_current_view, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x000000ff, 1.0f, 0);
 		bgfx::setViewMode(s_current_view, bgfx::ViewMode::Sequential);
 		bgfx::touch(s_current_view);
+		bgfx_shared_textures *const shared = bgfx_shared_textures::instance();
+		if (shared)
+			shared->before_frame();
 		bgfx::frame();
+		if (shared)
+			shared->after_frame();
 		return true;
 	}
 	return false;

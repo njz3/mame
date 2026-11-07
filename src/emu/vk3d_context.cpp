@@ -11,6 +11,8 @@
 #include "emu.h"
 #include "vk3d_context.h"
 
+#include <cstring>
+
 
 vk3d_context::~vk3d_context()
 {
@@ -64,10 +66,18 @@ bool vk3d_context::init_device(std::string &error, VkPhysicalDeviceFeatures cons
 		return false;
 	}
 
+	// Vulkan 1.1 when the loader has it: the frames can then be shared with
+	// the OSD renderer (external memory, adapter LUID)
+	u32 api = VK_API_VERSION_1_0;
+	auto const enumerate_version = reinterpret_cast<PFN_vkEnumerateInstanceVersion>(vkGetInstanceProcAddr(VK_NULL_HANDLE, "vkEnumerateInstanceVersion"));
+	u32 loader_version = 0;
+	if (enumerate_version && (enumerate_version(&loader_version) == VK_SUCCESS) && (loader_version >= VK_API_VERSION_1_1))
+		api = VK_API_VERSION_1_1;
+
 	VkApplicationInfo app{ VK_STRUCTURE_TYPE_APPLICATION_INFO };
 	app.pApplicationName = "mame3d";
 	app.pEngineName = "mame3d";
-	app.apiVersion = VK_API_VERSION_1_0;
+	app.apiVersion = api;
 	VkInstanceCreateInfo instance_info{ VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
 	instance_info.pApplicationInfo = &app;
 	if (vkCreateInstance(&instance_info, nullptr, &instance) != VK_SUCCESS)
@@ -119,6 +129,36 @@ bool vk3d_context::init_device(std::string &error, VkPhysicalDeviceFeatures cons
 	}
 	vkGetPhysicalDeviceMemoryProperties(physical, &memory_properties);
 
+	// what sharing the frames needs: Vulkan 1.1 on the device, its LUID and
+	// the import of Windows memory handles
+	char const *extensions[1];
+	u32 extension_count = 0;
+	if ((api >= VK_API_VERSION_1_1) && (properties.apiVersion >= VK_API_VERSION_1_1))
+	{
+		vkGetPhysicalDeviceProperties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceProperties2"));
+		vkGetPhysicalDeviceImageFormatProperties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceImageFormatProperties2>(vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceImageFormatProperties2"));
+		bool luid_valid = false;
+		if (vkGetPhysicalDeviceProperties2)
+		{
+			VkPhysicalDeviceIDProperties id{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES };
+			VkPhysicalDeviceProperties2 properties2{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
+			properties2.pNext = &id;
+			vkGetPhysicalDeviceProperties2(physical, &properties2);
+			luid_valid = id.deviceLUIDValid;
+			std::memcpy(m_luid, id.deviceLUID, sizeof(m_luid));
+		}
+		u32 available = 0;
+		vkEnumerateDeviceExtensionProperties(physical, nullptr, &available, nullptr);
+		std::vector<VkExtensionProperties> list(available);
+		vkEnumerateDeviceExtensionProperties(physical, nullptr, &available, list.data());
+		for (VkExtensionProperties const &extension : list)
+			if (!std::strcmp(extension.extensionName, "VK_KHR_external_memory_win32") && luid_valid && vkGetPhysicalDeviceImageFormatProperties2)
+			{
+				extensions[extension_count++] = "VK_KHR_external_memory_win32";
+				m_external_memory = true;
+			}
+	}
+
 	// enable the wanted features the device has
 	if (wanted)
 	{
@@ -140,6 +180,8 @@ bool vk3d_context::init_device(std::string &error, VkPhysicalDeviceFeatures cons
 	device_info.queueCreateInfoCount = 1;
 	device_info.pQueueCreateInfos = &queue_info;
 	device_info.pEnabledFeatures = &m_enabled;
+	device_info.enabledExtensionCount = extension_count;
+	device_info.ppEnabledExtensionNames = extension_count ? extensions : nullptr;
 	if (vkCreateDevice(physical, &device_info, nullptr, &device) != VK_SUCCESS)
 	{
 		error = "vkCreateDevice failed";
@@ -155,6 +197,11 @@ bool vk3d_context::init_device(std::string &error, VkPhysicalDeviceFeatures cons
 		return false;
 	}
 	vkGetDeviceQueue(device, queue_family, 0, &queue);
+	if (m_external_memory)
+	{
+		vkGetMemoryWin32HandlePropertiesKHR = vkGetDeviceProcAddr(device, "vkGetMemoryWin32HandlePropertiesKHR");
+		m_external_memory = (vkGetMemoryWin32HandlePropertiesKHR != nullptr);
+	}
 
 	VkCommandPoolCreateInfo pool_info{ VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
 	pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;

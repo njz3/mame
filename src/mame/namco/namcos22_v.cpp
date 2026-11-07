@@ -2715,7 +2715,7 @@ bool namcos22_state::show_vk_frame(screen_device &screen, const rectangle &clipr
 		m_vk.reset();
 		return false;
 	}
-	m_hires->use_frame(*frame, [this, frame] () { if (m_vk) m_vk->frame_ready(frame); });
+	m_hires->use_frame(*frame, [this, frame] () { if (m_vk) m_vk->frame_ready(frame); }, m_vk->shared_texture(frame));
 	m_hires->frame_done(cliprect);
 	return true;
 }

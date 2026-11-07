@@ -259,6 +259,8 @@ function osdmodulesbuild()
 		MAME_DIR .. "src/osd/modules/render/bgfx/paramuniformreader.h",
 		MAME_DIR .. "src/osd/modules/render/bgfx/shadermanager.cpp",
 		MAME_DIR .. "src/osd/modules/render/bgfx/shadermanager.h",
+		MAME_DIR .. "src/osd/modules/render/bgfx/sharedtexture.cpp",
+		MAME_DIR .. "src/osd/modules/render/bgfx/sharedtexture.h",
 		MAME_DIR .. "src/osd/modules/render/bgfx/slider.cpp",
 		MAME_DIR .. "src/osd/modules/render/bgfx/slider.h",
 		MAME_DIR .. "src/osd/modules/render/bgfx/sliderreader.cpp",

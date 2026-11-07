@@ -12,7 +12,8 @@
     that order with a port of the scanline renderers (textures from the
     texture ROMs, palette, shading, fog, fades, alpha), then mixes the
     native text layer over them and applies the fades and gamma in a second
-    pass.  The result is read back and shown without copying it.
+    pass.  The result is read back and shown without copying it, or copied
+    into a texture of the display when it can draw one (vk3d_share).
 
 ***************************************************************************/
 
@@ -20,6 +21,8 @@
 #define MAME_NAMCO_NAMCOS22_VK_H
 
 #pragma once
+
+#include "hires3d.h"
 
 #include <memory>
 #include <string>
@@ -95,6 +98,10 @@ public:
 	// drawn; its pixels are there once frame_ready() returns for it
 	bitmap_rgb32 *end_frame(pen_t const *palette, size_t entries, bitmap_ind16 const &text, bitmap_ind8 const &textpri, mix_params const &mix);
 	void frame_ready(bitmap_rgb32 const *frame);
+
+	// the texture of the display holding a frame end_frame() returned, if
+	// it went there instead of being read back
+	hires3d_output::gpu_texture shared_texture(bitmap_rgb32 const *frame);
 
 private:
 	struct impl;

@@ -195,6 +195,8 @@ files {
 	MAME_DIR .. "src/emu/vk3d.h",
 	MAME_DIR .. "src/emu/vk3d_context.cpp",
 	MAME_DIR .. "src/emu/vk3d_context.h",
+	MAME_DIR .. "src/emu/vk3d_share.cpp",
+	MAME_DIR .. "src/emu/vk3d_share.h",
 	MAME_DIR .. "src/emu/render.cpp",
 	MAME_DIR .. "src/emu/render.h",
 	MAME_DIR .. "src/emu/rendertypes.h",

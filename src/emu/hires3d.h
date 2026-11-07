@@ -15,6 +15,13 @@
     renderer instead of its native bitmap.  Emulation timing, partial
     updates and the native bitmap are not affected.
 
+    A GPU renderer can also leave the frame on the GPU: when the OSD
+    renderer registers a hires3d_gpu_sink (bgfx on Direct3D 11), the GPU
+    renderer copies the frame into a texture of the sink instead of
+    reading it back, and the OSD renderer draws that texture.  The bitmap
+    is then only filled when the CPU needs the frame (snapshots and
+    recordings).
+
 ***************************************************************************/
 
 #ifndef MAME_EMU_HIRES3D_H
@@ -32,6 +39,37 @@ class screen_device;
 class vk3d_renderer;
 
 
+// textures of the OSD renderer that GPU renderers of the emulation write,
+// registered by the OSD renderer that can draw them (hires3d_output::
+// set_gpu_sink); everything happens on the main thread
+class hires3d_gpu_sink
+{
+public:
+	virtual ~hires3d_gpu_sink() = default;
+
+	// LUID of the adapter that draws (8 bytes): only a GPU renderer on the
+	// same adapter can write the textures
+	virtual void adapter_luid(u8 *luid) const = 0;
+
+	// create a BGRA8 texture of width x height pixels that a GPU renderer
+	// writes through handle (an NT handle of a Direct3D 11 texture, valid
+	// until the texture is destroyed); returns its id (above 0), or 0
+	virtual int create(int width, int height, void *&handle) = 0;
+
+	// true once the texture can be drawn (not right after it is created)
+	virtual bool ready(int id) const = 0;
+
+	// written() tells that a frame was copied into the texture (the GPU
+	// renderer waits for it before the frame is drawn); idle() is true once
+	// the draws that read the texture are done on the GPU, and the GPU
+	// renderer then writes it again (with wait, it waits for the draws)
+	virtual void written(int id) = 0;
+	virtual bool idle(int id, bool wait) = 0;
+
+	virtual void destroy(int id) = 0;
+};
+
+
 class hires3d_output
 {
 public:
@@ -47,14 +85,24 @@ public:
 	// bitmap for the frame being drawn (native size times scale)
 	bitmap_rgb32 &frame_bitmap();
 
+	// a frame also held by a texture of the GPU sink, covering the shown
+	// area from its top left corner: the OSD renderer draws the texture,
+	// and read() fills the bitmap with it when the CPU needs the frame
+	struct gpu_texture
+	{
+		int id = 0;
+		std::function<void ()> read;
+	};
+
 	// show bitmap for the frame being drawn instead of the frame bitmap
 	// (frame_bitmap() then returns it); it is in the same coordinates and
 	// must stay intact until the next frame is shown; ready, if given, is
 	// called just before the renderer reads the bitmap, after the throttle
 	// (a GPU read-back can complete meanwhile), or when the next frame
 	// takes the texture if the renderer did not read it; the bitmap must
-	// not be written by the CPU once it is given
-	void use_frame(bitmap_rgb32 &bitmap, std::function<void ()> &&ready = nullptr);
+	// not be written by the CPU once it is given; with a texture, the
+	// bitmap is only filled by texture.read()
+	void use_frame(bitmap_rgb32 &bitmap, std::function<void ()> &&ready = nullptr, gpu_texture &&texture = gpu_texture());
 
 	// the update covering cliprect is finished; the frame is shown once
 	// the bottom of the visible area has been drawn
@@ -94,6 +142,25 @@ public:
 	// while the emulation is throttled instead of stalling it
 	static void complete_reads();
 
+	// the sink of the OSD renderer, or nullptr (the OSD renderer sets it
+	// when it starts and clears it before it stops)
+	static void set_gpu_sink(hires3d_gpu_sink *sink);
+	static hires3d_gpu_sink *gpu_sink();
+
+	// for the OSD renderer: the texture of the sink holding the frame of a
+	// screen texture whose first pixel is base, or 0
+	static int gpu_texture_of(void const *base);
+
+	// true if a frame given to a screen is in texture id (it must not be
+	// written again)
+	static bool gpu_texture_in_use(int id);
+
+	// the frames in textures of the sink are copied into their bitmaps:
+	// all of them before the CPU reads the screens (snapshots, recordings),
+	// or the one at base when the OSD renderer cannot draw its texture
+	static void read_gpu_textures();
+	static void read_gpu_texture(void const *base);
+
 private:
 	void begin_frame();
 
@@ -108,6 +175,10 @@ private:
 	std::function<void ()> m_draw_ready;    // their ready callbacks
 	std::function<void ()> m_published_ready;
 	std::function<void ()> m_texture_ready; // for the frame in the texture, not called yet
+	gpu_texture m_draw_texture;             // GPU textures of those frames
+	gpu_texture m_published_texture;
+	gpu_texture m_texture_texture;
+	void const *m_texture_base = nullptr;   // first pixel of the frame in the texture
 	int m_shown = -1;                       // own bitmap shown, or -1
 	u64 m_frame = ~u64(0);
 };
