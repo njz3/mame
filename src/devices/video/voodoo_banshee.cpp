@@ -334,6 +334,8 @@ u32 voodoo_banshee_device::read_lfb(offs_t offset, u32 mem_mask)
 	if (addr <= m_fbmask)
 	{
 		m_renderer->wait("read_lfb");
+		if (m_vk && hires_in_buffers(addr, 4))
+			hires_native_read();
 		u32 result = *(u32 *)&m_fbram[addr];
 		if (LOG_LFB)
 			logerror("%s:read_lfb(%X) = %08X\n", machine().describe_context(), addr, result);
@@ -369,7 +371,9 @@ void voodoo_banshee_device::write_lfb(offs_t offset, u32 data, u32 mem_mask)
 		m_renderer->wait("write_lfb");
 		if (LOG_LFB)
 			logerror("%s:write_lfb(%X) = %08X & %08X\n", machine().describe_context(), addr, data, mem_mask);
+		hires_mem_writing(addr, 4);
 		COMBINE_DATA((u32 *)&m_fbram[addr]);
+		hires_mem_written(addr, 4);
 	}
 	else
 		logerror("%s:write_lfb Out of bounds (%X) = %08X & %08X\n", machine().describe_context(), addr, data, mem_mask);
@@ -831,6 +835,7 @@ void voodoo_banshee_device::internal_io_w(offs_t offset, u32 data, u32 mem_mask)
 				m_height = BIT(data, 12, 12);
 			if (m_width != 0 && m_height != 0 && newval != oldval)
 				recompute_video();
+			hires_layout();
 			break;
 
 		// vidOverlayDudx/vidOverlayDudy impact how we configure the video
@@ -1083,6 +1088,8 @@ void voodoo_banshee_device::internal_texture_w(offs_t offset, u32 data)
 
 	// wait for any outstanding work to finish
 	m_renderer->wait("internal_texture_w");
+	if (m_vk)
+		m_vk->tmu_written(0, dest, 4);
 
 	// write the four bytes in little-endian order
 	u32 bytes_per_texel = (texmode.format() < 8) ? 1 : 2;
@@ -1150,10 +1157,16 @@ void voodoo_banshee_device::internal_lfb_direct_w(offs_t offset, u32 data, u32 m
 	m_renderer->wait("internal_lfb_direct_w");
 
 	// write to the RGB buffer
+	bool const inside = (dest + 1 < end);
+	u32 const byteoffs = inside ? u32(reinterpret_cast<u8 *>(dest) - m_fbram) : 0;
+	if (inside)
+		hires_mem_writing(byteoffs, 4);
 	if (ACCESSING_BITS_0_15 && dest < end)
 		dest[0] = BIT(data, 0, 16);
 	if (ACCESSING_BITS_16_31 && dest + 1 < end)
 		dest[1] = BIT(data, 16, 16);
+	if (inside)
+		hires_mem_written(byteoffs, 4);
 
 	// notify that frame buffer has changed
 	m_video_changed = true;
@@ -1390,6 +1403,7 @@ u32 voodoo_banshee_device::reg_colbufstride_w(u32 chipmask, u32 regnum, u32 data
 		{
 			m_renderer->set_rowpixels(newpix);
 			m_video_changed = true;
+			hires_layout();
 		}
 	}
 	return 0;
@@ -1526,6 +1540,30 @@ void voodoo_banshee_device::recompute_video()
 
 
 //-------------------------------------------------
+//  hires_clut -- the CLUT as one table per 8-bit
+//  channel for the GPU (-hires3d); true when it is
+//  linear or bypassed
+//-------------------------------------------------
+
+bool voodoo_banshee_device::hires_clut(u8 *lut)
+{
+	u32 const config = m_io_regs.read(banshee_io_regs::vidProcCfg);
+	if (BIT(config, 11))
+		return true;
+	rgb_t const *const clutbase = &m_clut[256 * BIT(config, 13)];
+	bool linear = true;
+	for (int value = 0; value < 256; value++)
+	{
+		lut[value] = clutbase[value].r();
+		lut[256 + value] = clutbase[value].g();
+		lut[512 + value] = clutbase[value].b();
+		linear = linear && (lut[value] == value) && (lut[256 + value] == value) && (lut[512 + value] == value);
+	}
+	return linear;
+}
+
+
+//-------------------------------------------------
 //  cmdfifo_register_w -- handle a register write
 //  from the cmdfifo
 //-------------------------------------------------
@@ -1584,6 +1622,9 @@ void voodoo_banshee_device::execute_blit(u32 data)
 
 			m_renderer->wait("execute_blit(3)");
 
+			bool const writes = (m_blt_dst_bpp != 3) && (addr + 4 <= m_fbmask + 1);
+			if (writes)
+				hires_mem_writing(addr, 4);
 			switch (m_blt_dst_bpp)
 			{
 				case 1:
@@ -1614,6 +1655,8 @@ void voodoo_banshee_device::execute_blit(u32 data)
 					m_blt_dst_x += 1;
 					break;
 			}
+			if (writes)
+				hires_mem_written(addr, 4);
 
 			if (m_blt_dst_x >= m_blt_dst_width)
 			{
@@ -1707,6 +1750,9 @@ void voodoo_banshee_device::screen_to_screen_blit(u32 srcx, u32 srcy)
 			continue;
 		u8 const *const s = &m_fbram[srcrow];
 		u8 *const d = &m_fbram[dstrow];
+		if (m_vk && hires_in_buffers(u32(srcrow), span))
+			hires_native_read();
+		hires_mem_writing(u32(dstrow), span);
 		if (rop == 0xcc)
 			memmove(d, s, span);
 		else
@@ -1716,6 +1762,7 @@ void voodoo_banshee_device::screen_to_screen_blit(u32 srcx, u32 srcy)
 				u8 const src = s[k], dst = d[k];
 				d[k] = (~src & ~dst & r0) | (~src & dst & r1) | (src & ~dst & r2) | (src & dst & r3);
 			}
+		hires_mem_written(u32(dstrow), span);
 	}
 
 	// advance dstXY after the command, as a line-by-line copy needs

@@ -126,6 +126,7 @@ protected:
 
 	// video timing and updates
 	void recompute_video();
+	virtual bool hires_clut(u8 *lut) override;
 
 	// command FIFO-specific write handlers
 	virtual u32 cmdfifo_register_w(u32 offset, u32 data) override;

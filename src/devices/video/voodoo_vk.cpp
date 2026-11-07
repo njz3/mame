@@ -4,7 +4,8 @@
 
     voodoo_vk.cpp
 
-    Vulkan renderer for the Voodoo 1/2 at a higher resolution (mame3d).
+    Vulkan renderer for the Voodoo 1/2, Banshee and Voodoo 3 at a higher
+    resolution (mame3d).
 
     Work is recorded on the CPU in emulation order (triangle records, CPU
     pixel writes, clears) and sent to the GPU in batches: every few
@@ -1408,6 +1409,20 @@ void voodoo_vk::tmu_written(int tmu, u8 const *ptr, u32 bytes)
 	for (u32 page = offset >> PAGE_SHIFT; page <= ((offset + bytes - 1) >> PAGE_SHIFT); page++)
 		s.tmu_dirty[tmu][page] = 1;
 	s.tmu_any_dirty[tmu] = true;
+}
+
+
+void voodoo_vk::tmu_reload()
+{
+	impl &s = *m;
+	if (s.textured_pending)
+		s.flush(-1, false);
+	for (int tmu = 0; tmu < 2; tmu++)
+		if (s.tmu_ram[tmu])
+		{
+			std::fill(s.tmu_dirty[tmu].begin(), s.tmu_dirty[tmu].end(), 1);
+			s.tmu_any_dirty[tmu] = true;
+		}
 }
 
 

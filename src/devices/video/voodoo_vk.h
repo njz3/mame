@@ -4,7 +4,8 @@
 
     voodoo_vk.h
 
-    Vulkan renderer for the Voodoo 1/2 at a higher resolution (mame3d).
+    Vulkan renderer for the Voodoo 1/2, Banshee and Voodoo 3 at a higher
+    resolution (mame3d).
 
     The device keeps emulating the chip and its native frame buffer; with
     -hires3d it also hands every triangle, fast fill and CPU write to this
@@ -57,7 +58,11 @@ public:
 	void set_tmu_memory(int tmu, u8 const *ram, u32 size);
 	void tmu_written(int tmu, u8 const *ptr, u32 bytes);
 
-	// native layout of the colour and depth buffers
+	// the texture memory changed as a whole (a state was loaded)
+	void tmu_reload();
+
+	// native layout of the colour and depth buffers (on Banshee and later,
+	// buffer numbers are the device's copies of buffer addresses)
 	void set_layout(u32 rowpixels, u32 rows);
 
 	// drawing, in order; buffer is the colour buffer (0-2), positions and

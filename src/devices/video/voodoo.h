@@ -627,14 +627,26 @@ protected:
 	// becoming m_hires_scale rows of rowpixels * m_hires_scale pixels; the
 	// triangles and fast fills are drawn in both, the LFB writes and blits
 	// are magnified into it, and the display reads it
-	int buffer_index(u16 const *buffer) const;
-	u16 *hires_buffer(u16 const *buffer) const;
-	bool hires_fits(u16 const *buffer, s32 left, s32 right, s32 top, s32 bottom) const;
+	// (Banshee and later: the colour and depth buffers are anywhere in the
+	// memory shared with the textures, so there is a copy per buffer address
+	// instead, m_hires_rows rows high; every write into the memory is checked
+	// against them, and the GPU's texture memory follows it)
+	int buffer_index(u16 const *buffer);
+	u16 *hires_buffer(u16 const *buffer);
+	bool hires_fits(u16 const *buffer, s32 left, s32 right, s32 top, s32 bottom);
 	void hires_triangle(voodoo::poly_data const &poly, voodoo::voodoo_renderer::vertex_t const *vert);
 	void hires_fastfill(voodoo::poly_data const &poly);
 	void hires_pixel(u16 const *buffer, s32 x, s32 scry);
 	void hires_fill_rows(u16 const *buffer, u32 first, u32 count, u16 value);
+	void hires_fbram_writing(u32 byteoffs);
 	void hires_fbram_written(u32 byteoffs);
+	int hires_find_slot(u32 offset) const;
+	void hires_layout();
+	void hires_mem_writing(u32 byteoffs, u32 bytes);
+	void hires_mem_written(u32 byteoffs, u32 bytes);
+	bool hires_in_buffers(u32 byteoffs, u32 bytes) const;
+	void hires_native_read();
+	virtual bool hires_clut(u8 *lut);
 	void recycle_renderer();
 	s32 estimated_pixels(voodoo::poly_data const &poly, voodoo::voodoo_renderer::vertex_t const *vert) const;
 
@@ -684,6 +696,12 @@ protected:
 	int m_hires_scale = 1;                   // resolution multiplier (1 = off)
 	std::unique_ptr<voodoo::voodoo_vk> m_vk; // GPU renderer
 	u64 m_hires_frame = 0;                   // last frame shown at the high resolution
+	bool m_hires_shared = false;             // Banshee and later: copies per buffer address
+	u32 m_hires_rows = 0;                    // their rows (native)
+	u32 m_hires_rowpixels = 0;               // their row width (native)
+	u32 m_hires_slot[3] = { ~0U, ~0U, ~0U }; // colour buffer held by each copy
+	u64 m_hires_slot_use[3] = { };           // when each was last drawn into
+	u64 m_hires_uses = 0;
 	u64 m_native_until = 0;                  // the CPU read the frame buffer: native rasterizer until this frame
 	u32 m_native_restarts = 0;               // statistics: reads that restarted the native rasterizer
 	bool m_hires_overlaid = false;           // the driver draws over the high-resolution frame

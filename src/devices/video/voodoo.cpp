@@ -1011,15 +1011,17 @@ void voodoo_1_device::device_start()
 	// create the renderer
 	m_renderer = std::make_unique<voodoo_renderer>(machine(), tmu_config, m_shared->rgb565, m_reg, &m_tmu[0].regs(), BIT(m_chipmask, 2) ? &m_tmu[1].regs() : nullptr);
 
-	// -hires3d: Voodoo 1 and 2 also draw into a magnified copy of the frame
+	// -hires3d: the chip also draws into a magnified copy of the frame
 	// buffer, on the GPU unless -hires3d_renderer is software, otherwise in
-	// memory with a guard as large as the widest row on each side
-	if (has_screen() && (model() == voodoo_model::VOODOO_1 || model() == voodoo_model::VOODOO_2))
+	// memory with a guard as large as the widest row on each side; Banshee
+	// and later keep a copy per buffer address (see hires_layout)
+	if (has_screen())
 	{
 		m_hires = std::make_unique<hires3d_output>(screen());
 		if (m_hires->scale() > 1)
 		{
 			m_hires_scale = m_hires->scale();
+			m_hires_shared = (tmumem[0] == m_fbram);
 			if (strcmp(machine().options().value(OPTION_HIRES3D_RENDERER), "software") != 0)
 			{
 				std::string error;
@@ -1028,15 +1030,16 @@ void voodoo_1_device::device_start()
 				{
 					rgb_t const *const tables[7] = { m_shared->rgb332, m_shared->alpha8, m_shared->int8, m_shared->ai44, m_shared->rgb565, m_shared->argb1555, m_shared->argb4444 };
 					m_vk->set_static_lookups(tables);
+					// TMU 1 reads the memory of TMU 0 when they share it
 					for (int tmu = 0; tmu < 2; tmu++)
-						if (BIT(m_chipmask, 1 + tmu))
+						if (BIT(m_chipmask, 1 + tmu) && ((tmu == 0) || !m_hires_shared))
 							m_vk->set_tmu_memory(tmu, tmumem[tmu], tmusize[tmu] * 1024 * 1024);
 					osd_printf_verbose("%s: hires3d drawn with Vulkan on %s\n", tag(), m_vk->device_name());
 				}
 				else
 					osd_printf_verbose("%s: hires3d drawn in software (%s)\n", tag(), error);
 			}
-			if (!m_vk)
+			if (!m_vk && !m_hires_shared)
 			{
 				size_t const block = size_t(2048) * m_hires_scale * m_hires_scale;
 				m_hires_guard = block;
@@ -1101,6 +1104,12 @@ void voodoo_1_device::device_post_load()
 	m_clut_dirty = true;
 	for (tmu_state &tm : m_tmu)
 		tm.post_load();
+
+	// -hires3d: the texture memory changed under the GPU's copy, and the
+	// copies of the buffers follow the restored layout
+	if (m_vk)
+		m_vk->tmu_reload();
+	hires_layout();
 
 	// restore the FBI memory FIFO base pointer; reconfiguring the FIFO would
 	// discard the entries queued when the state was saved
@@ -1558,12 +1567,7 @@ u32 voodoo_1_device::internal_lfb_r(offs_t offset)
 
 	// the native frame buffer must be drawn for a while (the reads of what
 	// the CPU wrote are right anyway: it always writes the native buffer)
-	if (m_vk)
-	{
-		if (gpu_only())
-			m_native_restarts++;
-		m_native_until = screen().frame_number() + 120;
-	}
+	hires_native_read();
 
 	// linear frame buffer reads are inherently 16-bit; convert offset to an pixel index
 	offset <<= 1;
@@ -2113,6 +2117,9 @@ u32 voodoo_1_device::reg_vretrace_r(u32 chipmask, u32 regnum)
 
 u32 voodoo_1_device::reg_stats_r(u32 chipmask, u32 regnum)
 {
+	// only the native rasterizer counts the pixels that pass or fail the
+	// tests: it must draw for a while when only the GPU drew
+	hires_native_read();
 	update_statistics(true);
 	return m_reg.read(regnum);
 }
@@ -2717,7 +2724,7 @@ void voodoo_1_device::swap_buffers()
 	// the new front buffer is shown from the next frame: start reading it
 	// back from the GPU now
 	if (m_vk && hires_wanted())
-		m_vk->prefetch(m_frontbuf);
+		m_vk->prefetch(m_hires_shared ? hires_find_slot(m_rgboffs[m_frontbuf]) : m_frontbuf);
 
 	// decrement the pending count and reset our state
 	if (m_swaps_pending != 0)
@@ -2803,8 +2810,12 @@ int voodoo_1_device::update_common(bitmap_rgb32 &bitmap, const rectangle &clipre
 	// shows the frame: the native buffer is neither drawn nor shown)
 	u32 rowpixels = m_renderer->rowpixels();
 	u16 *buffer_base = draw_buffer(drawbuf);
+
+	// the high-resolution copy shown (Banshee and later: none until the 3D
+	// drew into that buffer, the native one is then magnified)
+	int const shown = !m_hires_shared ? drawbuf : hires_find_slot(m_rgboffs[drawbuf]);
 	if (LOG_VBLANK_SWAP) logerror("--- update_common %d-%d @ %d from %08X\n", cliprect.min_y, cliprect.max_y, screen().vpos(), u32((u8 *)buffer_base - m_fbram));
-	bool const native_hidden = (m_hires_scale > 1) && gpu_only() && !m_hires_overlaid && m_hires->active();
+	bool const native_hidden = (m_hires_scale > 1) && gpu_only() && !m_hires_overlaid && m_hires->active() && (shown >= 0);
 	for (s32 y = cliprect.min_y; y <= cliprect.max_y && !native_hidden; y++)
 	{
 		if (y < m_yoffs)
@@ -2823,7 +2834,7 @@ int voodoo_1_device::update_common(bitmap_rgb32 &bitmap, const rectangle &clipre
 		s32 const scale = m_hires_scale;
 		bitmap_rgb32 &hires = m_hires->frame_bitmap();
 		rectangle const hclip = m_hires->scaled(cliprect);
-		s32 const ystart = std::clamp<s32>(s32(m_yoffs) * scale, hclip.top(), hclip.bottom() + 1);
+		s32 const ystart = (shown < 0) ? (hclip.bottom() + 1) : std::clamp<s32>(s32(m_yoffs) * scale, hclip.top(), hclip.bottom() + 1);
 		for (s32 y = hclip.top(); y < ystart; y++)
 		{
 			u32 const *const src = &bitmap.pix(y / scale);
@@ -2833,28 +2844,18 @@ int voodoo_1_device::update_common(bitmap_rgb32 &bitmap, const rectangle &clipre
 		}
 		if (m_vk && (ystart <= hclip.bottom()))
 		{
-			// the CLUT as one table per 8-bit channel, skipped when it is linear
+			// the GPU applies the CLUT (one table per 8-bit channel), skipped
+			// when it is linear; show the read-back memory itself when the
+			// driver does not draw over it, otherwise copy it
 			u8 lut[3 * 256];
-			bool linear = true;
-			for (int value = 0; value < 256; value++)
-			{
-				rgb_t const low = m_clut[value >> 3];
-				rgb_t const high = m_clut[(value >> 3) + 1];
-				lut[value] = (low.r() * (8 - (value & 7)) + high.r() * (value & 7)) >> 3;
-				lut[256 + value] = (low.g() * (8 - (value & 7)) + high.g() * (value & 7)) >> 3;
-				lut[512 + value] = (low.b() * (8 - (value & 7)) + high.b() * (value & 7)) >> 3;
-				linear = linear && (lut[value] == value) && (lut[256 + value] == value) && (lut[512 + value] == value);
-			}
-			// the GPU applies the CLUT; show the read-back memory itself when
-			// the driver does not draw over it, otherwise copy it
-			m_vk->set_clut(linear ? nullptr : lut);
+			m_vk->set_clut(hires_clut(lut) ? nullptr : lut);
 			rectangle const area(hclip.left(), hclip.right(), ystart, hclip.bottom());
 			bitmap_rgb32 *const direct = (!m_hires_overlaid && (ystart == hclip.top()))
-					? m_vk->frame(drawbuf, m_hires->scaled(screen().visible_area()), s32(m_xoffs) * scale, s32(m_yoffs) * scale)
+					? m_vk->frame(shown, m_hires->scaled(screen().visible_area()), s32(m_xoffs) * scale, s32(m_yoffs) * scale)
 					: nullptr;
 			if (direct)
 				m_hires->use_frame(*direct);
-			else if (!m_vk->read(drawbuf, hires, area, s32(m_xoffs) * scale, s32(m_yoffs) * scale, nullptr))
+			else if (!m_vk->read(shown, hires, area, s32(m_xoffs) * scale, s32(m_yoffs) * scale, nullptr))
 				hires.fill(rgb_t::black(), area);
 		}
 		else if (ystart <= hclip.bottom())
@@ -3215,8 +3216,26 @@ s32 voodoo_1_device::triangle()
 //  pointer designates, or -1
 //-------------------------------------------------
 
-int voodoo_1_device::buffer_index(u16 const *buffer) const
+int voodoo_1_device::buffer_index(u16 const *buffer)
 {
+	// Banshee and later: the copy of that address, or a new one replacing
+	// the oldest (never the one on display)
+	if (m_hires_shared)
+	{
+		u32 const offset = u32(reinterpret_cast<u8 const *>(buffer) - m_fbram);
+		int slot = hires_find_slot(offset);
+		if (slot < 0)
+		{
+			int const shown = hires_find_slot(m_rgboffs[m_frontbuf]);
+			for (int i = 0; i < 3; i++)
+				if ((i != shown) && ((slot < 0) || (m_hires_slot_use[i] < m_hires_slot_use[slot])))
+					slot = i;
+			m_hires_slot[slot] = offset;
+		}
+		m_hires_slot_use[slot] = ++m_hires_uses;
+		return slot;
+	}
+
 	for (int i = 0; i < 3; i++)
 		if ((m_rgboffs[i] != ~0) && (buffer == draw_buffer(i)))
 			return i;
@@ -3231,10 +3250,20 @@ int voodoo_1_device::buffer_index(u16 const *buffer) const
 //  column A % rowpixels * scale
 //-------------------------------------------------
 
-u16 *voodoo_1_device::hires_buffer(u16 const *buffer) const
+u16 *voodoo_1_device::hires_buffer(u16 const *buffer)
 {
 	size_t const rowpixels = m_renderer->rowpixels();
 	size_t const scale = m_hires_scale;
+
+	// Banshee and later: the copies of the three colour buffers, then the
+	// one of the depth buffer
+	if (m_hires_shared)
+	{
+		size_t const copy = rowpixels * scale * m_hires_rows * scale;
+		int const slot = (buffer == aux_buffer()) ? 3 : buffer_index(buffer);
+		return &m_hires_fb[m_hires_guard + slot * copy];
+	}
+
 	size_t const offset = (reinterpret_cast<u8 const *>(buffer) - m_fbram) / 2;
 	return &m_hires_fb[m_hires_guard + (offset / rowpixels) * scale * rowpixels * scale + (offset % rowpixels) * scale];
 }
@@ -3246,10 +3275,13 @@ u16 *voodoo_1_device::hires_buffer(u16 const *buffer) const
 //  buffer are inside the copy
 //-------------------------------------------------
 
-bool voodoo_1_device::hires_fits(u16 const *buffer, s32 left, s32 right, s32 top, s32 bottom) const
+bool voodoo_1_device::hires_fits(u16 const *buffer, s32 left, s32 right, s32 top, s32 bottom)
 {
 	if ((buffer == nullptr) || (m_renderer->rowpixels() == 0))
 		return false;
+	if (m_hires_shared)
+		return m_hires_fb && (m_renderer->rowpixels() == m_hires_rowpixels) && (left >= 0) && (top >= 0) &&
+				(right < s32(m_hires_rowpixels) * m_hires_scale) && (bottom < s32(m_hires_rows) * m_hires_scale);
 	ptrdiff_t const base = hires_buffer(buffer) - &m_hires_fb[0];
 	ptrdiff_t const row = ptrdiff_t(m_renderer->rowpixels()) * m_hires_scale;
 	return (base + top * row + left >= 0) && (base + bottom * row + right < ptrdiff_t(m_hires_size));
@@ -3549,8 +3581,20 @@ void voodoo_1_device::recycle_renderer()
 //  buffer memory
 //-------------------------------------------------
 
+void voodoo_1_device::hires_fbram_writing(u32 byteoffs)
+{
+	if (m_hires_shared)
+		hires_mem_writing(byteoffs & m_fbmask & ~3, 4);
+}
+
+
 void voodoo_1_device::hires_fbram_written(u32 byteoffs)
 {
+	if (m_hires_shared)
+	{
+		hires_mem_written(byteoffs & m_fbmask & ~3, 4);
+		return;
+	}
 	u32 const rowpixels = m_renderer->rowpixels();
 	if (!hires_wanted() || (rowpixels == 0))
 		return;
@@ -3577,6 +3621,145 @@ void voodoo_1_device::hires_fbram_written(u32 byteoffs)
 			hires_pixel(buffer, pixel % rowpixels, pixel / rowpixels);
 		}
 	}
+}
+
+
+//-------------------------------------------------
+//  hires_find_slot - the high-resolution copy of
+//  the colour buffer at offset (Banshee and
+//  later), or -1
+//-------------------------------------------------
+
+int voodoo_1_device::hires_find_slot(u32 offset) const
+{
+	for (int i = 0; i < 3; i++)
+		if (m_hires_slot[i] == offset)
+			return i;
+	return -1;
+}
+
+
+//-------------------------------------------------
+//  hires_layout - size the high-resolution copies
+//  of the buffers after the row width or the
+//  screen height changed (Banshee and later)
+//-------------------------------------------------
+
+void voodoo_1_device::hires_layout()
+{
+	u32 const rowpixels = m_renderer->rowpixels();
+	u32 const rows = m_height;
+	if (!m_hires_shared || ((rowpixels == m_hires_rowpixels) && (rows == m_hires_rows)))
+		return;
+	m_hires_rowpixels = rowpixels;
+	m_hires_rows = rows;
+	for (int i = 0; i < 3; i++)
+		m_hires_slot[i] = ~0U;
+	if (m_vk)
+		m_vk->set_layout(rowpixels, rows);
+	else
+	{
+		// three colour buffers and the depth buffer, with a guard row around
+		size_t const scale = m_hires_scale;
+		size_t const row = size_t(rowpixels) * scale;
+		m_hires_guard = row * scale;
+		m_hires_size = 4 * row * rows * scale + 2 * m_hires_guard;
+		m_hires_fb = std::make_unique<u16[]>(m_hires_size);
+	}
+}
+
+
+//-------------------------------------------------
+//  hires_mem_writing - the shared memory is about
+//  to change: the GPU's copy of the texture
+//  memory must follow (Banshee and later)
+//-------------------------------------------------
+
+void voodoo_1_device::hires_mem_writing(u32 byteoffs, u32 bytes)
+{
+	if (m_vk && m_hires_shared)
+		m_vk->tmu_written(0, m_fbram + byteoffs, bytes);
+}
+
+
+//-------------------------------------------------
+//  hires_mem_written - magnify what a write into
+//  the shared memory changed in the colour and
+//  depth buffers (Banshee and later)
+//-------------------------------------------------
+
+void voodoo_1_device::hires_mem_written(u32 byteoffs, u32 bytes)
+{
+	u32 const rowpixels = m_renderer->rowpixels();
+	if (!m_hires_shared || !hires_wanted() || (rowpixels == 0) || (rowpixels != m_hires_rowpixels) || (m_hires_rows == 0) || (bytes == 0))
+		return;
+	u32 const size = rowpixels * m_hires_rows * 2;
+	for (int i = 0; i < 4; i++)
+	{
+		u32 const base = (i < 3) ? m_hires_slot[i] : m_auxoffs;
+		if ((base == ~0U) || (byteoffs + bytes <= base) || (byteoffs >= base + size))
+			continue;
+		u16 const *const buffer = reinterpret_cast<u16 const *>(m_fbram + base);
+		u32 const first = (std::max(byteoffs, base) - base) / 2;
+		u32 const last = (std::min(byteoffs + bytes, base + size) - base - 1) / 2;
+		for (u32 pixel = first; pixel <= last; pixel++)
+			hires_pixel(buffer, pixel % rowpixels, pixel / rowpixels);
+	}
+}
+
+
+//-------------------------------------------------
+//  hires_in_buffers - true if a range of the
+//  shared memory overlaps the colour or depth
+//  buffers in use (Banshee and later)
+//-------------------------------------------------
+
+bool voodoo_1_device::hires_in_buffers(u32 byteoffs, u32 bytes) const
+{
+	u32 const size = m_renderer->rowpixels() * std::max<u32>(m_height, 1) * 2;
+	u32 const bases[3] = { m_rgboffs[m_frontbuf], m_rgboffs[m_backbuf], m_auxoffs };
+	for (u32 const base : bases)
+		if ((base != ~0U) && (byteoffs + bytes > base) && (byteoffs < base + size))
+			return true;
+	return false;
+}
+
+
+//-------------------------------------------------
+//  hires_native_read - the CPU reads the frame
+//  buffer: the native rasterizer must draw for a
+//  while when only the GPU drew
+//-------------------------------------------------
+
+void voodoo_1_device::hires_native_read()
+{
+	if (m_vk)
+	{
+		if (gpu_only())
+			m_native_restarts++;
+		m_native_until = screen().frame_number() + 120;
+	}
+}
+
+
+//-------------------------------------------------
+//  hires_clut - the CLUT as one table per 8-bit
+//  channel for the GPU; true when it is linear
+//-------------------------------------------------
+
+bool voodoo_1_device::hires_clut(u8 *lut)
+{
+	bool linear = true;
+	for (int value = 0; value < 256; value++)
+	{
+		rgb_t const low = m_clut[value >> 3];
+		rgb_t const high = m_clut[(value >> 3) + 1];
+		lut[value] = (low.r() * (8 - (value & 7)) + high.r() * (value & 7)) >> 3;
+		lut[256 + value] = (low.g() * (8 - (value & 7)) + high.g() * (value & 7)) >> 3;
+		lut[512 + value] = (low.b() * (8 - (value & 7)) + high.b() * (value & 7)) >> 3;
+		linear = linear && (lut[value] == value) && (lut[256 + value] == value) && (lut[512 + value] == value);
+	}
+	return linear;
 }
 
 
