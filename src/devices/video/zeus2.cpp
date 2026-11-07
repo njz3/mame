@@ -94,8 +94,11 @@ void zeus2_device::device_start()
 	m_hires = std::make_unique<hires3d_output>(screen());
 	m_hires_scale = m_hires->scale();
 
-	// -hires3d: on the GPU unless -hires3d_renderer is software
-	if ((m_hires_scale > 1) && (strcmp(machine().options().value(OPTION_HIRES3D_RENDERER), "software") != 0))
+	// -hires3d: on the GPU unless -hires3d_renderer is software; -widescreen
+	// needs the GPU (even at the native resolution)
+	m_hires->allow_widescreen(true);
+	bool const wide = m_hires->wide();
+	if (((m_hires_scale > 1) || wide) && (strcmp(machine().options().value(OPTION_HIRES3D_RENDERER), "software") != 0))
 	{
 		std::string error;
 		m_vk = zeus2_vk::create(m_hires_scale, m_frameColor.get(), m_frameDepth.get(), m_waveram.get(), m_pal_table, error);
@@ -104,6 +107,7 @@ void zeus2_device::device_start()
 		else
 			osd_printf_verbose("zeus2: hires3d drawn in software (%s)\n", error);
 	}
+	m_hires->allow_widescreen(m_vk != nullptr);
 	if ((m_hires_scale > 1) && !m_vk)
 	{
 		size_t const pixels = size_t(WAVERAM1_WIDTH) * WAVERAM1_HEIGHT * 2 * m_hires_scale * m_hires_scale;
@@ -175,7 +179,7 @@ void zeus2_device::device_post_load()
 {
 	if (m_vk)
 	{
-		m_vk->set_layout(frame_row_shift());
+		m_vk->set_layout(frame_row_shift(), wide_pad(), screen().visible_area().right() + 1);
 		m_vk->resync();
 	}
 	else if (m_hiresColor)
@@ -280,7 +284,7 @@ uint32_t zeus2_device::screen_update(screen_device &screen, bitmap_rgb32 &bitmap
 	//if (!machine().input().code_pressed(KEYCODE_W))
 	if (1)
 	{
-		bool const hires_active = (m_hires_scale > 1) && m_hires->active();
+		bool const hires_active = m_hires->active();
 		if (hires_active && m_vk)
 		{
 			// on the GPU: the rows shown read back, the frame shown from the
@@ -301,7 +305,9 @@ uint32_t zeus2_device::screen_update(screen_device &screen, bitmap_rgb32 &bitmap
 			// the GPU failed: continue in software from the native frame buffer
 			osd_printf_warning("zeus2: Vulkan failed, hires3d continues in software\n");
 			m_vk.reset();
-			hires_software_start();
+			m_hires->allow_widescreen(false);
+			if (m_hires_scale > 1)
+				hires_software_start();
 		}
 
 		/* normal update case */
@@ -312,7 +318,7 @@ uint32_t zeus2_device::screen_update(screen_device &screen, bitmap_rgb32 &bitmap
 		}
 
 		// high-resolution frame from the magnified copy
-		if (hires_active && !m_vk)
+		if (hires_active && !m_vk && m_hiresColor)
 		{
 			int const scale = m_hires_scale;
 			bitmap_rgb32 &hires = m_hires->frame_bitmap();
@@ -551,7 +557,7 @@ void zeus2_device::zeus2_register_update(offs_t offset, uint32_t oldval, int log
 			zeus_cliprect = visarea;
 			zeus_cliprect.set_origin(0, zeus_cliprect.top());
 			if (m_vk)
-				m_vk->set_layout(frame_row_shift());
+				m_vk->set_layout(frame_row_shift(), wide_pad(), visarea.right() + 1);
 			// re-time vertical sync against the mode just programmed
 			rearm_vsync();
 		}

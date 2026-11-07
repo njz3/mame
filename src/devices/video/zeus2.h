@@ -294,6 +294,9 @@ public:
 
 	uint32_t frame_row_shift() const { return 9 + m_yScale; }
 
+	// -widescreen: high-resolution columns more on each side of the screen
+	int wide_pad() const { return m_hires->wide() ? m_hires->pad() : 0; }
+
 	uint32_t frame_addr_from_xy(uint32_t x, uint32_t y, bool render)
 	{
 		uint32_t addr;

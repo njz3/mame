@@ -11,6 +11,8 @@ layout(push_constant) uniform push_t
 	uint states;        // state records
 	uint values;        // span values, palettes
 	int scale;
+	int pad;            // -widescreen: more columns on each side of the rows
+	int row_pixels;     // native columns of a row
 } pc;
 
 // a frame buffer depth (24-bit integer) as a depth attachment value

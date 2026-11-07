@@ -74,6 +74,7 @@ struct push_constants
 	float inv_width, inv_height;
 	u32 base, states, values;
 	s32 scale;
+	s32 pad, row_pixels;
 };
 
 // poly_manager::round_coordinate
@@ -121,6 +122,8 @@ struct zeus2_vk::impl : vk3d_context
 
 	int scale = 1;
 	int row_shift = 9;
+	int pad = 0;                // -widescreen: more columns on each side of the rows
+	int visible_width = 0;      // native columns of the screen
 	int width = 0;              // frame buffer images
 	int height = 0;
 	bool failed = false;
@@ -477,8 +480,8 @@ VkPipeline zeus2_vk::impl::make_pipeline(VkShaderModule vertex, VkShaderModule f
 bool zeus2_vk::impl::create_targets()
 {
 	// the frame buffer as an image: native rows of 1 << row_shift pixels,
-	// each pixel a block of scale x scale pixels
-	width = (1 << row_shift) * scale;
+	// each pixel a block of scale x scale pixels (pad more on each side)
+	width = (1 << row_shift) * scale + 2 * pad;
 	height = (FRAME_PIXELS >> row_shift) * scale;
 	if ((u32(std::max(width, height)) > properties.limits.maxImageDimension2D) ||
 			!create_image(color, width, height, COLOR_FORMAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT) ||
@@ -794,7 +797,7 @@ void zeus2_vk::impl::add_copy(int entry, u32 display, int top, int bottom, recta
 	u32 const rowlen = 1 << row_shift;
 	u32 const rows = FRAME_PIXELS >> row_shift;
 	u32 const first_row = display >> row_shift;
-	s32 const w = visible.width() * scale;
+	s32 const w = visible.width() * scale + 2 * pad;
 	s32 const x0 = s32((display & (rowlen - 1)) + visible.left()) * scale;
 	s32 const cw = std::min(w, width - x0);
 	if (cw <= 0)
@@ -1002,7 +1005,7 @@ bool zeus2_vk::impl::flush()
 			bound = pipeline;
 		}
 		u32 const base = (c.type == CMD_TRIS) ? (tri_base + c.first * TR_SIZE) : (span_base + c.first * SR_SIZE);
-		push_constants const push = { 1.0f / width, 1.0f / height, base, state_base, value_base, scale };
+		push_constants const push = { 1.0f / width, 1.0f / height, base, state_base, value_base, scale, pad, 1 << row_shift };
 		vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
 		vkCmdDraw(cmd, c.count * ((c.type == CMD_TRIS) ? 3 : 6), 1, 0, 0);
 	}
@@ -1058,12 +1061,12 @@ void zeus2_vk::impl::complete(readback_entry &entry)
 
 bitmap_rgb32 *zeus2_vk::impl::show(int index, rectangle const &visible)
 {
-	// high-resolution screen pixel (x, y) is read-back pixel (x - left, y - top)
+	// high-resolution frame pixel (x, y) is read-back pixel (x - left, y - top)
 	readback_entry &entry = readback[index];
 	complete(entry);
 	s32 const left = visible.left() * scale;
 	s32 const top = visible.top() * scale;
-	s32 const w = visible.width() * scale;
+	s32 const w = visible.width() * scale + 2 * pad;
 	s32 const h = visible.height() * scale;
 	u32 *const base = reinterpret_cast<u32 *>(entry.host.mapped) - (ptrdiff_t(top) * w + left);
 	entry.view.wrap(base, left + w, top + h, w);
@@ -1113,10 +1116,11 @@ std::string const &zeus2_vk::device_name() const
 }
 
 
-void zeus2_vk::set_layout(int row_shift)
+void zeus2_vk::set_layout(int row_shift, int pad, int visible_width)
 {
 	impl &s = *m;
-	if ((row_shift == s.row_shift) || s.failed)
+	s.visible_width = visible_width;
+	if (((row_shift == s.row_shift) && (pad == s.pad)) || s.failed)
 		return;
 
 	// the images take the new row length; the work recorded so far is drawn
@@ -1125,6 +1129,7 @@ void zeus2_vk::set_layout(int row_shift)
 	s.wait_all();
 	s.destroy_targets();
 	s.row_shift = row_shift;
+	s.pad = pad;
 	for (impl::readback_entry &entry : s.readback)
 		entry.valid = false;
 	if (!s.create_targets())
@@ -1140,8 +1145,16 @@ void zeus2_vk::polygon(state const &st, u32 window, rectangle const &clip, int n
 	s.check_resync();
 
 	// render_triangle_fan at the high resolution, in the render window
+	// (-widescreen: past the edges of the screen the clip reaches)
 	int const scale = s.scale;
-	rectangle const hclip(clip.left() * scale, (clip.right() + 1) * scale - 1, clip.top() * scale, (clip.bottom() + 1) * scale - 1);
+	rectangle hclip(clip.left() * scale, (clip.right() + 1) * scale - 1, clip.top() * scale, (clip.bottom() + 1) * scale - 1);
+	if (s.pad)
+	{
+		if (clip.left() <= 0)
+			hclip.min_x -= s.pad;
+		if (clip.right() + 1 >= s.visible_width)
+			hclip.max_x += s.pad;
+	}
 	vertex hv[16];
 	numverts = std::min<int>(numverts, std::size(hv));
 	for (int i = 0; i < numverts; i++)
@@ -1151,7 +1164,7 @@ void zeus2_vk::polygon(state const &st, u32 window, rectangle const &clip, int n
 		hv[i].y *= scale;
 	}
 	window &= FRAME_PIXELS - 1;
-	s32 const winx = s32(window & ((1 << s.row_shift) - 1)) * scale;
+	s32 const winx = s32(window & ((1 << s.row_shift) - 1)) * scale + s.pad;
 	s32 const winy = s32(window >> s.row_shift) * scale;
 	u32 const state_index = s.state_record(st);
 	u8 const variant = (st.depth_test ? 1 : 0) | ((st.depth_write && (st.mode != MODE_RGB555)) ? 2 : 0);
@@ -1263,7 +1276,7 @@ void zeus2_vk::resync()
 void zeus2_vk::prefetch(u32 display, rectangle const &visible)
 {
 	impl &s = *m;
-	int const w = visible.width() * s.scale;
+	int const w = visible.width() * s.scale + 2 * s.pad;
 	int const h = visible.height() * s.scale;
 	if (s.failed || s.band_pending || visible.empty() || (visible.left() < 0) || (visible.top() < 0) || (w > s.readback_width) || (h > s.readback_height))
 		return;
@@ -1285,7 +1298,7 @@ bool zeus2_vk::update(u32 display, rectangle const &cliprect, rectangle const &v
 {
 	impl &s = *m;
 	frame = nullptr;
-	int const w = visible.width() * s.scale;
+	int const w = visible.width() * s.scale + 2 * s.pad;
 	int const h = visible.height() * s.scale;
 	if (s.failed || visible.empty() || (visible.left() < 0) || (visible.top() < 0) || !s.ensure_readback(w, h))
 		return false;

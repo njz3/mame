@@ -15,7 +15,7 @@ layout(location = 0, index = 1) out vec4 out_factor;
 
 void main()
 {
-	uint i = ((flags & SF_CONSTANT) != 0u) ? 0u : uint(int(gl_FragCoord.x) / pc.scale - x0);
+	uint i = ((flags & SF_CONSTANT) != 0u) ? 0u : uint((int(gl_FragCoord.x) - pc.pad) / pc.scale - x0);
 	out_colour = colour_value(data[values + i * 2u]);
 	out_factor = vec4(0.0);
 	gl_FragDepth = depth_value(int(data[values + i * 2u + 1u]));

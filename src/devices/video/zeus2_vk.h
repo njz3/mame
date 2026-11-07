@@ -76,8 +76,11 @@ public:
 
 	std::string const &device_name() const;
 
-	// the frame buffer has rows of 1 << row_shift pixels
-	void set_layout(int row_shift);
+	// the frame buffer has rows of 1 << row_shift pixels; -widescreen: each
+	// row has pad more high-resolution columns on each side, where the
+	// polygons whose clip reaches the edges of the screen (visible_width
+	// native columns) go on, and that the fills of whole rows clear
+	void set_layout(int row_shift, int pad = 0, int visible_width = 0);
 
 	// a polygon of zeus2_render_poly as render_triangle_fan draws it: native
 	// vertices, window origin (frame buffer address) and clip
@@ -101,7 +104,8 @@ public:
 
 	// a screen update showing the cliprect rows from the display address;
 	// once the bottom of the visible area is reached, frame is a bitmap in
-	// high-resolution screen coordinates over the read-back memory, intact
+	// high-resolution frame coordinates (the screen starts pad columns in)
+	// over the read-back memory, intact
 	// until the next frame is shown, else nullptr; false if the GPU failed
 	bool update(u32 display, rectangle const &cliprect, rectangle const &visible, bitmap_rgb32 *&frame);
 
