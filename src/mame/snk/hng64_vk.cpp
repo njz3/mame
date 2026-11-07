@@ -98,6 +98,7 @@ struct hng64_vk::impl : vk3d_context
 		VkCommandBuffer cmd = VK_NULL_HANDLE;
 		VkFence fence = VK_NULL_HANDLE;
 		bool busy = false;
+		bool stamped = false;   // GPU timestamps were written
 		buffer host;
 	};
 
@@ -157,6 +158,10 @@ struct hng64_vk::impl : vk3d_context
 
 	// statistics, shown with -verbose
 	osd_ticks_t wait_ticks = 0;
+	u32 blocked_waits = 0;
+	VkQueryPool stamps = VK_NULL_HANDLE; // four per slot: start, uploaded, drawn, copied out
+	double gpu_ms[3]{};                  // uploads, drawing and mixing, read-back copy
+	u32 stamped_batches = 0;
 	u64 prim_count = 0;
 	u32 flushes = 0;
 	u32 mixes = 0;
@@ -188,11 +193,16 @@ struct hng64_vk::impl : vk3d_context
 hng64_vk::impl::~impl()
 {
 	if (flushes)
-		osd_printf_verbose("hng64_vk: %u batches, %u frames, %u mixes, %u triangles, %.1f ms waiting for the GPU\n",
-				flushes, frames, mixes, u32(prim_count), wait_ticks * 1000.0 / osd_ticks_per_second());
+		osd_printf_verbose("hng64_vk: %u batches, %u frames, %u mixes, %u triangles, %.1f ms waiting for the GPU (%u waits blocked)\n",
+				flushes, frames, mixes, u32(prim_count), wait_ticks * 1000.0 / osd_ticks_per_second(), blocked_waits);
+	if (stamped_batches)
+		osd_printf_verbose("hng64_vk: GPU time over %u batches: %.1f ms uploading, %.1f ms drawing and mixing, %.1f ms copying out\n",
+				stamped_batches, gpu_ms[0], gpu_ms[1], gpu_ms[2]);
 	if (device && vkDestroyDevice)
 	{
 		vkDeviceWaitIdle(device);
+		if (stamps)
+			vkDestroyQueryPool(device, stamps, nullptr);
 		for (int i = 0; i < 2; i++)
 		{
 			if (pen_framebuffers[i])
@@ -374,6 +384,16 @@ bool hng64_vk::impl::init(std::string &error)
 			return false;
 		}
 	}
+
+	// GPU timestamps, for the statistics; optional
+	if (properties.limits.timestampComputeAndGraphics && (properties.limits.timestampPeriod > 0.0f))
+	{
+		VkQueryPoolCreateInfo query_info{ VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
+		query_info.queryType = VK_QUERY_TYPE_TIMESTAMP;
+		query_info.queryCount = SLOTS * 4;
+		if (vkCreateQueryPool(device, &query_info, nullptr, &stamps) != VK_SUCCESS)
+			stamps = VK_NULL_HANDLE;
+	}
 	return true;
 }
 
@@ -528,9 +548,25 @@ void hng64_vk::impl::wait_slot(slot &target)
 	if (!target.busy)
 		return;
 	osd_ticks_t const start = osd_ticks();
-	vkWaitForFences(device, 1, &target.fence, VK_TRUE, ~u64(0));
+	if (vkGetFenceStatus(device, target.fence) != VK_SUCCESS)
+	{
+		blocked_waits++;
+		vkWaitForFences(device, 1, &target.fence, VK_TRUE, ~u64(0));
+	}
 	wait_ticks += osd_ticks() - start;
 	target.busy = false;
+	if (target.stamped)
+	{
+		u64 t[4];
+		if (vkGetQueryPoolResults(device, stamps, u32(&target - slots) * 4, 4, sizeof(t), t, sizeof(t[0]), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS)
+		{
+			double const ms = properties.limits.timestampPeriod * 1e-6;
+			for (int i = 0; i < 3; i++)
+				gpu_ms[i] += double(t[i + 1] - t[i]) * ms;
+			stamped_batches++;
+		}
+		target.stamped = false;
+	}
 }
 
 
@@ -711,6 +747,12 @@ bool hng64_vk::impl::flush(int readback_width, int readback_height)
 	VkCommandBufferBeginInfo begin{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
 	begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 	vkBeginCommandBuffer(cmd, &begin);
+	u32 const stamp = u32(slot_index) * 4;
+	if (stamps)
+	{
+		vkCmdResetQueryPool(cmd, stamps, stamp, 4);
+		vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, stamps, stamp);
+	}
 
 	// uploads, once the previous batches are done reading and copying
 	VkMemoryBarrier reused_memory{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
@@ -725,6 +767,8 @@ bool hng64_vk::impl::flush(int readback_width, int readback_height)
 	uploaded.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
 	uploaded.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 	vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &uploaded, 0, nullptr, 0, nullptr);
+	if (stamps)
+		vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, stamps, stamp + 1);
 	vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &set, 0, nullptr);
 
 	// replay
@@ -784,6 +828,8 @@ bool hng64_vk::impl::flush(int readback_width, int readback_height)
 	}
 	if (current >= 0)
 		vkCmdEndRenderPass(cmd);
+	if (stamps)
+		vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, stamps, stamp + 2);
 
 	// copy the display image out, not into the frame being shown
 	int rb = -1;
@@ -805,6 +851,9 @@ bool hng64_vk::impl::flush(int readback_width, int readback_height)
 		host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
 		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &host, 0, nullptr, 0, nullptr);
 	}
+	if (stamps)
+		vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, stamps, stamp + 3);
+	sl.stamped = stamps != VK_NULL_HANDLE;
 	vkEndCommandBuffer(cmd);
 
 	VkSubmitInfo submit{ VK_STRUCTURE_TYPE_SUBMIT_INFO };

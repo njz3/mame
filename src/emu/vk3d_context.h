@@ -52,6 +52,12 @@
 	X(vkDestroyFence) \
 	X(vkWaitForFences) \
 	X(vkResetFences) \
+	X(vkGetFenceStatus) \
+	X(vkCreateQueryPool) \
+	X(vkDestroyQueryPool) \
+	X(vkGetQueryPoolResults) \
+	X(vkCmdResetQueryPool) \
+	X(vkCmdWriteTimestamp) \
 	X(vkAllocateMemory) \
 	X(vkFreeMemory) \
 	X(vkMapMemory) \
