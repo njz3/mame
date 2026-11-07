@@ -182,15 +182,20 @@ l'écraser.
 Toutes les puces de la liste ont un rendu logiciel HD et un rendu Vulkan
 (2026-11-02). Reste :
 
-1. Passer l'image du GPU directement à bgfx au lieu de la relire : en ×4, la
-   relecture coûte environ 3 ms par image (13 à 15 Mo).
-2. HNG64 : comprendre les 5 ms d'attente du GPU par image sur xrally.
-3. Refaire les mesures au calme (une partie a été faite pendant que d'autres
+1. Partager l'image du GPU avec bgfx au lieu de la relire puis de la renvoyer.
+   Sur ce portable, bgfx dessine sur la même carte (NVIDIA) que Vulkan : c'est
+   donc faisable. Le travail touche l'OSD bgfx, `hires3d` et les neuf puces, et
+   la relecture ne se ferait plus qu'à la demande (captures, enregistrement).
+   Gain : 3,7 Mo par image en ×2 et 15 Mo en ×4, qui font deux fois le trajet
+   sur un lien PCIe mesuré entre 1 et 1,7 Go/s.
+2. Banshee et Voodoo 3 en HD (sf2049, sf2049se et cartfury marchent dans MAME) :
+   étendre le chemin Voodoo aux blits 2D, aux textures rangées dans la mémoire de
+   l'image et aux lectures du CPU.
+3. HNG64 : n'envoyer au GPU que les lignes 2D qui changent (1,8 Mo par image).
+4. Refaire les mesures au calme (une partie a été faite pendant que d'autres
    MAME tournaient sur le portable).
-4. Faire calculer la géométrie par le GPU là où MAME la calcule en C++ : Zeus 2,
-   HNG64, System 22 (DSP esclave simulé). Ailleurs, elle vient de DSP ou de CPU
-   émulés, dont le coût reste.
-5. Namco System 23, quand son émulation de base marchera.
+5. System 23, Taito Type Zero et Konami Cobra, quand leur émulation marchera.
+   Le GPU PS1 seulement si une HD sans sous-pixel convient.
 - 2026-10-31 : **Namco System 21** en logiciel HD.
   - `namcos21_3d` : tampons × N, sommets (entiers) mis à l'échelle, ce qui
     affine les arêtes. Une copie native de la profondeur visible reste
@@ -596,3 +601,48 @@ Toutes les puces de la liste ont un rendu logiciel HD et un rendu Vulkan
     winrun 0,46 %. Vraies courses sur tous, sauf xrally (écrans 3D d'avant la
     course). Essai de 25 s dans une fenêtre bgfx : sidebs, winrun et crusnusa
     à 100 % de vitesse, sans erreur.
+- 2026-11-07 (suite) : **contrôles en fenêtre, attentes du GPU, Hornet**.
+  - Captures de l'image réellement affichée par bgfx (`PrintWindow`) : Speed
+    Up, Roads Edge et Cruis'n Exotica en ×2, Winning Run et Side by Side en ×4,
+    3D et 2D correctes. Le gros chiffre du départ de Roads Edge (un sprite 2D
+    avec son ombre noire) est le même en logiciel. L'essai en fenêtre précédent
+    couvrait crusnusa, un V-Unit qui n'avait pas changé.
+  - Hornet : la couche K037122 manquait en HD (texte, HUD). Elle est
+    maintenant agrandie comme sur nwk-tr. Sur Gradius IV, le texte s'affiche et
+    le logiciel égale le GPU. Le jeu lui-même n'a pas été atteint : il reste dans
+    ses menus de réglage de l'horloge.
+  - L'attente de la relecture (Taito JC, Gaelco 3D, HNG64, System 21) se fait
+    maintenant quand le rendu lit l'image : `render_texture::get_scaled` appelle
+    `hires3d_output::complete_reads()`, après la régulation de vitesse. Sur Speed
+    Up ×4 en fenêtre : 1,4 s d'attente sur 40 s au lieu de 6,9 s, mêmes images.
+  - System 22 : `end_frame` attendait le GPU à chaque image, ce qui prenait 35 %
+    du thread principal sur Ridge Racer. Il garde maintenant deux images en vol,
+    avec une barrière en tête de chaque image, et attend via `use_frame`. Sans
+    régulation en ×2, Ridge Racer passe de 341 % à 407 % et Dirt Dash de 263 % à
+    286 %. En fenêtre en ×4, Dirt Dash tient 98,8 % au lieu de 95,4 %. Images
+    identiques à l'ancien chemin.
+  - HNG64, horodatages GPU, xrally ×2, par image : 1,75 ms pour envoyer la 2D
+    (1,8 Mo), 0,76 ms pour dessiner et mélanger, 2,17 ms pour relire l'image
+    (3,7 Mo). L'attente vient donc des transferts PCIe, pas du dessin.
+    L'émulation elle-même reste sous la vitesse réelle en course sur ce
+    portable : 56 % sur GPU et 49 % en logiciel ×2.
+  - Cruis'n Exotica : après une sauvegarde en pleine course et un rechargement
+    300 images plus tard, les images sont identiques au pixel près à la course
+    de référence (décalées de 300 images). L'écran de calibration du premier
+    essai venait d'une sauvegarde faite avant la calibration. Les 534 423
+    lectures du tampon image par le CPU ont toutes lieu au démarrage, aucune en
+    course.
+  - Géométrie, profil du thread principal : sur crusnexo, Zeus 2 traite ses
+    modèles en 12 % environ, contre 58 % pour le TMS320C31 émulé. Sur ridgerac,
+    System 22 dessine sa scène en 9 % environ. HNG64 n'apparaît pas. Passer la
+    géométrie sur le GPU rapporterait peu : l'étape est retirée.
+  - Autres puces, d'après une lecture du code (rien n'a été testé) :
+    - Banshee et Voodoo 3 : seul candidat faisable avec des jeux de course qui
+      marchent (sf2049, sf2049se, cartfury).
+    - En attente de leur émulation : System 23, Type Zero (batlgear), Cobra
+      (racjamdx), Quicksilver II.
+    - GPU PS1 (technodr, kartduel, glpracr…) : sommets entiers, donc une HD sans
+      sous-pixel, pour un gros travail.
+    - Zeus 1 et Konami M2 : faisables, mais sans jeu de course.
+    - Hard Drivin' et Polygonet : la 3D est calculée par le CPU ou le DSP émulé,
+      impossible sans HLE.
