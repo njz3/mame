@@ -589,3 +589,10 @@ Toutes les puces de la liste ont un rendu logiciel HD et un rendu Vulkan
     passent surtout leur temps dans les processeurs émulés et la 2D.
     Le temps réel varie trop d'un essai à l'autre pour conclure : sidebs ×4 a mis
     77 s puis 101 s avec le même exécutable.
+  - Parties automatisées (pièces, Start, accélérateur, mêmes entrées aux mêmes
+    images) sur le `mame.exe` complet, logiciel contre GPU, de 10 à 15 captures
+    par jeu, pixels au-delà de 24, pire capture : speedup 0,00 %, crusnexo
+    0,01 %, xrally 0,03 %, roadedge 0,04 %, sidebs 0,07 %, driveyes 0,40 %,
+    winrun 0,46 %. Vraies courses sur tous, sauf xrally (écrans 3D d'avant la
+    course). Essai de 25 s dans une fenêtre bgfx : sidebs, winrun et crusnusa
+    à 100 % de vitesse, sans erreur.
