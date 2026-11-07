@@ -1035,7 +1035,7 @@ u32 hng64_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, cons
 		{
 			if (frame)
 			{
-				m_hires->use_frame(*frame, [this] () { if (hng64_vk *const vk = m_poly_renderer->vulkan()) vk->frame_ready(); });
+				m_hires->use_frame(*frame, [this] () { if (hng64_vk *const vk = m_poly_renderer->vulkan()) vk->frame_ready(); }, m_poly_renderer->vulkan() ? m_poly_renderer->vulkan()->shared_texture(frame) : hires3d_output::gpu_texture());
 				m_hires->frame_done(cliprect);
 			}
 		}

@@ -21,6 +21,7 @@
 #include "voodoo.h"
 
 #include "vk3d_context.h"
+#include "vk3d_share.h"
 
 #include <algorithm>
 #include <cstring>
@@ -210,6 +211,20 @@ struct voodoo_vk::impl : vk3d_context
 	int shown_readback = -1;    // entry given to the display by frame()
 	u32 versions[3]{};          // bumped by every command that changes a colour buffer
 
+	// textures of the display the buffers shown are copied into instead
+	struct shared_copy
+	{
+		vk3d_share::target *target = nullptr;
+		int buffer = -1;        // colour buffer it holds
+		u32 version = 0;        // version of that buffer
+		rectangle area;         // as asked by frame()
+		s32 xoffs = 0;
+		s32 yoffs = 0;
+	};
+	std::unique_ptr<vk3d_share> share;
+	shared_copy last_shared;    // the last buffer copied into one
+	u32 shared_frames = 0;
+
 	// batch data: each batch copies its records, offsets, palettes and fog
 	// tables, and pixels from its own host buffers into the device buffers;
 	// up to SLOTS batches are in flight
@@ -256,7 +271,7 @@ struct voodoo_vk::impl : vk3d_context
 	u32 flushes = 0;
 	u32 readbacks = 0;
 	u64 texture_bytes = 0;
-	u32 direct_frames = 0;
+	u32 direct_frames = 0;      // of which shared_frames from textures of the display
 	u32 copied_frames = 0;
 	u32 lut_frames = 0;
 
@@ -281,15 +296,17 @@ struct voodoo_vk::impl : vk3d_context
 	void add(command const &cmd);
 	VkRect2D clip(s32 left, s32 top, s32 right, s32 bottom) const; // right/bottom exclusive
 	void begin_pass(VkCommandBuffer cmd, int buffer);
-	bool flush(int readback_index, bool wait);
+	bool flush(int readback_index, bool wait, vk3d_share::target *shared = nullptr, s32 sx = 0, s32 sy = 0);
+	bool shared_holds(int buffer, rectangle const &area, s32 xoffs, s32 yoffs) const;
+	void copy_shared(int buffer, rectangle const &area, s32 xoffs, s32 yoffs);
 };
 
 
 voodoo_vk::impl::~impl()
 {
 	if (flushes)
-		osd_printf_verbose("voodoo_vk: %dx%d images, %u batches, %u read-backs, %.1f ms waiting for the GPU (%.2f ms per batch), %.1f MB of textures uploaded, %u updates shown directly, %u copied, %u through the CLUT\n",
-				width, height, flushes, readbacks, wait_ticks * 1000.0 / osd_ticks_per_second(), wait_ticks * 1000.0 / osd_ticks_per_second() / flushes, texture_bytes / 1048576.0, direct_frames, copied_frames, lut_frames);
+		osd_printf_verbose("voodoo_vk: %dx%d images, %u batches, %u read-backs, %.1f ms waiting for the GPU (%.2f ms per batch), %.1f MB of textures uploaded, %u updates shown directly (%u from textures of the display), %u copied, %u through the CLUT\n",
+				width, height, flushes, readbacks, wait_ticks * 1000.0 / osd_ticks_per_second(), wait_ticks * 1000.0 / osd_ticks_per_second() / flushes, texture_bytes / 1048576.0, direct_frames, shared_frames, copied_frames, lut_frames);
 	if (device && vkDestroyDevice)
 	{
 		vkDeviceWaitIdle(device);
@@ -345,6 +362,7 @@ bool voodoo_vk::impl::init(std::string &error)
 	wanted.dualSrcBlend = VK_TRUE;
 	if (!init_device(error, &wanted))
 		return false;
+	share = std::make_unique<vk3d_share>(*this);
 	if (!enabled_features().shaderInt64 || !enabled_features().dualSrcBlend)
 	{
 		error = "the GPU lacks shaderInt64 or dualSrcBlend";
@@ -814,6 +832,7 @@ void voodoo_vk::impl::destroy_targets()
 		entry.buffer = -1;
 	}
 	last_readback = shown_readback = -1;
+	last_shared = shared_copy();
 }
 
 
@@ -1020,7 +1039,7 @@ void voodoo_vk::impl::begin_pass(VkCommandBuffer cmd, int buffer)
 //  waits for the GPU when reading back or asked
 //-------------------------------------------------
 
-bool voodoo_vk::impl::flush(int readback_index, bool wait)
+bool voodoo_vk::impl::flush(int readback_index, bool wait, vk3d_share::target *shared, s32 sx, s32 sy)
 {
 	if (commands.empty() && (readback_index < 0))
 		return true;
@@ -1038,7 +1057,7 @@ bool voodoo_vk::impl::flush(int readback_index, bool wait)
 
 	// the read-back goes to the oldest entry that is not on display
 	int rb = -1;
-	if (readback_index >= 0)
+	if ((readback_index >= 0) && !shared)
 	{
 		for (int i = 0; (i < READBACKS) && (rb < 0); i++)
 			if (((next_readback + i) % READBACKS) != shown_readback)
@@ -1249,7 +1268,10 @@ bool voodoo_vk::impl::flush(int readback_index, bool wait)
 			barrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 			barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 			vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
-			vkCmdCopyImageToBuffer(cmd, display.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback[rb].host.handle, 1, &region);
+			if (shared)
+				share->record(cmd, *shared, display.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, sx, sy);
+			else
+				vkCmdCopyImageToBuffer(cmd, display.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback[rb].host.handle, 1, &region);
 		}
 		else
 		{
@@ -1258,21 +1280,27 @@ bool voodoo_vk::impl::flush(int readback_index, bool wait)
 			barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 			barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
 			vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
-			vkCmdCopyImageToBuffer(cmd, color[readback_index].handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback[rb].host.handle, 1, &region);
+			if (shared)
+				share->record(cmd, *shared, color[readback_index].handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, sx, sy);
+			else
+				vkCmdCopyImageToBuffer(cmd, color[readback_index].handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback[rb].host.handle, 1, &region);
 			barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
 			barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 			barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
 			barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 			vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 		}
-		VkBufferMemoryBarrier host{ VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER };
-		host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-		host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
-		host.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		host.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		host.buffer = readback[rb].host.handle;
-		host.size = VK_WHOLE_SIZE;
-		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &host, 0, nullptr);
+		if (!shared)
+		{
+			VkBufferMemoryBarrier host{ VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER };
+			host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+			host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+			host.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			host.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			host.buffer = readback[rb].host.handle;
+			host.size = VK_WHOLE_SIZE;
+			vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &host, 0, nullptr);
+		}
 	}
 	vkEndCommandBuffer(cmd);
 	VkSubmitInfo submit{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
@@ -1280,14 +1308,25 @@ bool voodoo_vk::impl::flush(int readback_index, bool wait)
 	submit.pCommandBuffers = &cmd;
 	vkResetFences(device, 1, &sl.fence);
 	bool const ok = vkQueueSubmit(queue, 1, &submit, sl.fence) == VK_SUCCESS;
+	if (ok && shared)
+		share->submitted(*shared, true);
 	sl.busy = ok;
 	flushes++;
 	reset_batch();
 	if (!ok)
 		return false;
 
+	// the copy into the texture of the display is drawable once the batch is done
+	if ((readback_index >= 0) && shared)
+	{
+		share->tag(*shared) = slot_index;
+		last_shared.target = shared;
+		last_shared.buffer = readback_index;
+		last_shared.version = versions[readback_index];
+	}
+
 	// the read-back is ready once the batch is done
-	if (readback_index >= 0)
+	if ((readback_index >= 0) && !shared)
 	{
 		readbacks++;
 		readback_entry &entry = readback[rb];
@@ -1300,6 +1339,42 @@ bool voodoo_vk::impl::flush(int readback_index, bool wait)
 	if (wait)
 		wait_slot(sl);
 	return true;
+}
+
+
+//-------------------------------------------------
+//  shared_holds - the last texture of the display
+//  written holds the current image of a buffer
+//  for this area
+//-------------------------------------------------
+
+bool voodoo_vk::impl::shared_holds(int buffer, rectangle const &area, s32 xoffs, s32 yoffs) const
+{
+	return last_shared.target && (last_shared.buffer == buffer) && (last_shared.version == versions[buffer]) &&
+			(last_shared.area == area) && (last_shared.xoffs == xoffs) && (last_shared.yoffs == yoffs);
+}
+
+
+//-------------------------------------------------
+//  copy_shared - copy the area of a buffer into a
+//  texture of the display, if there is one
+//-------------------------------------------------
+
+void voodoo_vk::impl::copy_shared(int buffer, rectangle const &area, s32 xoffs, s32 yoffs)
+{
+	if ((area.left() < xoffs) || (area.right() - xoffs >= width) || (area.top() < yoffs) || (area.bottom() - yoffs >= height))
+		return;
+	vk3d_share::target *const shared = share->acquire(area);
+	if (!shared)
+		return;
+	if (flush(buffer, false, shared, area.left() - xoffs, area.top() - yoffs))
+	{
+		last_shared.area = area;
+		last_shared.xoffs = xoffs;
+		last_shared.yoffs = yoffs;
+	}
+	else
+		last_shared = shared_copy();
 }
 
 
@@ -1695,13 +1770,21 @@ void voodoo_vk::set_clut(u8 const *lut)
 	s.clut_linear = (lut == nullptr);
 	for (impl::readback_entry &entry : s.readback)
 		entry.buffer = -1;
+	s.last_shared.target = nullptr;
 }
 
 
-void voodoo_vk::prefetch(int buffer)
+void voodoo_vk::prefetch(int buffer, rectangle const &area, s32 xoffs, s32 yoffs)
 {
 	impl &s = *m;
 	if ((buffer < 0) || (buffer > 2) || !s.width)
+		return;
+
+	// into a texture of the display when it can draw one
+	if (s.shared_holds(buffer, area, xoffs, yoffs))
+		return;
+	s.copy_shared(buffer, area, xoffs, yoffs);
+	if (s.shared_holds(buffer, area, xoffs, yoffs))
 		return;
 	for (impl::readback_entry const &entry : s.readback)
 		if ((entry.buffer == buffer) && (entry.version == s.versions[buffer]))
@@ -1717,6 +1800,18 @@ bitmap_rgb32 *voodoo_vk::frame(int buffer, rectangle const &area, s32 xoffs, s32
 		return nullptr;
 	if ((area.left() < xoffs) || (area.right() - xoffs >= s.width) || (area.top() < yoffs) || (area.bottom() - yoffs >= s.height))
 		return nullptr;
+
+	// from a texture of the display when it can draw one; its batch is
+	// waited for in frame_ready()
+	if (!s.shared_holds(buffer, area, xoffs, yoffs))
+		s.copy_shared(buffer, area, xoffs, yoffs);
+	if (s.shared_holds(buffer, area, xoffs, yoffs))
+	{
+		s.direct_frames++;
+		s.shared_frames++;
+		return &s.share->bitmap(*s.last_shared.target);
+	}
+
 	int const index = s.current_readback(buffer);
 	if (index < 0)
 		return nullptr;
@@ -1728,6 +1823,25 @@ bitmap_rgb32 *voodoo_vk::frame(int buffer, rectangle const &area, s32 xoffs, s32
 	s.shown_readback = index;
 	s.direct_frames++;
 	return &entry.view;
+}
+
+void voodoo_vk::frame_ready(bitmap_rgb32 const *frame)
+{
+	impl &s = *m;
+	if (vk3d_share::target *const shared = s.share->find(frame))
+	{
+		int const slot = s.share->tag(*shared);
+		if (slot >= 0)
+			s.wait_slot(s.slots[slot]);
+	}
+}
+
+
+hires3d_output::gpu_texture voodoo_vk::shared_texture(bitmap_rgb32 const *frame)
+{
+	impl &s = *m;
+	vk3d_share::target *const shared = s.share->find(frame);
+	return shared ? s.share->texture(*shared) : hires3d_output::gpu_texture();
 }
 
 } // namespace voodoo

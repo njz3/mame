@@ -18,6 +18,7 @@
 #include "k001005_vk.h"
 
 #include "vk3d_context.h"
+#include "vk3d_share.h"
 
 #include <algorithm>
 #include <cstring>
@@ -120,6 +121,11 @@ struct k001005_vk::impl : vk3d_context
 	int native_width = 0;
 	std::vector<u32> layers;    // native back and front layers
 	int shown_readback = -1;
+
+	// textures of the display the composed frames go to instead of being read back
+	std::unique_ptr<vk3d_share> share;
+	vk3d_share::target *compose_shared = nullptr; // texture of the frame being composed
+	vk3d_share::target *shown_shared = nullptr;   // texture of the frame shown
 	rectangle last_clip;        // area and page version of the last composed frame
 	u32 composed_version = 0;
 
@@ -241,6 +247,7 @@ bool k001005_vk::impl::init(std::string &error)
 	wanted.depthClamp = VK_TRUE;
 	if (!init_device(error, &wanted))
 		return false;
+	share = std::make_unique<vk3d_share>(*this);
 	if (!enabled_features().dualSrcBlend || !enabled_features().depthClamp)
 	{
 		error = "the GPU lacks dualSrcBlend or depthClamp";
@@ -848,10 +855,13 @@ bool k001005_vk::impl::flush(int readback_page, bool wait)
 			begin_pass(cmd, page);
 			vkCmdEndRenderPass(cmd);
 		}
-		for (int i = 0; (i < READBACKS) && (rb < 0); i++)
-			if (((next_readback + i) % READBACKS) != shown_readback)
-				rb = (next_readback + i) % READBACKS;
-		next_readback = (rb + 1) % READBACKS;
+		if (!compose_shared)
+		{
+			for (int i = 0; (i < READBACKS) && (rb < 0); i++)
+				if (((next_readback + i) % READBACKS) != shown_readback)
+					rb = (next_readback + i) % READBACKS;
+			next_readback = (rb + 1) % READBACKS;
+		}
 
 		VkImageMemoryBarrier barrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
 		barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
@@ -884,18 +894,23 @@ bool k001005_vk::impl::flush(int readback_page, bool wait)
 		barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
-		VkBufferImageCopy copy{};
-		copy.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-		copy.imageExtent = { u32(width), u32(height), 1 };
-		vkCmdCopyImageToBuffer(cmd, display.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback[rb].host.handle, 1, &copy);
-		VkBufferMemoryBarrier host{ VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER };
-		host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-		host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
-		host.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		host.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		host.buffer = readback[rb].host.handle;
-		host.size = VK_WHOLE_SIZE;
-		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &host, 0, nullptr);
+		if (compose_shared)
+			share->record(cmd, *compose_shared, display.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 0, 0);
+		else
+		{
+			VkBufferImageCopy copy{};
+			copy.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+			copy.imageExtent = { u32(width), u32(height), 1 };
+			vkCmdCopyImageToBuffer(cmd, display.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback[rb].host.handle, 1, &copy);
+			VkBufferMemoryBarrier host{ VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER };
+			host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+			host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+			host.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			host.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			host.buffer = readback[rb].host.handle;
+			host.size = VK_WHOLE_SIZE;
+			vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &host, 0, nullptr);
+		}
 		readback_page = -1;
 	}
 
@@ -946,6 +961,11 @@ bool k001005_vk::impl::flush(int readback_page, bool wait)
 	bool const ok = vkQueueSubmit(queue, 1, &submit, sl.fence) == VK_SUCCESS;
 	sl.busy = ok;
 	flushes++;
+	if (ok && compose_pending && compose_shared)
+	{
+		share->submitted(*compose_shared, true);
+		share->tag(*compose_shared) = slot_index;
+	}
 	commands.clear();
 	records.clear();
 	vertices.clear();
@@ -1181,7 +1201,8 @@ bitmap_rgb32 *k001005_vk::compose(int page, bool with_3d, bitmap_rgb32 const &ba
 	int const nwidth = clip.width();
 	int const nheight = clip.height();
 	page &= 1;
-	bool same = (s.shown_readback >= 0) && (s.readback[s.shown_readback].page == -2) &&
+	bool const composed = s.shown_shared || ((s.shown_readback >= 0) && (s.readback[s.shown_readback].page == -2));
+	bool same = composed &&
 			(s.layers.size() == size_t(2) * nwidth * nheight) && (s.last_clip == clip) &&
 			(s.compose_page == page) && (s.compose_3d == with_3d) && (s.composed_version == s.versions[page]);
 	s.compose_mode = true;
@@ -1202,7 +1223,7 @@ bitmap_rgb32 *k001005_vk::compose(int page, bool with_3d, bitmap_rgb32 const &ba
 		}
 	}
 	if (same)
-		return &s.readback[s.shown_readback].view;
+		return s.shown_shared ? &s.share->bitmap(*s.shown_shared) : &s.readback[s.shown_readback].view;
 	s.last_clip = clip;
 	s.composed_version = s.versions[page];
 	// the batch holds the composition only: the triangles of the page being
@@ -1216,22 +1237,42 @@ bitmap_rgb32 *k001005_vk::compose(int page, bool with_3d, bitmap_rgb32 const &ba
 	s.compose_pending = true;
 	s.compose_page = page & 1;
 	s.compose_3d = with_3d;
+
+	// into a texture of the display when it can draw one: high-resolution
+	// screen pixel (x, y) is image pixel (x - left, y - top)
+	s32 const left = clip.left() * scale;
+	s32 const top = clip.top() * scale;
+	s.compose_shared = s.share->acquire(rectangle(left, left + s.width - 1, top, top + s.height - 1));
+	vk3d_share::target *const shared = s.compose_shared;
 	bool const ok = s.flush(-1, true);
 	s.compose_pending = false;
+	s.compose_shared = nullptr;
 	s.commands.swap(commands);
 	s.records.swap(records);
 	s.vertices.swap(vertices);
+	if (ok && shared)
+	{
+		s.shown_shared = shared;
+		s.shown_readback = -1;
+		return &s.share->bitmap(*shared);
+	}
+	s.shown_shared = nullptr;
 	if (!ok || (s.last_readback < 0))
 		return nullptr;
 	int const index = s.last_readback;
 	impl::readback_entry &entry = s.readback[index];
 	s.complete(entry);
 
-	// high-resolution screen pixel (x, y) is image pixel (x - left, y - top)
-	s32 const left = clip.left() * scale;
-	s32 const top = clip.top() * scale;
 	u32 *const base = reinterpret_cast<u32 *>(entry.host.mapped) - (ptrdiff_t(top) * s.width + left);
 	entry.view.wrap(base, left + s.width, top + s.height, s.width);
 	s.shown_readback = index;
 	return &entry.view;
+}
+
+
+hires3d_output::gpu_texture k001005_vk::shared_texture(bitmap_rgb32 const *frame)
+{
+	impl &s = *m;
+	vk3d_share::target *const shared = s.share->find(frame);
+	return shared ? s.share->texture(*shared) : hires3d_output::gpu_texture();
 }

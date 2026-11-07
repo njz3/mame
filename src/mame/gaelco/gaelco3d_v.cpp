@@ -527,7 +527,7 @@ uint32_t gaelco3d_state::screen_update(screen_device &screen, bitmap_rgb32 &bitm
 		{
 			if (frame)
 			{
-				m_hires->use_frame(*frame, [this] () { if (gaelco3d_vk *const vk = m_poly->vulkan()) vk->frame_ready(); });
+				m_hires->use_frame(*frame, [this] () { if (gaelco3d_vk *const vk = m_poly->vulkan()) vk->frame_ready(); }, m_poly->vulkan() ? m_poly->vulkan()->shared_texture(frame) : hires3d_output::gpu_texture());
 				m_hires->frame_done(cliprect);
 			}
 

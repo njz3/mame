@@ -23,6 +23,8 @@
 
 #pragma once
 
+#include "hires3d.h"
+
 #include <memory>
 #include <string>
 
@@ -78,6 +80,10 @@ public:
 	// intact until the next frame is composed (nullptr if clip does not
 	// match the page size)
 	bitmap_rgb32 *compose(int page, bool with_3d, bitmap_rgb32 const &back, bitmap_rgb32 const &front, rectangle const &clip, int scale);
+
+	// the texture of the display holding a frame compose() returned, if it
+	// went there instead of being read back
+	hires3d_output::gpu_texture shared_texture(bitmap_rgb32 const *frame);
 
 private:
 	struct impl;

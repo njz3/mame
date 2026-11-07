@@ -19,6 +19,7 @@
 #include "tc0780fpa_vk.h"
 
 #include "vk3d_context.h"
+#include "vk3d_share.h"
 
 #include <algorithm>
 #include <cmath>
@@ -153,6 +154,12 @@ struct tc0780fpa_vk::impl : vk3d_context
 	int next_readback = 0;
 	int last_readback = -1;
 	int shown = -1;
+
+	// textures of the display the frames go to instead of being read back
+	std::unique_ptr<vk3d_share> share;
+	rectangle share_area;                       // shown area of the frame being finished
+	vk3d_share::target *last_shared = nullptr;  // texture of the last frame finished
+	vk3d_share::target *shown_shared = nullptr; // texture of the frame shown
 	bool band_pending = false;
 
 	std::vector<u32> tris;
@@ -248,6 +255,7 @@ bool tc0780fpa_vk::impl::init(std::string &error)
 {
 	if (!init_device(error))
 		return false;
+	share = std::make_unique<vk3d_share>(*this);
 
 	// render passes: the frame buffers stay in the general layout, so that
 	// one can be drawn into while the other is read by the mix
@@ -893,9 +901,13 @@ bool tc0780fpa_vk::impl::flush(int readback_width, int readback_height)
 	if (current >= 0)
 		vkCmdEndRenderPass(cmd);
 
-	// copy the display image out, not into the frame being shown
+	// copy the display image into a texture of the display, or out (not
+	// into the frame being shown)
 	int rb = -1;
-	if (copy_out)
+	vk3d_share::target *const shared = copy_out ? share->acquire(share_area) : nullptr;
+	if (shared)
+		share->record(cmd, *shared, display.handle, VK_IMAGE_LAYOUT_GENERAL, 0, 0);
+	else if (copy_out)
 	{
 		for (int i = 0; (i < READBACKS) && (rb < 0); i++)
 		{
@@ -920,6 +932,8 @@ bool tc0780fpa_vk::impl::flush(int readback_width, int readback_height)
 	submit.pCommandBuffers = &cmd;
 	vkResetFences(device, 1, &sl.fence);
 	bool const ok = vkQueueSubmit(queue, 1, &submit, sl.fence) == VK_SUCCESS;
+	if (ok && shared)
+		share->submitted(*shared, true);
 	sl.busy = ok;
 	flushes++;
 	commands.clear();
@@ -933,6 +947,10 @@ bool tc0780fpa_vk::impl::flush(int readback_width, int readback_height)
 		failed = true;
 		return false;
 	}
+	if (copy_out)
+		last_shared = shared;
+	if (shared)
+		share->tag(*shared) = slot_index;
 	if (rb >= 0)
 	{
 		readback[rb].slot = slot_index;
@@ -1010,8 +1028,20 @@ bool tc0780fpa_vk::impl::mix(push_constants const &push, int top, int bottom, re
 		return true;
 	}
 	band_pending = false;
-	if (!flush(w, h) || (last_readback < 0))
+	share_area = rectangle(visible.left() * scale, visible.left() * scale + w - 1, visible.top() * scale, visible.top() * scale + h - 1);
+	if (!flush(w, h))
 		return false;
+	if (last_shared)
+	{
+		// in a texture of the display: its batch is waited for in frame_ready()
+		shown_shared = last_shared;
+		frames++;
+		frame = &share->bitmap(*last_shared);
+		return true;
+	}
+	if (last_readback < 0)
+		return false;
+	shown_shared = nullptr;
 	frame = show(last_readback, visible);
 	return true;
 }
@@ -1120,6 +1150,13 @@ void tc0780fpa_vk::resync()
 void tc0780fpa_vk::frame_ready()
 {
 	impl &s = *m;
+	if (s.shown_shared)
+	{
+		int const slot = s.share->tag(*s.shown_shared);
+		if (slot >= 0)
+			s.wait_slot(s.slots[slot]);
+		return;
+	}
 	if (s.shown >= 0)
 		s.complete(s.readback[s.shown]);
 }
@@ -1155,4 +1192,12 @@ bool tc0780fpa_vk::mix(bitmap_ind16 const &bottom, bitmap_ind16 const &top, rgb_
 		}
 	}
 	return s.mix(push, cliprect.top(), cliprect.bottom(), visible, frame);
+}
+
+
+hires3d_output::gpu_texture tc0780fpa_vk::shared_texture(bitmap_rgb32 const *frame)
+{
+	impl &s = *m;
+	vk3d_share::target *const shared = s.share->find(frame);
+	return shared ? s.share->texture(*shared) : hires3d_output::gpu_texture();
 }

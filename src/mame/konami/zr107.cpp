@@ -340,7 +340,7 @@ bool zr107_state::compose_hires(screen_device &screen, bitmap_rgb32 &bitmap, con
 	bitmap_rgb32 *const frame = m_k001005->compose_hires(with_3d, m_back, bitmap, cliprect, m_hires->scale());
 	if (!frame)
 		return false;
-	m_hires->use_frame(*frame);
+	m_hires->use_frame(*frame, nullptr, m_k001005->shared_texture(frame));
 	m_hires->frame_done(cliprect);
 	return true;
 }

@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include "hires3d.h"
+
 #include <memory>
 #include <string>
 
@@ -75,6 +77,10 @@ public:
 
 	// the frame returned last is read back: call before reading it
 	void frame_ready();
+
+	// the texture of the display holding a frame returned, if it went there
+	// instead of being read back
+	hires3d_output::gpu_texture shared_texture(bitmap_rgb32 const *frame);
 
 private:
 	struct impl;

@@ -20,6 +20,8 @@
 
 #pragma once
 
+#include "hires3d.h"
+
 #include <memory>
 #include <string>
 
@@ -67,6 +69,10 @@ public:
 	// read-back is not waited for when the frame is returned, so that the
 	// GPU works while the other screens are updated)
 	void frame_ready();
+
+	// the texture of the display holding a frame returned, if it went there
+	// instead of being read back
+	hires3d_output::gpu_texture shared_texture(bitmap_rgb32 const *frame);
 
 private:
 	struct impl;

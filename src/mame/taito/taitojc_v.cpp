@@ -315,7 +315,7 @@ uint32_t taitojc_state::screen_update(screen_device &screen, bitmap_ind16 &bitma
 			{
 				if (frame)
 				{
-					m_hires->use_frame(*frame, [this] () { if (tc0780fpa_vk *const vk = m_tc0780fpa->vulkan()) vk->frame_ready(); });
+					m_hires->use_frame(*frame, [this] () { if (tc0780fpa_vk *const vk = m_tc0780fpa->vulkan()) vk->frame_ready(); }, m_tc0780fpa->vulkan() ? m_tc0780fpa->vulkan()->shared_texture(frame) : hires3d_output::gpu_texture());
 					m_hires->frame_done(cliprect);
 				}
 

@@ -18,6 +18,7 @@
 #include "gaelco3d_vk.h"
 
 #include "vk3d_context.h"
+#include "vk3d_share.h"
 
 #include <algorithm>
 #include <cmath>
@@ -53,6 +54,7 @@ struct command
 	u32 first;          // record or copy region
 	u32 count;
 	int entry;          // copy: read-back entry
+	vk3d_share::target *shared; // or texture of the display
 };
 
 struct push_constants
@@ -122,6 +124,12 @@ struct gaelco3d_vk::impl : vk3d_context
 	int readback_height = 0;
 	int next_readback = 0;
 	int shown = -1;
+
+	// textures of the display the frames go to instead of being read back
+	std::unique_ptr<vk3d_share> share;
+	vk3d_share::target *pending_shared = nullptr; // texture of the frame being built
+	vk3d_share::target *finishing = nullptr;      // texture of the frame the batch ends
+	vk3d_share::target *shown_shared = nullptr;   // texture of the frame shown
 	int pending = -1;                   // entry of the frame read back band by band
 	bool band_pending = false;
 
@@ -206,6 +214,7 @@ bool gaelco3d_vk::impl::init(u8 const *texram, u8 const *texmask, std::string &e
 	wanted.dualSrcBlend = VK_TRUE;
 	if (!init_device(error, &wanted))
 		return false;
+	share = std::make_unique<vk3d_share>(*this);
 	if (!enabled_features().dualSrcBlend)
 	{
 		error = "the GPU lacks dualSrcBlend";
@@ -585,6 +594,7 @@ void gaelco3d_vk::impl::add_copy(int entry, int top, int bottom, rectangle const
 	cmd.first = u32(copies.size());
 	cmd.count = 1;
 	cmd.entry = entry;
+	cmd.shared = (entry < 0) ? pending_shared : nullptr;
 	copies.push_back(copy);
 	commands.push_back(cmd);
 }
@@ -690,6 +700,7 @@ bool gaelco3d_vk::impl::flush()
 	// replay
 	bool in_pass = false;
 	bool copied = false;
+	vk3d_share::target *band_target = finishing;
 	VkPipeline bound = VK_NULL_HANDLE;
 	for (command const &c : commands)
 	{
@@ -702,6 +713,16 @@ bool gaelco3d_vk::impl::flush()
 			{
 				begin_pass(cmd);
 				vkCmdEndRenderPass(cmd);
+			}
+			if (c.shared)
+			{
+				// the rows of the band into the texture of the display
+				VkBufferImageCopy const &copy = copies[c.first];
+				s32 const row = s32(copy.bufferOffset / (VkDeviceSize(copy.bufferRowLength) * 4));
+				share->record(cmd, *c.shared, color.handle, VK_IMAGE_LAYOUT_GENERAL, copy.imageOffset.x, copy.imageOffset.y - row, row, s32(copy.imageExtent.height));
+				share->tag(*c.shared) = slot_index;
+				band_target = c.shared;
+				continue;
 			}
 			vkCmdCopyImageToBuffer(cmd, color.handle, VK_IMAGE_LAYOUT_GENERAL, readback[c.entry].host.handle, c.count, &copies[c.first]);
 			readback[c.entry].slot = slot_index;
@@ -740,6 +761,11 @@ bool gaelco3d_vk::impl::flush()
 	submit.pCommandBuffers = &cmd;
 	vkResetFences(device, 1, &sl.fence);
 	bool const ok = vkQueueSubmit(queue, 1, &submit, sl.fence) == VK_SUCCESS;
+	if (ok && band_target)
+	{
+		share->submitted(*band_target, band_target == finishing);
+		share->tag(*band_target) = slot_index;
+	}
 	sl.busy = ok;
 	flushes++;
 	commands.clear();
@@ -873,7 +899,11 @@ bool gaelco3d_vk::update(rectangle const &cliprect, rectangle const &visible, bi
 	// read the rows back in order with the drawing; the frame is shown once
 	// its bottom is reached
 	if (!s.band_pending)
-		s.pending = s.pick_entry();
+	{
+		// a texture of the display, or a read-back entry
+		s.pending_shared = s.share->acquire(rectangle(visible.left() * s.scale, visible.left() * s.scale + w - 1, visible.top() * s.scale, visible.top() * s.scale + h - 1));
+		s.pending = s.pending_shared ? -1 : s.pick_entry();
+	}
 	if (top <= bottom)
 		s.add_copy(s.pending, top, bottom, visible);
 	if (!last)
@@ -883,9 +913,23 @@ bool gaelco3d_vk::update(rectangle const &cliprect, rectangle const &visible, bi
 	}
 	s.band_pending = false;
 	int const index = s.pending;
+	vk3d_share::target *const shared = s.pending_shared;
 	s.pending = -1;
-	if (!s.flush())
+	s.pending_shared = nullptr;
+	s.finishing = shared;
+	bool const flushed = s.flush();
+	s.finishing = nullptr;
+	if (!flushed)
 		return false;
+	if (shared)
+	{
+		// its batch is waited for in frame_ready()
+		s.shown_shared = shared;
+		s.frames++;
+		frame = &s.share->bitmap(*shared);
+		return true;
+	}
+	s.shown_shared = nullptr;
 	frame = s.show(index, visible);
 	return true;
 }
@@ -894,6 +938,21 @@ bool gaelco3d_vk::update(rectangle const &cliprect, rectangle const &visible, bi
 void gaelco3d_vk::frame_ready()
 {
 	impl &s = *m;
+	if (s.shown_shared)
+	{
+		int const slot = s.share->tag(*s.shown_shared);
+		if (slot >= 0)
+			s.wait_slot(s.slots[slot]);
+		return;
+	}
 	if (s.shown >= 0)
 		s.complete(s.readback[s.shown]);
+}
+
+
+hires3d_output::gpu_texture gaelco3d_vk::shared_texture(bitmap_rgb32 const *frame)
+{
+	impl &s = *m;
+	vk3d_share::target *const shared = s.share->find(frame);
+	return shared ? s.share->texture(*shared) : hires3d_output::gpu_texture();
 }

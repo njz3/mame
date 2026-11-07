@@ -569,7 +569,7 @@ u32 namcos21_state::screen_update(screen_device &screen, bitmap_ind16 &bitmap, c
 		{
 			if (frame)
 			{
-				m_hires->use_frame(*frame, [this] () { if (namcos21_vk *const vk = m_namcos21_3d->vulkan()) vk->frame_ready(); });
+				m_hires->use_frame(*frame, [this] () { if (namcos21_vk *const vk = m_namcos21_3d->vulkan()) vk->frame_ready(); }, m_namcos21_3d->vulkan() ? m_namcos21_3d->vulkan()->shared_texture(frame) : hires3d_output::gpu_texture());
 				m_hires->frame_done(cliprect);
 			}
 

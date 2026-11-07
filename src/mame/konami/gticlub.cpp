@@ -815,7 +815,7 @@ uint32_t gticlub_state::screen_update(screen_device &screen, bitmap_rgb32 &bitma
 		bitmap_rgb32 *const frame = m_k001005->compose_hires(m_konppc[0].output_3d_enabled(), m_back, bitmap, cliprect, m_hires->scale());
 		if (frame)
 		{
-			m_hires->use_frame(*frame);
+			m_hires->use_frame(*frame, nullptr, m_k001005->shared_texture(frame));
 			m_hires->frame_done(cliprect);
 			return 0;
 		}

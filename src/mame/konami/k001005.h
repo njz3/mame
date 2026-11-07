@@ -137,6 +137,9 @@ public:
 	bool hires_on_gpu() const;
 	bitmap_rgb32 *compose_hires(bool with_3d, const bitmap_rgb32 &back, const bitmap_rgb32 &front, const rectangle &cliprect, int scale);
 
+	// the texture of the display holding a frame compose_hires() returned
+	hires3d_output::gpu_texture shared_texture(const bitmap_rgb32 *frame);
+
 	uint32_t read(address_space &space, offs_t offset, uint32_t mem_mask = ~0);
 	void write(address_space &space, offs_t offset, uint32_t data, uint32_t mem_mask = ~0);
 

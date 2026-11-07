@@ -13,7 +13,8 @@
     (and one depth image) at N times the resolution.  The Voodoo pixel
     pipeline runs in a fragment shader that reads the texture memory, so
     no texture cache is needed; depth test, blending and order are done by
-    the fixed-function stages.  The display reads the front buffer back.
+    the fixed-function stages.  The display reads the front buffer back,
+    or draws it from a texture it shares (vk3d_share).
 
 ***************************************************************************/
 
@@ -23,6 +24,8 @@
 #pragma once
 
 // included by voodoo.h, after voodoo_regs.h and voodoo_render.h
+
+#include "hires3d.h"
 
 #include <memory>
 #include <string>
@@ -77,9 +80,10 @@ public:
 	// GPU before reading back; nullptr when it is linear
 	void set_clut(u8 const *lut);
 
-	// start copying a buffer back for the display, without waiting (after
-	// a swap, the buffer is shown from the next frame)
-	void prefetch(int buffer);
+	// start copying a buffer back for the display, or into a texture of the
+	// display, without waiting (after a swap, the buffer is shown from the
+	// next frame); area, xoffs and yoffs are those of frame()
+	void prefetch(int buffer, rectangle const &area, s32 xoffs, s32 yoffs);
 
 	// draw what is pending and copy the hclip area of a buffer into dest:
 	// dest pixel (x, y) is target pixel (x - xoffs, y - yoffs); lut holds
@@ -88,8 +92,12 @@ public:
 
 	// same without copying: a bitmap over the read-back memory, in the
 	// coordinates of read(), covering area; it stays intact until two other
-	// images have been read back; nullptr if area is not inside the image
+	// images have been read back; nullptr if area is not inside the image;
+	// or the bitmap of a texture of the display holding the area, whose
+	// batch frame_ready() waits for, and shared_texture() gives the texture
 	bitmap_rgb32 *frame(int buffer, rectangle const &area, s32 xoffs, s32 yoffs);
+	void frame_ready(bitmap_rgb32 const *frame);
+	hires3d_output::gpu_texture shared_texture(bitmap_rgb32 const *frame);
 
 private:
 	struct impl;

@@ -1088,6 +1088,11 @@ bool k001005_device::hires_on_gpu() const
 	return m_renderer->m_vk != nullptr;
 }
 
+hires3d_output::gpu_texture k001005_device::shared_texture(const bitmap_rgb32 *frame)
+{
+	return m_renderer->m_vk ? m_renderer->m_vk->shared_texture(frame) : hires3d_output::gpu_texture();
+}
+
 bitmap_rgb32 *k001005_device::compose_hires(bool with_3d, const bitmap_rgb32 &back, const bitmap_rgb32 &front, const rectangle &cliprect, int scale)
 {
 	if (!m_renderer->m_vk)

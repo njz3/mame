@@ -2732,7 +2732,7 @@ void voodoo_1_device::swap_buffers()
 	// the new front buffer is shown from the next frame: start reading it
 	// back from the GPU now
 	if (m_vk && hires_wanted())
-		m_vk->prefetch(m_hires_shared ? hires_find_slot(m_rgboffs[m_frontbuf]) : m_frontbuf);
+		m_vk->prefetch(m_hires_shared ? hires_find_slot(m_rgboffs[m_frontbuf]) : m_frontbuf, m_hires->scaled(screen().visible_area()), s32(m_xoffs) * m_hires_scale, s32(m_yoffs) * m_hires_scale);
 
 	// decrement the pending count and reset our state
 	if (m_swaps_pending != 0)
@@ -2862,7 +2862,7 @@ int voodoo_1_device::update_common(bitmap_rgb32 &bitmap, const rectangle &clipre
 					? m_vk->frame(shown, m_hires->scaled(screen().visible_area()), s32(m_xoffs) * scale, s32(m_yoffs) * scale)
 					: nullptr;
 			if (direct)
-				m_hires->use_frame(*direct);
+				m_hires->use_frame(*direct, [this, direct] () { if (m_vk) m_vk->frame_ready(direct); }, m_vk->shared_texture(direct));
 			else if (!m_vk->read(shown, hires, area, s32(m_xoffs) * scale, s32(m_yoffs) * scale, nullptr))
 				hires.fill(rgb_t::black(), area);
 		}
