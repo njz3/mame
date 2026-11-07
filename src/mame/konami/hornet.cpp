@@ -535,6 +535,7 @@ protected:
 	required_device<konppc_device> m_konppc;
 	optional_device<x76f041_device> m_x76f041;
 	optional_device_array<voodoo_pci_device, 2> m_voodoo;
+	bitmap_rgb32 m_below[2]; // -hires3d: the frames before the 2D layer
 	required_device<watchdog_timer_device> m_watchdog;
 	required_device<konppc_jvs_host_device> m_jvs_host;
 	optional_device_array<k033906_device, 2> m_k033906;
@@ -628,7 +629,18 @@ uint32_t hornet_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap
 {
 	m_voodoo[Which]->screen_update(screen, bitmap, cliprect);
 
+	// with -hires3d, the pixels the 2D layer changes are magnified over the 3D
+	hires3d_output *const hires = m_voodoo[Which]->hires();
+	if (hires)
+	{
+		bitmap_rgb32 &below = m_below[Which];
+		if ((below.width() != bitmap.width()) || (below.height() != bitmap.height()))
+			below.allocate(bitmap.width(), bitmap.height());
+		copybitmap(below, bitmap, 0, 0, 0, 0, cliprect);
+	}
 	m_k037122[Which]->tile_draw(screen, bitmap, cliprect);
+	if (hires)
+		hires->magnify_changes(m_below[Which], bitmap, cliprect);
 
 	return 0;
 }
