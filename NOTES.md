@@ -29,6 +29,7 @@ Matériel visé, dans l'ordre :
 | 1 | Namco System 22 / Super 22 | ridgerac, ridgera2, raverace, acedrive, victlap, cybrcycc, dirtdash, alpinerd | OK (ridgerac, dirtdash ×2) | OK (5 jeux ×2) ; plus rapide que le natif |
 | 2 | Konami K001005 | gticlub, midnrun, windheat, jetwave | OK (gticlub, midnrun ×2) | OK (midnrun, gticlub) ; proche du natif |
 | 3 | 3dfx Voodoo 1/2 | sfrush, sfrushrk, calspeed, hyprdriv, vaportrx, roadburn, thrilld, racingj | OK (sfrush ×2 ×4, racingj ×2, roadburn ×2) ; coûteux en CPU | OK (même image que le logiciel) ; au niveau du natif en ×2 sur roadburn |
+| 3b | 3dfx Banshee / Voodoo 3 | sf2049, sf2049se, cartfury (et viper, nbashowt… non essayés) | OK (sf2049, cartfury ×2) | OK (même image que le logiciel ; ×4 sf2049 130 s en 65 s) |
 | 4 | Midway V-Unit | crusnusa, crusnwld, offroadc | OK (3 jeux ×2 en démo 3D ; sommets entiers : bords natifs, textures HD) | OK (même image que le logiciel) ; ×4 60 s contre 81 s en logiciel |
 | 5 | Midway Zeus 2 | crusnexo | OK (crusnexo ×2, ×4, mode démo) | OK, vrais triangles, plus de raster CPU ; temps CPU ×2 52 s contre 92 s en natif |
 | 6 | Namco System 21 | winrun, driveyes | OK (winrun, driveyes ×2) | OK, vrais quads, plus de raster CPU ; winrun, temps CPU ×4 14,5 s contre 23 s en natif |
@@ -77,7 +78,7 @@ Matériel visé, dans l'ordre :
      ```
 
      (`C:\VulkanSDK\1.4.363.0\Bin\glslc.exe`)
-   - Plus tard : partage direct de la texture avec bgfx, sans relecture.
+   - Avec bgfx sur Direct3D 11, l'image n'est plus relue : voir le point 7.
 5. **Contexte Vulkan commun** : `src/emu/vk3d_context.{h,cpp}` charge Vulkan,
    crée le périphérique (avec les options demandées que le GPU possède) et
    fournit les aides tampons, images et shaders. `vk3d_renderer` et les rendus
@@ -91,6 +92,27 @@ Matériel visé, dans l'ordre :
    ```
    glslc --target-env=vulkan1.0 -O -mfmt=num -I . -o X.spv.inc X
    ```
+
+7. **Image partagée avec bgfx** (`-bgfx_hires3d_share`, actif par défaut) :
+   l'image finie reste sur le GPU.
+   - `src/osd/modules/render/bgfx/sharedtexture.{h,cpp}` crée des textures
+     Direct3D 11 partagées par handle NT et les substitue aux textures bgfx
+     (`overrideInternal`), comme texture d'écran des chaînes ou du quad simple.
+   - `src/emu/vk3d_share.{h,cpp}` les importe dans le périphérique Vulkan de
+     chaque puce (`VK_KHR_external_memory_win32`, Vulkan 1.1, même adaptateur
+     vérifié par le LUID) et y copie l'image finie au lieu de la relire.
+   - `hires3d_output::use_frame()` reçoit la texture ; bgfx la dessine, et la
+     relecture ne se fait plus que pour les captures et l'enregistrement
+     (`read_gpu_textures()` dans `video_manager::create_snapshot_bitmap`).
+   - bgfx tourne alors sur le thread de l'émulation (`bgfx::renderFrame()`
+     avant `bgfx::init()`) : son périphérique D3D11 est créé mono-thread, et
+     les textures sont créées et suivies depuis l'émulation. Avec le thread de
+     rendu de bgfx, le pilote NVIDIA plantait ou bloquait.
+   - Synchronisation par le CPU : la puce attend son lot avant que bgfx dessine
+     (rappel `ready`), et ne réécrit une texture qu'une fois les dessins qui la
+     lisent finis (anneau de requêtes D3D11 ; sinon l'image est relue).
+   - Branché sur System 22, System 21, Taito JC, HNG64, Gaelco 3D, K001005 et
+     Voodoo (1/2, Banshee, Voodoo 3). Pas encore : V-Unit, Zeus 2, Model 1.
 
 ## Compilation
 
@@ -182,19 +204,14 @@ l'écraser.
 Toutes les puces de la liste ont un rendu logiciel HD et un rendu Vulkan
 (2026-11-02). Reste :
 
-1. Partager l'image du GPU avec bgfx au lieu de la relire puis de la renvoyer.
-   Sur ce portable, bgfx dessine sur la même carte (NVIDIA) que Vulkan : c'est
-   donc faisable. Le travail touche l'OSD bgfx, `hires3d` et les neuf puces, et
-   la relecture ne se ferait plus qu'à la demande (captures, enregistrement).
-   Gain : 3,7 Mo par image en ×2 et 15 Mo en ×4, qui font deux fois le trajet
-   sur un lien PCIe mesuré entre 1 et 1,7 Go/s.
-2. Banshee et Voodoo 3 en HD (sf2049, sf2049se et cartfury marchent dans MAME) :
-   étendre le chemin Voodoo aux blits 2D, aux textures rangées dans la mémoire de
-   l'image et aux lectures du CPU.
-3. HNG64 : n'envoyer au GPU que les lignes 2D qui changent (1,8 Mo par image).
-4. Refaire les mesures au calme (une partie a été faite pendant que d'autres
-   MAME tournaient sur le portable).
-5. System 23, Taito Type Zero et Konami Cobra, quand leur émulation marchera.
+1. Partage avec bgfx pour V-Unit et Zeus 2 (relecture anticipée et image
+   remontrée sans redessin à reprendre), puis l'essayer sur une carte AMD ou
+   Intel.
+2. HNG64 : n'envoyer au GPU que les lignes 2D qui changent (1,8 Mo par image).
+3. Banshee/Voodoo 3 : essayer sf2049se et les jeux non-course (Viper,
+   nbashowt) ; les blits 2D entre tampons perdent la HD (jamais vus dans
+   sf2049 ni cartfury).
+4. System 23, Taito Type Zero et Konami Cobra, quand leur émulation marchera.
    Le GPU PS1 seulement si une HD sans sous-pixel convient.
 - 2026-10-31 : **Namco System 21** en logiciel HD.
   - `namcos21_3d` : tampons × N, sommets (entiers) mis à l'échelle, ce qui
@@ -646,3 +663,31 @@ Toutes les puces de la liste ont un rendu logiciel HD et un rendu Vulkan
     - Zeus 1 et Konami M2 : faisables, mais sans jeu de course.
     - Hard Drivin' et Polygonet : la 3D est calculée par le CPU ou le DSP émulé,
       impossible sans HLE.
+- 2026-11-07 (soir) : **Banshee et Voodoo 3 en HD, image partagée avec bgfx**.
+  - Banshee/Voodoo 3 : tampons couleur et profondeur n'importe où dans la
+    mémoire partagée avec les textures, à des adresses que le jeu change. Les
+    copies HD (logiciel et Vulkan) sont tenues par adresse de tampon, et toute
+    écriture dans la mémoire (FIFO, écritures directes et LFB, port de
+    textures, blits 2D) va aux copies qu'elle touche et à la mémoire de
+    textures du GPU ; CLUT de 512 entrées. sf2049 et cartfury tournent en
+    double tampon à deux adresses, sans blit.
+  - Les lectures des registres de statistiques de pixels relancent le
+    rastériseur natif (seul lui compte les pixels qui passent les tests) :
+    sf2049 les lit toutes les 5 images, et sa démo divergeait quand seul le GPU
+    dessinait. Elle suit maintenant le logiciel ; racingj aussi les lit, et
+    dessine donc en natif en plus du GPU.
+  - Voodoo 1/2 : les écritures LFB avec pipeline n'étaient recopiées en HD que
+    si elles changeaient le pixel natif ; en mode GPU seul, l'écran de test du
+    volant de sfrush était noir. Corrigé. La démo de sfrush diverge toujours
+    en mode GPU seul (temps d'exécution estimé), comme avant.
+  - Partage avec bgfx : sur ce portable, 16 essais sur 16 sans erreur en
+    fenêtre (8 jeux, 2 fois). En ×4 en fenêtre, vitesse régulée, avec partage
+    puis sans : roadedge 88,8 % contre 64,5 % ; ridgerac 100 % contre 98,3 % ;
+    attente du GPU sur 29 s : sf2049 0,07 s contre 6,0 s, sidebs 0,19 s contre
+    0,82 s, speedup 0,09 s contre 0,94 s, winrun 0,02 s contre 0,71 s.
+  - Pièges trouvés en route : bgfx rend sur son propre thread sous Windows
+    (`BGFX_CONFIG_MULTITHREADED` n'est à 0 que sur macOS) avec un périphérique
+    D3D11 mono-thread. Tant que bgfx gardait ce thread, les appels D3D11 depuis
+    l'émulation faisaient planter le pilote, les requêtes ne finissaient pas, et
+    un keyed mutex donnait une image noire (le dessin avait lieu après la
+    libération du verrou).
