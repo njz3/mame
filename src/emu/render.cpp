@@ -1584,6 +1584,123 @@ void render_target::compute_visible_area(s32 target_width, s32 target_height, fl
 
 
 //-------------------------------------------------
+//  place_view - where the view goes in a target
+//  (mame3d: -aspect_ratio puts it in a frame of
+//  that shape, centred, black bars around; the
+//  view keeps its own shape inside, fills the
+//  frame or covers it with the overflow cut)
+//-------------------------------------------------
+
+namespace {
+
+struct view_place
+{
+	s32 width = 0;          // the view at the target's scale
+	s32 height = 0;
+	float xoffs = 0.0f;     // its top left corner in the target
+	float yoffs = 0.0f;
+	bool clipped = false;   // the screens are cut to clip
+	render_bounds clip;
+};
+
+enum class frame_fit { WHOLE, KEEP, STRETCH, CROP };
+
+frame_fit parse_aspect_ratio(char const *value, float &aspect)
+{
+	std::string_view const v(value ? value : "");
+	static struct { char const *name; float aspect; frame_fit fit; } const s_modes[] = {
+		{ "4:3", 4.0f / 3.0f, frame_fit::KEEP },
+		{ "4:3_letterbox", 4.0f / 3.0f, frame_fit::KEEP },
+		{ "16:9", 16.0f / 9.0f, frame_fit::KEEP },
+		{ "4:3_stretch", 4.0f / 3.0f, frame_fit::STRETCH },
+		{ "16:9_stretch", 16.0f / 9.0f, frame_fit::STRETCH },
+		{ "4:3_crop", 4.0f / 3.0f, frame_fit::CROP },
+		{ "16:9_crop", 16.0f / 9.0f, frame_fit::CROP } };
+	for (auto const &mode : s_modes)
+		if (!core_stricmp(v, mode.name))
+		{
+			aspect = mode.aspect;
+			return mode.fit;
+		}
+	return frame_fit::WHOLE;
+}
+
+view_place place_view(render_target &target, s32 width, s32 height, float pixel_aspect, int orientation, emu_options const &options)
+{
+	view_place place;
+	float frame_aspect = 0.0f;
+	frame_fit const fit = target.hidden() ? frame_fit::WHOLE : parse_aspect_ratio(options.value(OPTION_ASPECT_RATIO), frame_aspect);
+	if ((fit == frame_fit::WHOLE) || (width <= 0) || (height <= 0) || (pixel_aspect <= 0.0f))
+	{
+		target.compute_visible_area(width, height, pixel_aspect, orientation, place.width, place.height);
+		place.xoffs = float(width - place.width) / 2;
+		place.yoffs = float(height - place.height) / 2;
+		return place;
+	}
+
+	// the frame, in target pixels (pixel_aspect is a pixel's width over its height)
+	s32 frame_width = width, frame_height = height;
+	if (float(width) / float(height) * pixel_aspect > frame_aspect)
+		frame_width = std::clamp<s32>(render_round_nearest(float(height) * frame_aspect / pixel_aspect), 1, width);
+	else
+		frame_height = std::clamp<s32>(render_round_nearest(float(width) * pixel_aspect / frame_aspect), 1, height);
+	float const frame_x = float(width - frame_width) / 2;
+	float const frame_y = float(height - frame_height) / 2;
+
+	switch (fit)
+	{
+	case frame_fit::KEEP:
+		{
+			// the whole view at its own shape
+			bool const keep = target.keepaspect();
+			target.set_keepaspect(true);
+			target.compute_visible_area(frame_width, frame_height, pixel_aspect, orientation, place.width, place.height);
+			target.set_keepaspect(keep);
+			break;
+		}
+
+	case frame_fit::STRETCH:
+		place.width = frame_width;
+		place.height = frame_height;
+		break;
+
+	default:
+		{
+			// the view at its own shape, covering the frame
+			float view_aspect = target.current_view().effective_aspect();
+			if (orientation & ORIENTATION_SWAP_XY)
+				view_aspect = 1.0f / view_aspect;
+			float const view_pixels = view_aspect / pixel_aspect;
+			if (view_pixels > float(frame_width) / float(frame_height))
+			{
+				place.height = frame_height;
+				place.width = std::max<s32>(render_round_nearest(float(frame_height) * view_pixels), frame_width);
+			}
+			else
+			{
+				place.width = frame_width;
+				place.height = std::max<s32>(render_round_nearest(float(frame_width) / view_pixels), frame_height);
+			}
+			place.clipped = true;
+			place.clip.x0 = frame_x;
+			place.clip.y0 = frame_y;
+			place.clip.x1 = frame_x + frame_width;
+			place.clip.y1 = frame_y + frame_height;
+			break;
+		}
+	}
+
+	// centred in the frame, or moved by -crop_position over the cut part
+	float const position = (fit == frame_fit::CROP) ? float(std::clamp(options.int_value(OPTION_CROP_POSITION), -100, 100) + 100) / 200.0f : 0.5f;
+	place.xoffs = frame_x + float(frame_width - place.width) * position;
+	place.yoffs = frame_y + float(frame_height - place.height) * position;
+	return place;
+}
+
+} // anonymous namespace
+
+
+//-------------------------------------------------
 //  compute_minimum_size - compute the "minimum"
 //  size of a target, which is the smallest bounds
 //  that will ensure at least 1 target pixel per
@@ -1669,19 +1786,25 @@ render_primitive_list &render_target::get_primitives()
 	// free any previous primitives
 	list.release_all();
 
-	// compute the visible width/height
-	s32 viswidth, visheight;
-	compute_visible_area(m_width, m_height, m_pixel_aspect, m_orientation, viswidth, visheight);
+	// compute the visible width/height, and where it goes
+	view_place const place = place_view(*this, m_width, m_height, m_pixel_aspect, m_orientation, m_manager.machine().options());
+	s32 const viswidth = place.width;
+	s32 const visheight = place.height;
 
 	// create a root transform for the target
 	object_transform root_xform;
-	root_xform.xoffs = (float)(m_width - viswidth) / 2;
-	root_xform.yoffs = (float)(m_height - visheight) / 2;
+	root_xform.xoffs = place.xoffs;
+	root_xform.yoffs = place.yoffs;
 	root_xform.xscale = (float)viswidth;
 	root_xform.yscale = (float)visheight;
 	root_xform.color.r = root_xform.color.g = root_xform.color.b = root_xform.color.a = 1.0f;
 	root_xform.orientation = m_orientation;
 	root_xform.no_center = false;
+
+	// the view is cut to its frame (-aspect_ratio *_crop)
+	render_bounds const target_bounds = m_bounds;
+	if (place.clipped)
+		m_bounds &= place.clip;
 
 	if (m_manager.machine().phase() >= machine_phase::RESET)
 	{
@@ -1733,6 +1856,8 @@ render_primitive_list &render_target::get_primitives()
 			list.append(*prim);
 		}
 	}
+
+	m_bounds = target_bounds;
 
 	// process UI elements if applicable
 	if (m_ui_container)
@@ -2852,14 +2977,15 @@ void render_target::add_element_primitives(render_primitive_list &list, const ob
 
 std::pair<float, float> render_target::map_point_internal(s32 target_x, s32 target_y)
 {
-	// compute the visible width/height
-	s32 viswidth, visheight;
-	compute_visible_area(m_width, m_height, m_pixel_aspect, m_orientation, viswidth, visheight);
+	// compute the visible width/height, and where it goes
+	view_place const place = place_view(*this, m_width, m_height, m_pixel_aspect, m_orientation, m_manager.machine().options());
+	s32 const viswidth = place.width;
+	s32 const visheight = place.height;
 
 	// create a root transform for the target
 	object_transform root_xform;
-	root_xform.xoffs = float(m_width - viswidth) / 2;
-	root_xform.yoffs = float(m_height - visheight) / 2;
+	root_xform.xoffs = place.xoffs;
+	root_xform.yoffs = place.yoffs;
 
 	// convert target coordinates to float
 	if (!m_manager.machine().ui().is_menu_active())

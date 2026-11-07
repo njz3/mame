@@ -34,6 +34,12 @@
 
 #define OPTION_HIRES3D "hires3d"
 
+// mame3d display options, as in the other emulators of the cabinets: the
+// shape of the frame the screens are shown in, centred in the window or
+// screen with black bars around (see render.cpp)
+#define OPTION_ASPECT_RATIO "aspect_ratio"
+#define OPTION_CROP_POSITION "crop_position"
+
 class device_palette_interface;
 class screen_device;
 class vk3d_renderer;

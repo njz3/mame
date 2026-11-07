@@ -104,6 +104,8 @@ const options_entry emu_options::s_option_entries[] =
 	// render options
 	{ nullptr,                                           nullptr,     core_options::option_type::HEADER,     "CORE RENDER OPTIONS" },
 	{ OPTION_KEEPASPECT ";ka",                           "1",         core_options::option_type::BOOLEAN,    "maintain aspect ratio when scaling to fill output screen/window" },
+	{ OPTION_ASPECT_RATIO,                               "original",  core_options::option_type::STRING,     "frame the screens are shown in, centred with black bars around: original (the whole output, as -keepaspect says), 4:3 or 16:9 (the screens keep their own shape inside), 4:3_stretch or 16:9_stretch (stretched to the frame), 4:3_crop or 16:9_crop (filling the frame, the overflow cut)" },
+	{ OPTION_CROP_POSITION "(-100-100)",                 "0",         core_options::option_type::INTEGER,    "part kept by the _crop aspect ratios: -100 the left or top edge, 0 the middle, 100 the right or bottom edge" },
 	{ OPTION_UNEVENSTRETCH ";ues",                       "1",         core_options::option_type::BOOLEAN,    "allow non-integer ratios when scaling to fill output screen/window horizontally or vertically" },
 	{ OPTION_UNEVENSTRETCHX ";uesx",                     "0",         core_options::option_type::BOOLEAN,    "allow non-integer ratios when scaling to fill output screen/window horizontally"},
 	{ OPTION_UNEVENSTRETCHY ";uesy",                     "0",         core_options::option_type::BOOLEAN,    "allow non-integer ratios when scaling to fill output screen/window vertically"},
