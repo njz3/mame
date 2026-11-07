@@ -121,12 +121,20 @@ public:
 	// mix, nullptr in software; after a failure, the high-resolution screen
 	// magnifies the native one
 	hng64_vk *vulkan() { return m_vk.get(); }
-	void vulkan_failed() { m_vk.reset(); }
+	void vulkan_failed() { m_vk.reset(); m_wide_x = 1.0f; m_wide_bg_pad = 0; }
+
+	// -widescreen (GPU only): the 3D frustum is wide_x() times wider, and the
+	// tilemaps under the 3D are drawn wide_bg_pad() native pixels further on
+	// each side (-widescreen_bg)
+	float wide_x() const { return m_wide_x; }
+	int wide_bg_pad() const { return m_wide_bg_pad; }
 
 private:
 	hng64_state &m_state;
 	int m_scale;                    // 1 with m_vk, which draws at the -hires3d scale
 	std::unique_ptr<hng64_vk> m_vk;
+	float m_wide_x = 1.0f;
+	int m_wide_bg_pad = 0;
 
 	// (Temporarily class members - someday they will live in the memory map)
 	std::unique_ptr<float[]> m_depthBuffer3d;
@@ -224,6 +232,8 @@ public:
 	std::unique_ptr<hires3d_output> m_hires;
 	bitmap_rgb32 m_below;
 	bitmap_rgb32 m_hires_bottom;    // on the GPU: the layers under the 3D
+	bitmap_ind8 m_wide_priority;    // -widescreen_bg: for the tilemaps drawn on the sides
+	bitmap_ind8 *m_tilemap_priority = nullptr;  // instead of the screen's
 	void blit_3d(bitmap_rgb32 &bitmap, const rectangle &cliprect, int scale);
 	required_device<palette_device> m_palette;
 	required_device<palette_device> m_palette_fade0;

@@ -69,6 +69,7 @@ struct push_constants
 	s32 blit, xscroll, yinc;
 	u32 palbase;
 	s32 vis_top, hleft;
+	s32 pad, stretch2d, bg_pad, frame_width;
 };
 
 struct command
@@ -114,6 +115,9 @@ struct hng64_vk::impl : vk3d_context
 	int scale = 1;
 	int width = 0;              // high-resolution frame buffers
 	int height = 0;
+	int pad = 0;                // -widescreen: more columns on each side
+	bool stretch2d = false;
+	int bg_pad = 0;
 	int work = 0;               // the 3D buffer
 	bool failed = false;
 
@@ -627,7 +631,7 @@ void hng64_vk::impl::add_triangle(state const &st, vertex const &a, vertex const
 	for (int i = 0; i < 3; i++)
 	{
 		u32 *const out = &r[TR_VERTS + i * TV_SIZE];
-		out[TV_X] = float_bits(corners[i]->x * scale);
+		out[TV_X] = float_bits(corners[i]->x * scale + pad);
 		out[TV_Y] = float_bits(corners[i]->y * scale);
 		for (int p = 0; p < 5; p++)
 			out[TV_P + p] = float_bits(corners[i]->p[p]);
@@ -919,12 +923,13 @@ void hng64_vk::impl::complete(readback_entry &entry)
 
 bitmap_rgb32 *hng64_vk::impl::show(int index, rectangle const &visible)
 {
-	// high-resolution screen pixel (x, y) is display pixel (x - left, y - top);
+	// high-resolution frame pixel (x, y) is display pixel (x - left, y - top)
+	// (with -widescreen, the screen starts pad columns into the frame);
 	// the read-back is waited for in frame_ready()
 	readback_entry &entry = readback[index];
 	s32 const left = visible.left() * scale;
 	s32 const top = visible.top() * scale;
-	s32 const w = visible.width() * scale;
+	s32 const w = visible.width() * scale + 2 * pad;
 	s32 const h = visible.height() * scale;
 	u32 *const base = reinterpret_cast<u32 *>(entry.host.mapped) - (ptrdiff_t(top) * w + left);
 	entry.view.wrap(base, left + w, top + h, w);
@@ -939,7 +944,7 @@ bool hng64_vk::impl::mix(push_constants const &push, int top, int bottom, rectan
 	// the rows of this update into the display image; the frame is read back
 	// once its bottom is reached
 	frame = nullptr;
-	int const w = visible.width() * scale;
+	int const w = visible.width() * scale + 2 * pad;
 	int const h = visible.height() * scale;
 	bool const last = bottom >= visible.bottom();
 	top = std::max(top, visible.top());
@@ -958,6 +963,10 @@ bool hng64_vk::impl::mix(push_constants const &push, int top, int bottom, rectan
 		cmd.mix.pens_height = height;
 		cmd.mix.left = visible.left() * scale;
 		cmd.mix.top = visible.top() * scale;
+		cmd.mix.pad = pad;
+		cmd.mix.stretch2d = stretch2d ? 1 : 0;
+		cmd.mix.bg_pad = bg_pad;
+		cmd.mix.frame_width = w;
 		commands.push_back(cmd);
 		mixes++;
 	}
@@ -990,13 +999,16 @@ bool hng64_vk::impl::mix(push_constants const &push, int top, int bottom, rectan
 //  PUBLIC INTERFACE
 //**************************************************************************
 
-std::unique_ptr<hng64_vk> hng64_vk::create(int scale, int size, u8 const *texture, std::string &error)
+std::unique_ptr<hng64_vk> hng64_vk::create(int scale, int size, int pad, bool stretch2d, int bg_pad, u8 const *texture, std::string &error)
 {
 	auto state = std::make_unique<impl>();
 	if (!state->init(error))
 		return nullptr;
 	state->scale = scale;
-	state->width = size * scale;
+	state->pad = pad;
+	state->stretch2d = stretch2d;
+	state->bg_pad = bg_pad;
+	state->width = size * scale + 2 * pad;
 	state->height = size * scale;
 	state->texram = texture;
 	if (!state->create_targets())
@@ -1072,7 +1084,7 @@ bool hng64_vk::mix(bitmap_rgb32 const &bottom, bitmap_rgb32 const &top, blit con
 {
 	impl &s = *m;
 	frame = nullptr;
-	if (s.failed || visible.empty() || (visible.left() < 0) || (visible.top() < 0) || !s.ensure_display(visible.width() * s.scale, visible.height() * s.scale))
+	if (s.failed || visible.empty() || (visible.left() < 0) || (visible.top() < 0) || !s.ensure_display(visible.width() * s.scale + 2 * s.pad, visible.height() * s.scale))
 		return false;
 	push_constants push{};
 	push.palette = s.add_palette(palette, colors);
@@ -1084,25 +1096,27 @@ bool hng64_vk::mix(bitmap_rgb32 const &bottom, bitmap_rgb32 const &top, blit con
 	push.vis_top = visible.top() * s.scale;
 	push.hleft = cliprect.left() * s.scale;
 
-	// the native pixels of the rows of this update, two words each
+	// the native pixels of the rows of this update, two words each (bg_pad
+	// more columns on each side: under the 3D only)
 	int const first = std::max(cliprect.top(), visible.top());
 	int const last = std::min(cliprect.bottom(), visible.bottom());
+	int const stride = visible.width() + 2 * s.bg_pad;
 	push.base = u32(s.values.size());
 	push.native_left = visible.left();
 	push.native_top = first;
 	push.native_width = visible.width();
 	if (first <= last)
 	{
-		s.values.resize(s.values.size() + size_t(last + 1 - first) * visible.width() * 2);
+		s.values.resize(s.values.size() + size_t(last + 1 - first) * stride * 2);
 		u32 *out = &s.values[push.base];
 		for (int y = first; y <= last; y++)
 		{
 			u32 const *const under = &bottom.pix(y);
 			u32 const *const over = &top.pix(y);
-			for (int x = visible.left(); x <= visible.right(); x++)
+			for (int x = visible.left() - s.bg_pad; x <= visible.right() + s.bg_pad; x++)
 			{
 				*out++ = under[x];
-				*out++ = over[x];
+				*out++ = ((x >= visible.left()) && (x <= visible.right())) ? over[x] : 0x80000000;
 			}
 		}
 	}

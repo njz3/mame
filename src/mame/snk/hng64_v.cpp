@@ -382,7 +382,7 @@ void hng64_state::tilemap_draw_roz_core_line(
 		clut = &m_palette->pen(0);
 	}
 
-	bitmap_ind8 &priority_bitmap = screen.priority();
+	bitmap_ind8 &priority_bitmap = m_tilemap_priority ? *m_tilemap_priority : screen.priority();
 	const bitmap_ind16 &srcbitmap = tmap->pixmap();
 	const bitmap_ind8 &flagsmap = tmap->flagsmap();
 	const int xmask = srcbitmap.width()-1;
@@ -975,9 +975,37 @@ u32 hng64_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, cons
 	if (vk)
 	{
 		// on the GPU: the layers under the 3D kept for the mix
+		int const bg_pad = m_poly_renderer->wide_bg_pad();
 		if ((m_hires_bottom.width() != bitmap.width()) || (m_hires_bottom.height() != bitmap.height()))
-			m_hires_bottom.allocate(bitmap.width(), bitmap.height());
+			m_hires_bottom.allocate(bitmap.width(), bitmap.height(), bg_pad, 0);
 		copybitmap(m_hires_bottom, bitmap, 0, 0, 0, 0, cliprect);
+
+		// -widescreen_bg: the tilemaps under the 3D also on the sides of the
+		// screen, past its edges (not the sprites; not in the split mode, which
+		// sets its own columns)
+		if (bg_pad && !BIT(m_videoregs[0x00], 0))
+		{
+			if ((m_wide_priority.width() != bitmap.width()) || (m_wide_priority.height() != bitmap.height()))
+				m_wide_priority.allocate(bitmap.width(), bitmap.height(), bg_pad, 0);
+			rectangle const &visarea = screen.visible_area();
+			rectangle const sides[2] = {
+					rectangle(visarea.left() - bg_pad, visarea.left() - 1, cliprect.top(), cliprect.bottom()),
+					rectangle(visarea.right() + 1, visarea.right() + bg_pad, cliprect.top(), cliprect.bottom()) };
+			u32 const background = (m_fbcontrol[0] & 0x01) ? u32(m_palette->pen(0)) : u32(m_palette->black_pen());
+			m_tilemap_priority = &m_wide_priority;
+			for (rectangle const &side : sides)
+			{
+				for (int y = side.top(); y <= side.bottom(); y++)
+				{
+					std::fill_n(&m_hires_bottom.pix(y, side.left()), side.width(), background);
+					for (int i = 0x1f; i >= 0x10; i--)
+						for (int j = 0; j < 4; j++)
+							if ((get_tileregs(j) & 0x1f) == i)
+								draw_tilemap(screen, m_hires_bottom, side, j, 0, y);
+				}
+			}
+			m_tilemap_priority = nullptr;
+		}
 
 		// the layers over the 3D, for the mix, not knowing the 3D
 		bitmap.fill(GPU_LAYERS_EMPTY, cliprect);
@@ -1044,6 +1072,7 @@ u32 hng64_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, cons
 			// the GPU failed: software from the next update on
 			osd_printf_warning("hng64: Vulkan failed, hires3d continues in software\n");
 			m_poly_renderer->vulkan_failed();
+			m_hires->allow_widescreen(false);
 		}
 	}
 	else if (hires)
@@ -1618,9 +1647,9 @@ void hng64_state::video_start()
 		elem.m_tilemap_16x16_alt->set_transparent_pen(0);
 	}
 
-	// Rasterizer creation
-	m_poly_renderer = std::make_unique<hng64_poly_renderer>(*this);
+	// Rasterizer creation (after the high-resolution output: -widescreen)
 	m_hires = std::make_unique<hires3d_output>(*m_screen);
+	m_poly_renderer = std::make_unique<hng64_poly_renderer>(*this);
 
 	// 3d information
 	m_dl = std::make_unique<u16[]>(0x100);

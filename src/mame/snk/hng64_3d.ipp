@@ -12,19 +12,29 @@ hng64_poly_renderer::hng64_poly_renderer(hng64_state& state)
 	, m_scale(std::clamp(state.machine().options().int_value(OPTION_HIRES3D), 1, 16))
 {
 	// -hires3d: on the GPU unless -hires3d_renderer is software; the buffers
-	// here then stay native and nothing draws into them, unless the GPU fails
-	if ((m_scale > 1) && (strcmp(state.machine().options().value(OPTION_HIRES3D_RENDERER), "software") != 0) && (state.m_texturerom.bytes() >= 0x1000000))
+	// here then stay native and nothing draws into them, unless the GPU fails;
+	// -widescreen needs the GPU (even at the native resolution): its 3D buffers
+	// get pad() more columns on each side, and the frustum is wider as much
+	hires3d_output &hires = *state.m_hires;
+	hires.allow_widescreen(true);
+	bool const wide = hires.wide();
+	if (((m_scale > 1) || wide) && (strcmp(state.machine().options().value(OPTION_HIRES3D_RENDERER), "software") != 0) && (state.m_texturerom.bytes() >= 0x1000000))
 	{
 		std::string error;
-		m_vk = hng64_vk::create(m_scale, 512, &state.m_texturerom[0], error);
+		int const pad = wide ? hires.pad() : 0;
+		int const bg_pad = (wide && hires.wide_bg()) ? ((pad + m_scale - 1) / m_scale) : 0;
+		m_vk = hng64_vk::create(m_scale, 512, pad, wide && hires.stretch_2d(), bg_pad, &state.m_texturerom[0], error);
 		if (m_vk)
 		{
 			osd_printf_verbose("hng64: hires3d drawn with Vulkan on %s\n", m_vk->device_name());
+			m_wide_x = float(512 * m_scale + 2 * pad) / float(512 * m_scale);
+			m_wide_bg_pad = bg_pad;
 			m_scale = 1;
 		}
 		else
 			osd_printf_verbose("hng64: hires3d drawn in software (%s)\n", error);
 	}
+	hires.allow_widescreen(m_vk != nullptr);
 
 	const s32 bufferSize = size() * size();
 	m_depthBuffer3d = std::make_unique<float[]>(bufferSize);
@@ -916,14 +926,19 @@ void hng64_state::recoverPolygonBlock(const u16* packet, int& numPolys)
 
 				if (currentPoly.visible)
 				{
-					// Clip against all edges of the view frustum
+					// Clip against all edges of the view frustum (-widescreen:
+					// wide_x() times wider)
+					const float wide = m_poly_renderer->wide_x();
+					if (wide != 1.0f)
+						for (int m = 0; m < currentPoly.n; m++)
+							clipVerts[m].x /= wide;
 					const int num_vertices = frustum_clip_all<float, 5>(clipVerts, currentPoly.n, clipVerts);
 
 					// Copy the results of
 					currentPoly.n = num_vertices;
 					for (int m = 0; m < num_vertices; m++)
 					{
-						currentPoly.vert[m].clipCoords[0] = clipVerts[m].x;
+						currentPoly.vert[m].clipCoords[0] = clipVerts[m].x * wide;
 						currentPoly.vert[m].clipCoords[1] = clipVerts[m].y;
 						currentPoly.vert[m].clipCoords[2] = clipVerts[m].z;
 						currentPoly.vert[m].clipCoords[3] = clipVerts[m].w;

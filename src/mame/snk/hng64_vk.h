@@ -61,8 +61,12 @@ public:
 		u32 palbase;
 	};
 
-	// size: the native 3D buffers (square); texture: 16 MB of texels
-	static std::unique_ptr<hng64_vk> create(int scale, int size, u8 const *texture, std::string &error);
+	// size: the native 3D buffers (square); texture: 16 MB of texels;
+	// -widescreen: pad more high-resolution columns on each side of the 3D
+	// buffers and the screen, the layers over the 3D stretched over the whole
+	// width (stretch2d) or in the middle, the layers under it given bg_pad
+	// more native columns on each side (else as the layers over it)
+	static std::unique_ptr<hng64_vk> create(int scale, int size, int pad, bool stretch2d, int bg_pad, u8 const *texture, std::string &error);
 	~hng64_vk();
 
 	std::string const &device_name() const;
@@ -73,9 +77,9 @@ public:
 	// clear3d
 	void clear();
 
-	// a screen update with the native screen under the 3D (bottom) and the
-	// layers over it (top: alpha 0xff when opaque, else added to alpha / 128
-	// times what is under them); once the
+	// a screen update with the native screen under the 3D (bottom, bg_pad
+	// columns wider on each side) and the layers over it (top: alpha 0xff
+	// when opaque, else added to alpha / 128 times what is under them); once the
 	// bottom of the visible area is reached, frame is a bitmap in
 	// high-resolution screen coordinates over the read-back memory, intact
 	// until the next frame is shown, else nullptr; false if the GPU failed

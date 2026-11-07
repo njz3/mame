@@ -27,4 +27,8 @@ layout(push_constant) uniform push_t
 	uint palbase;       // 3D palette half
 	int vis_top;        // high-resolution top of the visible area
 	int hleft;          // high-resolution left of the update
+	int pad;            // -widescreen: more columns on each side (3D buffer, frame)
+	int stretch2d;      // the layers over the 3D stretched over the frame
+	int bg_pad;         // native columns more on each side under the 3D
+	int frame_width;    // mix: the frame's columns
 } pc;

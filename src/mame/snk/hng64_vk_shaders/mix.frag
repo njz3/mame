@@ -2,7 +2,11 @@
 // copyright-holders:njz3
 // the HNG64 screen at the high resolution: the native layers under the 3D,
 // the 3D blitted over them (blit_3d: scroll, vertical stretch, 3D palette
-// with its 16 brightness levels, 50% blend), then the layers over the 3D
+// with its 16 brightness levels, 50% blend), then the layers over the 3D;
+// with -widescreen, the frame has pad more columns on each side: the 3D
+// buffer too, the layers over it are in the middle or stretched, and the
+// layers under it are bg_pad native columns wider on each side, else as the
+// layers over it
 #version 450
 #extension GL_GOOGLE_include_directive : require
 
@@ -22,25 +26,41 @@ uint alpha_blend_r32(uint d, uint s, uint level)
 			((((s & 0xff0000u) * level + (d & 0xff0000u) * alphad) >> 8) & 0xff0000u);
 }
 
+int floor_div(int a, int b)
+{
+	return (a >= 0) ? (a / b) : -((b - 1 - a) / b);
+}
+
 void main()
 {
 	int dx = int(gl_FragCoord.x);
-	int x = dx + pc.left;
+	int x = dx + pc.left - pc.pad;      // high-resolution screen pixel
 	int y = int(gl_FragCoord.y) + pc.top;
-	int sx = x / pc.scale;
 	int sy = y / pc.scale;
 
 	// native pixels: the screen under the 3D, then the layers over it
 	// (alpha 0xff when opaque, else added to alpha / 128 times what is under)
-	uint offset = pc.values + pc.base + uint(((sy - pc.native_top) * pc.native_width + (sx - pc.native_left)) * 2);
-	uint dest = data[offset];
-	uint over = data[offset + 1u];
+	int tx = (pc.stretch2d != 0)
+			? (pc.native_left + int(floor((float(dx) + 0.5) * float(pc.native_width) / float(pc.frame_width))))
+			: floor_div(x, pc.scale);
+	int bx = (pc.bg_pad > 0) ? floor_div(x, pc.scale) : tx;
+	int stride = pc.native_width + 2 * pc.bg_pad;
+	uint row = pc.values + pc.base + uint((sy - pc.native_top) * stride * 2);
+	int tcol = tx - pc.native_left;
+	int bcol = bx - pc.native_left + pc.bg_pad;
+	uint dest = ((bcol >= 0) && (bcol < stride)) ? data[row + uint(bcol * 2)] : 0u;
+	uint over = ((tcol >= 0) && (tcol < pc.native_width)) ? data[row + uint((tcol + pc.bg_pad) * 2 + 1)] : 0x80000000u;
 
 	if (pc.blit != 0)
 	{
-		int mask = pc.pens_width - 1;
+		// the 3D buffer wraps around, past its widescreen sides
+		int fbw = pc.pens_width - 2 * pc.pad;
+		int fx = pc.hleft + x + pc.xscroll;
+		if ((fx < -pc.pad) || (fx >= fbw + pc.pad))
+			fx = ((fx % fbw) + fbw) % fbw;
 		int realy = ((y - pc.vis_top) * pc.yinc) >> 16;
-		uint srcpix = texelFetch(pens0, ivec2((pc.hleft + x + pc.xscroll) & mask, realy & mask), 0).r & 0xffffu;
+		int fy = ((realy % pc.pens_height) + pc.pens_height) % pc.pens_height;
+		uint srcpix = texelFetch(pens0, ivec2(fx + pc.pad, fy), 0).r & 0xffffu;
 		if ((srcpix & 0x07ffu) != 0u)
 		{
 			// llll appp pppp pppp: lighting, alpha, palette index
