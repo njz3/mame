@@ -90,9 +90,11 @@ public:
 	void polygon(draw const &d, vertex const *v, int count, rectangle const &clip);
 
 	// mix the native text layer and its priority map (screen coordinates),
-	// read the frame back and return a bitmap over it in screen coordinates
-	// at the high resolution, intact until two more frames are drawn
+	// start reading the frame back and return a bitmap over it in screen
+	// coordinates at the high resolution, intact until two more frames are
+	// drawn; its pixels are there once frame_ready() returns for it
 	bitmap_rgb32 *end_frame(pen_t const *palette, size_t entries, bitmap_ind16 const &text, bitmap_ind8 const &textpri, mix_params const &mix);
+	void frame_ready(bitmap_rgb32 const *frame);
 
 private:
 	struct impl;

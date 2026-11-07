@@ -47,6 +47,7 @@ constexpr VkFormat COLOR_FORMAT = VK_FORMAT_B8G8R8A8_UNORM;
 constexpr VkFormat PRI_FORMAT = VK_FORMAT_R8_UINT;
 constexpr size_t TILEDATA_BYTES = 0x1000000; // the texel index has 24 bits
 constexpr int READBACKS = 3;
+constexpr int SLOTS = 2;            // frames in flight
 
 struct push_constants
 {
@@ -72,6 +73,17 @@ struct namcos22_vk::impl : vk3d_context
 	{
 		buffer host;
 		bitmap_rgb32 view;
+		int slot = -1;          // frame that copies it
+		bool ready = true;
+	};
+
+	// a frame in flight: its commands, fence and uploaded data
+	struct slot
+	{
+		VkCommandBuffer cmd = VK_NULL_HANDLE;
+		VkFence fence = VK_NULL_HANDLE;
+		bool busy = false;
+		buffer host;
 	};
 
 	VkRenderPass scene_pass = VK_NULL_HANDLE;
@@ -97,13 +109,18 @@ struct namcos22_vk::impl : vk3d_context
 	VkFramebuffer display_framebuffer = VK_NULL_HANDLE;
 	readback_entry readback[READBACKS];
 	int next_readback = 0;
+	slot slots[SLOTS];
+	int next_slot = 0;
+
+	// statistics, shown with -verbose
+	osd_ticks_t wait_ticks = 0;
+	u32 frames = 0;
 
 	// ROM data, then the data of each frame
 	std::vector<u32> texture_data;
 	std::vector<u32> sprite_data;
 	buffer texture;
 	buffer sprite;
-	buffer frame_host;
 	buffer frame_device;
 	bool rom_uploaded = false;
 	bool descriptors_dirty = true;
@@ -120,8 +137,10 @@ struct namcos22_vk::impl : vk3d_context
 	VkPipeline make_pipeline(VkShaderModule vertex, VkShaderModule fragment, VkRenderPass pass, int attachments, bool blend, bool pri_write);
 	bool create_targets();
 	void destroy_targets();
-	bool ensure_frame(VkDeviceSize bytes);
+	bool ensure_frame(slot &target, VkDeviceSize bytes);
 	void update_descriptors();
+	void wait_slot(slot &target);
+	void wait_all();
 };
 
 
@@ -131,13 +150,20 @@ struct namcos22_vk::impl : vk3d_context
 
 namcos22_vk::impl::~impl()
 {
+	if (frames)
+		osd_printf_verbose("namcos22_vk: %u frames, %.1f ms waiting for the GPU\n", frames, wait_ticks * 1000.0 / osd_ticks_per_second());
 	if (device && vkDestroyDevice)
 	{
 		vkDeviceWaitIdle(device);
 		destroy_targets();
 		destroy_buffer(texture);
 		destroy_buffer(sprite);
-		destroy_buffer(frame_host);
+		for (slot &target : slots)
+		{
+			destroy_buffer(target.host);
+			if (target.fence)
+				vkDestroyFence(device, target.fence, nullptr);
+		}
 		destroy_buffer(frame_device);
 		for (VkPipeline p : { scene_pipeline, before_pipeline, final_pipeline })
 			if (p)
@@ -332,6 +358,21 @@ bool namcos22_vk::impl::init(std::string &error)
 		error = "pipeline creation failed";
 		return false;
 	}
+
+	for (slot &target : slots)
+	{
+		VkCommandBufferAllocateInfo alloc_info{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
+		alloc_info.commandPool = command_pool;
+		alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+		alloc_info.commandBufferCount = 1;
+		VkFenceCreateInfo fence_info{ VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
+		if ((vkAllocateCommandBuffers(device, &alloc_info, &target.cmd) != VK_SUCCESS) ||
+				(vkCreateFence(device, &fence_info, nullptr, &target.fence) != VK_SUCCESS))
+		{
+			error = "command buffer allocation failed";
+			return false;
+		}
+	}
 	return true;
 }
 
@@ -461,20 +502,51 @@ void namcos22_vk::impl::destroy_targets()
 	destroy_image(pri);
 	destroy_image(display);
 	for (readback_entry &entry : readback)
+	{
 		destroy_buffer(entry.host);
+		entry.slot = -1;
+		entry.ready = true;
+	}
 }
 
 
-bool namcos22_vk::impl::ensure_frame(VkDeviceSize bytes)
+bool namcos22_vk::impl::ensure_frame(slot &target, VkDeviceSize bytes)
 {
-	if (frame_host.size >= bytes)
-		return true;
-	destroy_buffer(frame_host);
-	destroy_buffer(frame_device);
 	VkDeviceSize const size = std::max<VkDeviceSize>(bytes * 3 / 2, 1 << 20);
-	descriptors_dirty = true;
-	return create_buffer(frame_host, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, false) &&
-			create_device_buffer(frame_device, size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+	if (frame_device.size < bytes)
+	{
+		// the frames in flight read it
+		wait_all();
+		destroy_buffer(frame_device);
+		descriptors_dirty = true;
+		if (!create_device_buffer(frame_device, size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT))
+			return false;
+	}
+	if (target.host.size < bytes)
+	{
+		destroy_buffer(target.host);
+		if (!create_buffer(target.host, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, false))
+			return false;
+	}
+	return true;
+}
+
+
+void namcos22_vk::impl::wait_slot(slot &target)
+{
+	if (!target.busy)
+		return;
+	osd_ticks_t const start = osd_ticks();
+	vkWaitForFences(device, 1, &target.fence, VK_TRUE, ~u64(0));
+	wait_ticks += osd_ticks() - start;
+	target.busy = false;
+}
+
+
+void namcos22_vk::impl::wait_all()
+{
+	for (slot &target : slots)
+		wait_slot(target);
 }
 
 
@@ -653,6 +725,12 @@ bitmap_rgb32 *namcos22_vk::end_frame(pen_t const *palette, size_t entries, bitma
 	if (!s.width)
 		return nullptr;
 
+	// the slot of two frames ago is free once its commands are done
+	int const slot_index = s.next_slot;
+	impl::slot &sl = s.slots[slot_index];
+	s.next_slot = (s.next_slot + 1) % SLOTS;
+	s.wait_slot(sl);
+
 	// the frame data: records, vertices, parameters, gamma, spot RAM,
 	// palette, text layer and priority map of the visible area
 	int const nwidth = s.visible.width();
@@ -666,10 +744,10 @@ bitmap_rgb32 *namcos22_vk::end_frame(pen_t const *palette, size_t entries, bitma
 	u32 const textw = pal + u32(entries);
 	u32 const priw = textw + u32((nwidth * nheight + 1) / 2);
 	u32 const total = priw + u32((nwidth * nheight + 3) / 4);
-	if (!s.ensure_frame(VkDeviceSize(total) * 4))
+	if (!s.ensure_frame(sl, VkDeviceSize(total) * 4))
 		return nullptr;
 
-	u32 *const out = reinterpret_cast<u32 *>(s.frame_host.mapped);
+	u32 *const out = reinterpret_cast<u32 *>(sl.host.mapped);
 	std::copy(s.records.begin(), s.records.end(), out + records);
 	std::copy(s.vertices.begin(), s.vertices.end(), out + vertices);
 	u32 *const p = out + params;
@@ -708,7 +786,7 @@ bitmap_rgb32 *namcos22_vk::end_frame(pen_t const *palette, size_t entries, bitma
 		std::memcpy(&text16[y * nwidth], &text.pix(s.visible.top() + y, s.visible.left()), nwidth * 2);
 		std::memcpy(&pri8[y * nwidth], &textpri.pix(s.visible.top() + y, s.visible.left()), nwidth);
 	}
-	s.flush_buffer(s.frame_host, 0, VkDeviceSize(total) * 4);
+	s.flush_buffer(sl.host, 0, VkDeviceSize(total) * 4);
 
 	// the ROM data, once
 	vk3d_context::buffer staging_texture, staging_sprite;
@@ -731,17 +809,28 @@ bitmap_rgb32 *namcos22_vk::end_frame(pen_t const *palette, size_t entries, bitma
 		s.descriptors_dirty = true;
 	}
 	if (s.descriptors_dirty)
+	{
+		// the sets may not change while a frame in flight uses them
+		s.wait_all();
 		s.update_descriptors();
+	}
 
-	VkCommandBuffer const cmd = s.command_buffer;
+	VkCommandBuffer const cmd = sl.cmd;
 	s.vkResetCommandBuffer(cmd, 0);
 	VkCommandBufferBeginInfo begin{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
 	begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 	s.vkBeginCommandBuffer(cmd, &begin);
 
+	// the previous frame, still running, is done with the buffers and
+	// images this one writes again
+	VkMemoryBarrier reuse{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
+	reuse.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+	reuse.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+	s.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &reuse, 0, nullptr, 0, nullptr);
+
 	// uploads
 	VkBufferCopy region{ 0, 0, VkDeviceSize(total) * 4 };
-	s.vkCmdCopyBuffer(cmd, s.frame_host.handle, s.frame_device.handle, 1, &region);
+	s.vkCmdCopyBuffer(cmd, sl.host.handle, s.frame_device.handle, 1, &region);
 	if (upload_rom)
 	{
 		region.size = s.texture.size;
@@ -833,22 +922,27 @@ bitmap_rgb32 *namcos22_vk::end_frame(pen_t const *palette, size_t entries, bitma
 	host.size = VK_WHOLE_SIZE;
 	s.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &host, 0, nullptr);
 	s.vkEndCommandBuffer(cmd);
-	bool const ok = s.submit_and_wait();
+
+	// sent without waiting: frame_ready() waits when the renderer reads it
+	VkSubmitInfo submit{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
+	submit.commandBufferCount = 1;
+	submit.pCommandBuffers = &cmd;
+	s.vkResetFences(s.device, 1, &sl.fence);
+	bool const ok = s.vkQueueSubmit(s.queue, 1, &submit, sl.fence) == VK_SUCCESS;
+	sl.busy = ok;
 	if (upload_rom)
 	{
+		// the staging buffers are freed once copied
+		s.wait_slot(sl);
 		s.destroy_buffer(staging_texture);
 		s.destroy_buffer(staging_sprite);
 		s.rom_uploaded = ok;
 	}
 	if (!ok)
 		return nullptr;
-	if (!entry.host.coherent)
-	{
-		VkMappedMemoryRange range{ VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE };
-		range.memory = entry.host.memory;
-		range.size = VK_WHOLE_SIZE;
-		s.vkInvalidateMappedMemoryRanges(s.device, 1, &range);
-	}
+	entry.slot = slot_index;
+	entry.ready = false;
+	s.frames++;
 
 	// screen pixel (x, y) at the high resolution is target pixel (x - left, y - top)
 	s32 const left = s.visible.left() * s.scale;
@@ -856,4 +950,27 @@ bitmap_rgb32 *namcos22_vk::end_frame(pen_t const *palette, size_t entries, bitma
 	u32 *const base = reinterpret_cast<u32 *>(entry.host.mapped) - (ptrdiff_t(top) * s.width + left);
 	entry.view.wrap(base, left + s.width, top + s.height, s.width);
 	return &entry.view;
+}
+
+
+void namcos22_vk::frame_ready(bitmap_rgb32 const *frame)
+{
+	impl &s = *m;
+	impl::readback_entry *found = nullptr;
+	for (impl::readback_entry &entry : s.readback)
+		if (&entry.view == frame)
+			found = &entry;
+	if (!found || found->ready || !found->host.handle)
+		return;
+	impl::readback_entry &entry = *found;
+	if (entry.slot >= 0)
+		s.wait_slot(s.slots[entry.slot]);
+	if (!entry.host.coherent)
+	{
+		VkMappedMemoryRange range{ VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE };
+		range.memory = entry.host.memory;
+		range.size = VK_WHOLE_SIZE;
+		s.vkInvalidateMappedMemoryRanges(s.device, 1, &range);
+	}
+	entry.ready = true;
 }
