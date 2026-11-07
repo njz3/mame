@@ -1757,23 +1757,31 @@ void voodoo_1_device::internal_lfb_w(offs_t offset, u32 data, u32 mem_mask)
 		if (m_reg.fbz_mode().enable_stipple() && !m_reg.fbz_mode().stipple_pattern())
 			logerror("Warning: rotated stipple pattern used in LFB write\n");
 
+		// blending and the depth test read the native buffers: they must be
+		// drawn for a while when only the GPU drew
+		if (m_reg.alpha_mode().alphablend() || fbzmode.enable_depthbuf())
+			hires_native_read();
+
 		// loop over up to two pixels
 		thread_stats_block &threadstats = m_lfb_stats;
 		rgbaint_t iterargb(0);
 		for (int pix = 0; mask != 0; pix++)
 		{
 			// make sure we care about this pixel; with -hires3d, magnify the
-			// pixels it changes
+			// pixels it writes (even with the value the native buffer held:
+			// it is not cleared when only the GPU draws) or changes
 			if ((mask & LFB_PIXEL0_MASK) != 0)
 			{
 				bool const hires = (m_hires_scale > 1) && (dest + x < end);
 				bool const hires_depth = hires && (depth != nullptr) && (depth + x < end);
 				u16 const oldcolor = hires ? dest[x] : 0;
 				u16 const olddepth = hires_depth ? depth[x] : 0;
+				u32 const written = threadstats.pixels_out;
 				m_renderer->pixel_pipeline(threadstats, dest, depth, x, y, src_color[pix], src_depth[pix]);
-				if (hires && dest[x] != oldcolor)
+				bool const wrote = (threadstats.pixels_out != written);
+				if (hires && ((wrote && fbzmode.rgb_buffer_mask()) || (dest[x] != oldcolor)))
 					hires_pixel(destbuf, x, scry);
-				if (hires_depth && depth[x] != olddepth)
+				if (hires_depth && ((wrote && fbzmode.aux_buffer_mask()) || (depth[x] != olddepth)))
 					hires_pixel(depthbuf, x, scry);
 			}
 
