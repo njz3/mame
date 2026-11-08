@@ -546,6 +546,11 @@ uint8_t pci_bridge_device::header_type_r()
 	return 0x01;
 }
 
+uint8_t pci_host_device::header_type_r()
+{
+	return pci_device::header_type_r();
+}
+
 device_memory_interface::space_config_vector pci_bridge_device::memory_space_config() const
 {
 	return space_config_vector {
@@ -710,7 +715,7 @@ void pci_bridge_device::config_write(uint8_t bus, uint8_t device, uint16_t reg, 
 uint32_t pci_bridge_device::b_address_base_r(offs_t offset)
 {
 	logerror("b_address_base_r %d\n", offset);
-	return 0xffffffff;
+	return 0;
 }
 
 void pci_bridge_device::b_address_base_w(offs_t offset, uint32_t data)
