@@ -16,6 +16,7 @@
 #include "vk3d.h"
 
 #include "vk3d_context.h"
+#include "vk3d_share.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -86,6 +87,7 @@ struct vk3d_renderer::impl : vk3d_context
 	VkFramebuffer framebuffer = VK_NULL_HANDLE;
 	buffer readback;
 	buffer vertices;
+	std::unique_ptr<vk3d_share> share;
 
 	std::vector<vk3d_renderer::vertex> frame_vertices;
 	std::vector<batch> batches;
@@ -547,11 +549,14 @@ void vk3d_renderer::draw_rect(int pipeline, int texture, float x0, float y0, flo
 }
 
 
-bool vk3d_renderer::end_frame(bitmap_rgb32 &dest, rectangle const &clip)
+bool vk3d_renderer::end_frame(bitmap_rgb32 &dest, rectangle const &clip, hires3d_output *output, rectangle const &shown)
 {
 	impl &s = *m;
 	if (!s.framebuffer)
 		return false;
+	if (output && !s.share)
+		s.share = std::make_unique<vk3d_share>(s);
+	vk3d_share::target *const shared = output ? s.share->acquire(shown) : nullptr;
 
 	// vertex data
 	VkDeviceSize const vertex_bytes = s.frame_vertices.size() * sizeof(vertex);
@@ -638,10 +643,13 @@ bool vk3d_renderer::end_frame(bitmap_rgb32 &dest, rectangle const &clip)
 	s.vkCmdEndRenderPass(cmd);
 
 	// copy out (the render pass leaves the colour in TRANSFER_SRC layout)
+	if (shared)
+		s.share->record(cmd, *shared, s.color.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, shown.left(), shown.top());
 	VkBufferImageCopy copy{};
 	copy.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
 	copy.imageExtent = { u32(s.width), u32(s.height), 1 };
-	s.vkCmdCopyImageToBuffer(cmd, s.color.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s.readback.handle, 1, &copy);
+	if (!shared)
+		s.vkCmdCopyImageToBuffer(cmd, s.color.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s.readback.handle, 1, &copy);
 	VkBufferMemoryBarrier host{ VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER };
 	host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
 	host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
@@ -659,6 +667,13 @@ bool vk3d_renderer::end_frame(bitmap_rgb32 &dest, rectangle const &clip)
 		return false;
 	s.vkWaitForFences(s.device, 1, &s.fence, VK_TRUE, ~u64(0));
 	s.vkResetFences(s.device, 1, &s.fence);
+
+	if (shared)
+	{
+		s.share->submitted(*shared, true);
+		output->use_frame(s.share->bitmap(*shared), nullptr, s.share->texture(*shared));
+		return true;
+	}
 
 	if (!s.readback.coherent)
 	{

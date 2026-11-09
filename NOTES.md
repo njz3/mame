@@ -15,12 +15,14 @@ pour vérifier l'image, et de repli sans Vulkan ou pour les cas non traduits.
 
 Exclus, car déjà rendus nativement en 3D par d'autres émulateurs :
 
-- Sega Model 1 : Supermodel, sm2-emu (le rendu HD déjà écrit ici reste dans le
-  code, mais n'est plus suivi)
 - Sega Model 2 : sm2-emu
 - Sega Model 3 : Supermodel
 - Naomi, Naomi 2, Atomiswave (PowerVR2) : Flycast
 - Hikaru : hikaruloader
+
+Sega Model 1 (vr, vformula, ...) est de nouveau suivi (décision du propriétaire,
+2026-11-10) : il a son rendu Vulkan en haute résolution ; restent le partage
+avec bgfx et le 16:9, MAME y faisant la projection 3D.
 
 Matériel visé, dans l'ordre :
 
@@ -28,7 +30,7 @@ Matériel visé, dans l'ordre :
 |---|---|---|---|---|
 | 1 | Namco System 22 / Super 22 | ridgerac, ridgera2, raverace, acedrive, victlap, cybrcycc, dirtdash, alpinerd | OK (ridgerac, dirtdash ×2) | OK (5 jeux ×2) ; plus rapide que le natif |
 | 2 | Konami K001005 | gticlub, midnrun, windheat, jetwave | OK (gticlub, midnrun ×2) | OK (midnrun, gticlub) ; proche du natif |
-| 3 | 3dfx Voodoo 1/2 | sfrush, sfrushrk, calspeed, hyprdriv, vaportrx, roadburn, thrilld, racingj | OK (sfrush ×2 ×4, racingj ×2, roadburn ×2) ; coûteux en CPU | OK (même image que le logiciel) ; au niveau du natif en ×2 sur roadburn |
+| 3 | 3dfx Voodoo 1/2 | sfrush, sfrushrk, calspeed, hyprdriv, vaportrx, roadburn, thrilld, racingj, racingj2 | OK (sfrush ×2 ×4, racingj ×2, roadburn ×2) ; coûteux en CPU | OK (même image que le logiciel) ; au niveau du natif en ×2 sur roadburn |
 | 3b | 3dfx Banshee / Voodoo 3 | sf2049, sf2049se, cartfury (et viper, nbashowt… non essayés) | OK (sf2049, cartfury ×2) | OK (même image que le logiciel ; ×4 sf2049 130 s en 65 s) |
 | 4 | Midway V-Unit | crusnusa, crusnwld, offroadc | OK (3 jeux ×2 en démo 3D ; sommets entiers : bords natifs, textures HD) | OK (même image que le logiciel) ; ×4 60 s contre 81 s en logiciel |
 | 5 | Midway Zeus 2 | crusnexo | OK (crusnexo ×2, ×4, mode démo) | OK, vrais triangles, plus de raster CPU ; temps CPU ×2 52 s contre 92 s en natif |
@@ -260,8 +262,14 @@ Toutes les puces de la liste ont un rendu logiciel HD et un rendu Vulkan
    ×945, 0,4 cœur). Pour l'arrêter : compter les pixels sur le GPU et relire
    les zones lues. Pas nécessaire pour la vitesse (177 à 376 % en ×2).
    Zeus 2 : plus de reprise logicielle mesurable (crusnexo).
+   À supporter (demande du propriétaire, 2026-11-10) : thrilld (Hornet, Voodoo)
+   et, sur Viper (Voodoo 3), thrild2 et xtrial. Tous « not working » dans MAME : voir
+   d'abord ce qui les bloque ; ROM pas encore copiées, Viper jamais essayé.
 4. System 23, Taito Type Zero et Konami Cobra, quand leur émulation marchera.
-   Le GPU PS1 seulement si une HD sans sous-pixel convient.
+   Demandé par le propriétaire (2026-11-10) : le GPU PS1 (`psxgpu`), pour les
+   systèmes dérivés de la PlayStation (Namco System 11 : pocketrc, System 12 :
+   kartduel, ...). Sommets entiers : plus de résolution, mais les polygones
+   tremblent toujours.
 5. HNG64 en logiciel aux échelles qui ne sont pas des puissances de 2 (×3,
    ×5…) : remplacer les masques `taille - 1` des rastériseurs et de
    `blit_3d` (le chemin GPU est déjà corrigé).

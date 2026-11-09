@@ -28,6 +28,8 @@
 #define OPTION_HIRES3D_RENDERER "hires3d_renderer"
 
 
+class hires3d_output;
+
 class vk3d_renderer
 {
 public:
@@ -79,8 +81,10 @@ public:
 	void draw(int pipeline, int texture, vertex const *vertices, size_t count); // triangle list
 	void draw_rect(int pipeline, int texture, float x0, float y0, float x1, float y1, rgb_t color);
 
-	// render on the GPU and copy the clip area of the result into dest
-	bool end_frame(bitmap_rgb32 &dest, rectangle const &clip);
+	// render on the GPU and copy the clip area of the result into dest; with
+	// an output, the area shown goes to a texture of the display when it can
+	// draw one, and the frame is given to the output instead (dest is untouched)
+	bool end_frame(bitmap_rgb32 &dest, rectangle const &clip, hires3d_output *output = nullptr, rectangle const &shown = rectangle());
 
 private:
 	struct impl;

@@ -191,6 +191,11 @@ protected:
 
 		void recompute_frustum();
 
+		// -widescreen: the viewports that touch an edge of the screen go on
+		// that many native columns
+		float wide_pad = 0;
+		int wide_right = 0;
+
 		int xc = 0, yc = 0, x1 = 0, y1 = 0, x2 = 0, y2 = 0;
 		float zoomx = 0, zoomy = 0, viewx = 0, viewy = 0;
 		float a_bottom = 0, a_top = 0, a_left = 0, a_right = 0;
@@ -375,6 +380,10 @@ protected:
 	// layers GPU textures; the above-HUD pass stays in software on the result
 	vk3d_renderer *m_vk = nullptr; // owned by m_hires
 	bool m_vk_collect = false;
+	int m_hires_pad = 0;                   // -widescreen: more high-resolution columns on each side
+	bool m_wide_3d = false;                // -widescreen: the last frame was not a menu
+	int m_quads_drawn = 0;
+	float m_quad_widen = 1.0f;             // -widescreen_2d stretch: a menu's direct polygons
 	int m_vk_layer[2] = { -1, -1 };
 	void vk_draw_quad(const quad_t &q) const;
 

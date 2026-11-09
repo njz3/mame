@@ -600,6 +600,7 @@ void model1_state::draw_quads(bitmap_rgb32 &bitmap, const rectangle &cliprect)
 {
 	view_t *view = m_view.get();
 	int count = m_quadpt - &m_quaddb[0];
+	m_quads_drawn += count;
 	int const scale = m_hires_scale;
 
 	/* clip to the cliprect (the viewport is in native pixels) */
@@ -613,7 +614,17 @@ void model1_state::draw_quads(bitmap_rgb32 &bitmap, const rectangle &cliprect)
 	view->y2 = std::min(view->y2 * scale + scale - 1, cliprect.bottom());
 
 	if (m_vk_collect)
-		m_vk->set_scissor(rectangle(view->x1, view->x2, view->y1, view->y2));
+	{
+		if (m_hires_pad)
+		{
+			// the viewports that touch an edge of the screen go on past it
+			int const left = (save_x1 <= 16) ? 0 : save_x1 * scale + m_hires_pad;
+			int const right = (save_x2 >= view->wide_right - 16) ? cliprect.right() : save_x2 * scale + scale - 1 + m_hires_pad;
+			m_vk->set_scissor(rectangle(left, right, view->y1, view->y2));
+		}
+		else
+			m_vk->set_scissor(rectangle(view->x1, view->x2, view->y1, view->y2));
+	}
 
 	for (int i = 0; i < count; i++)
 	{
@@ -667,7 +678,9 @@ void model1_state::vk_draw_quad(const quad_t &q) const
 	float const b = (color & 0xff) / 255.0f;
 	int const pipeline = (color & MOIRE) ? vk3d_renderer::PIPE_COLOR_STIPPLE : vk3d_renderer::PIPE_COLOR;
 
-	auto const make = [&] (float x, float y) { return vk3d_renderer::vertex{ x, y, 0, 1, r, g, b, 1, 0, 0, 1, 0 }; };
+	float const pad = m_hires_pad;
+	float const widen = m_quad_widen;
+	auto const make = [&] (float x, float y) { return vk3d_renderer::vertex{ (widen != 1.0f) ? x * widen : x + pad, y, 0, 1, r, g, b, 1, 0, 0, 1, 0 }; };
 
 	// same wireframe test as the software path, on the high-resolution
 	// positions: distant quads that collapse natively are still polygons
@@ -760,8 +773,8 @@ uint16_t model1_state::scale_color(uint16_t color, float level) const
 
 void model1_state::view_t::recompute_frustum()
 {
-	a_left   = ( x1 - xc - viewx) / zoomx;
-	a_right  = ( x2 - xc - viewx) / zoomx;
+	a_left   = ( x1 - ((x1 <= 16) ? wide_pad : 0.0f) - xc - viewx) / zoomx;
+	a_right  = ( x2 + ((x2 >= wide_right - 16) ? wide_pad : 0.0f) - xc - viewx) / zoomx;
 	a_bottom = (-y1 + yc - viewy) / zoomy;
 	a_top    = (-y2 + yc - viewy) / zoomy;
 }
@@ -1865,6 +1878,11 @@ void model1_state::video_start()
 	m_quadind = make_unique_clear<quad_t *[]>(1000000);
 	m_hires = std::make_unique<hires3d_output>(*m_screen);
 
+	// -widescreen needs the GPU, even at the native resolution
+	m_hires->allow_widescreen(true);
+	if (m_hires->wide())
+		m_hires->allow_widescreen(m_hires->vulkan() != nullptr);
+
 	m_pointpt = &m_pointdb[0];
 	m_quadpt = &m_quaddb[0];
 	m_listctl[0] = m_listctl[1] = 0;
@@ -2028,8 +2046,25 @@ uint32_t model1_state::screen_update_model1(screen_device &screen, bitmap_rgb32 
 void model1_state::screen_update_hires(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect)
 {
 	bitmap_rgb32 &hires = m_hires->frame_bitmap();
-	rectangle const hclip = m_hires->scaled(cliprect);
+	m_hires_pad = m_hires->wide() ? m_hires->pad() : 0;
+	rectangle hclip = m_hires->scaled(cliprect);
+	if (m_hires_pad)
+		hclip = rectangle(0, hires.width() - 1, hclip.top(), hclip.bottom());
 	float const hwidth = hires.width(), hheight = hires.height();
+
+	// the layers in the middle of a wider frame, or stretched over it; under
+	// 3D objects the background is always stretched, not to leave black at its
+	// sides, but a menu (no objects) stays in one piece
+	float const over_left = (m_hires_pad && !m_hires->stretch_2d()) ? float(m_hires_pad) : 0.0f;
+	float const stretched_right = m_hires_pad ? float(screen.visible_area().width() * m_hires->scale() + 2 * m_hires_pad) * bitmap.width() / screen.visible_area().width() : hwidth;
+	float const over_right = over_left ? hwidth - over_left : stretched_right;
+	float const under_left = (m_hires_pad && !m_wide_3d) ? over_left : 0.0f;
+	float const under_right = under_left ? hwidth - under_left : stretched_right;
+	m_quad_widen = (m_hires_pad && !m_wide_3d && m_hires->stretch_2d()) ? float(screen.visible_area().width() * m_hires->scale() + 2 * m_hires_pad) / float(screen.visible_area().width() * m_hires->scale()) : 1.0f;
+	m_quads_drawn = 0;
+	m_view->wide_pad = m_hires_pad ? float(m_hires_pad) / m_hires->scale() : 0.0f;
+	m_view->wide_right = screen.visible_area().right();
+	m_view->recompute_frustum();
 
 	m_vk = m_hires->vulkan();
 	if (m_vk && (m_vk_layer[0] < 0))
@@ -2049,7 +2084,7 @@ void model1_state::screen_update_hires(screen_device &screen, bitmap_rgb32 &bitm
 		m_vk->update_texture(m_vk_layer[0], bitmap, cliprect);
 		m_vk->begin_frame(hires.width(), hires.height(), rgb_t::black());
 		m_vk->set_scissor(hclip);
-		m_vk->draw_rect(vk3d_renderer::PIPE_TEXTURE_KEY, m_vk_layer[0], 0, 0, hwidth, hheight, rgb_t::white());
+		m_vk->draw_rect(vk3d_renderer::PIPE_TEXTURE_KEY, m_vk_layer[0], under_left, 0, under_right, hheight, rgb_t::white());
 	}
 	else
 	{
@@ -2060,7 +2095,14 @@ void model1_state::screen_update_hires(screen_device &screen, bitmap_rgb32 &bitm
 	m_vk_collect = m_vk != nullptr;
 	m_above_hud_seen = false;
 	tgp_render(hires, hclip, RENDER_BELOW_HUD);
+
+	// in a wider frame the objects over the HUD are drawn with the others
+	// (under the HUD layer: the software pass after the frame has no room for the sides)
+	if (m_vk && m_hires_pad && m_above_hud_seen)
+		tgp_render(hires, hclip, RENDER_ABOVE_HUD);
 	m_vk_collect = false;
+	m_wide_3d = m_quads_drawn >= 100; // a menu has a few polygons at most
+	m_quad_widen = 1.0f;
 
 	// HUD tilemaps on a transparent layer (palette pens are opaque)
 	bitmap.fill(0, cliprect);
@@ -2072,8 +2114,14 @@ void model1_state::screen_update_hires(screen_device &screen, bitmap_rgb32 &bitm
 	{
 		m_vk->update_texture(m_vk_layer[1], bitmap, cliprect);
 		m_vk->set_scissor(hclip);
-		m_vk->draw_rect(vk3d_renderer::PIPE_TEXTURE_KEY, m_vk_layer[1], 0, 0, hwidth, hheight, rgb_t::white());
-		if (!m_vk->end_frame(hires, hclip))
+		m_vk->draw_rect(vk3d_renderer::PIPE_TEXTURE_KEY, m_vk_layer[1], over_left, 0, over_right, hheight, rgb_t::white());
+
+		// a whole frame with nothing left to draw in software stays on the GPU
+		rectangle shown = m_hires->scaled(screen.visible_area());
+		shown.min_x -= m_hires_pad;
+		shown.max_x += m_hires_pad;
+		bool const whole = cliprect.contains(screen.visible_area());
+		if (!m_vk->end_frame(hires, hclip, (whole && (!m_above_hud_seen || m_hires_pad)) ? m_hires.get() : nullptr, shown))
 		{
 			// draw this frame again in software
 			m_hires->disable_vulkan("frame submission failed");
@@ -2091,7 +2139,7 @@ void model1_state::screen_update_hires(screen_device &screen, bitmap_rgb32 &bitm
 
 	// the HUD snapshot is costly at high resolution, only take it when the
 	// list has above-HUD objects (the first pass already did the uploads)
-	if (m_above_hud_seen)
+	if (m_above_hud_seen && !(m_vk && m_hires_pad))
 	{
 		build_overlay_mask(hires, hclip);
 		tgp_render(hires, hclip, RENDER_ABOVE_HUD);
