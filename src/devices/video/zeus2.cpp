@@ -2004,6 +2004,22 @@ void zeus2_renderer::zeus2_render_poly(vertex_t *vert, int numverts, uint32_t te
 		zeus2_vk::vertex hv[std::size(clipvert)];
 		for (int i = 0; i < numverts; i++)
 			hv[i] = { clipvert[i].x, clipvert[i].y, { clipvert[i].p[0], clipvert[i].p[1], clipvert[i].p[2], clipvert[i].p[3] } };
+
+		// -widescreen_2d stretch: the 2D is made of polygons too, facing the
+		// screen in front of everything, or drawn without the depth test
+		if (m_state->m_hires->wide() && m_state->m_hires->stretch_2d())
+		{
+			bool flat = true;
+			for (int i = 1; (i < numverts) && flat; i++)
+				flat = std::abs(clipvert[i].p[0] - clipvert[0].p[0]) < 16.0f;
+			if (!extra.depth_test_enable || (flat && (clipvert[0].p[0] < 12.5f * 4096.0f)))
+			{
+				float const width = float(m_state->screen().visible_area().right() + 1);
+				float const widen = (width * scale + 2 * m_state->wide_pad()) / (width * scale);
+				for (int i = 0; i < numverts; i++)
+					hv[i].x = width / 2.0f + (hv[i].x - width / 2.0f) * widen;
+			}
+		}
 		m_state->m_vk->polygon(st, frame_base, m_state->zeus_cliprect, numverts, hv);
 	}
 	else if (scale > 1)

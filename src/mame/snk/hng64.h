@@ -121,7 +121,7 @@ public:
 	// mix, nullptr in software; after a failure, the high-resolution screen
 	// magnifies the native one
 	hng64_vk *vulkan() { return m_vk.get(); }
-	void vulkan_failed() { m_vk.reset(); m_wide_x = 1.0f; m_wide_bg_pad = 0; }
+	void vulkan_failed() { m_vk.reset(); m_wide_x = 1.0f; m_wide_bg_pad = 0; m_wide_side_pad = 0; }
 
 	// -widescreen (GPU only): the 3D frustum is wide_x() times wider, and the
 	// tilemaps under the 3D are drawn wide_bg_pad() native pixels further on
@@ -129,12 +129,17 @@ public:
 	float wide_x() const { return m_wide_x; }
 	int wide_bg_pad() const { return m_wide_bg_pad; }
 
+	// the columns past the edges where the layers under the 3D are looked at
+	// in every -widescreen mode, to tell a 4:3 screen from a wider one
+	int wide_side_pad() const { return m_wide_side_pad; }
+
 private:
 	hng64_state &m_state;
 	int m_scale;                    // 1 with m_vk, which draws at the -hires3d scale
 	std::unique_ptr<hng64_vk> m_vk;
 	float m_wide_x = 1.0f;
 	int m_wide_bg_pad = 0;
+	int m_wide_side_pad = 0;
 
 	// (Temporarily class members - someday they will live in the memory map)
 	std::unique_ptr<float[]> m_depthBuffer3d;

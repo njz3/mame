@@ -775,6 +775,15 @@ Toutes les puces de la liste ont un rendu logiciel HD et un rendu Vulkan
     du noir ; avec `-widescreen_bg` et `-widescreen_2d stretch`, les couches
     2D sous la 3D ne sont pas étirées et se décalent de celles du dessus sur
     les écrans de menus.
+  - Corrigé le 2026-11-09. HNG64 : quand les tilemaps sous la 3D ne dépassent
+    pas de l'écran 4:3 (menus), ces couches sont étirées avec le reste en mode
+    `stretch`, et les côtés restent noirs sinon, sans 3D ni tilemap. Le test
+    regarde les côtés dans tous les modes `-widescreen` ; la course ne change
+    pas. La bande de roadedge était une tilemap, pas de la 3D. Zeus 2 : en mode
+    `stretch`, les polygones sans test de profondeur ou plats devant la scène
+    (z constant sous 12,5) sont étirés : menus et textes de crusnexo. Le HUD
+    d'une vraie course n'a pas été vu (démo seulement). Essai rejeté : les
+    sprites HNG64 prolongés sur les côtés dupliquent les menus.
   - Le crash à la sortie en fenêtre venait de `view_widening()`, appelé
     pendant la destruction de la fenêtre alors que les périphériques étaient
     déjà arrêtés : les écrans arrêtés sont ignorés.

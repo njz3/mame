@@ -60,6 +60,7 @@ public:
 		int yinc;           // 16.16
 		u32 palbase;
 		bool stretch_under = false; // -widescreen_2d stretch: the layers under the 3D too
+		bool hide_3d_sides = false; // -widescreen: a 4:3 screen, no 3D past its edges
 	};
 
 	// size: the native 3D buffers (square); texture: 16 MB of texels;

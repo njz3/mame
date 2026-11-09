@@ -1200,7 +1200,7 @@ bool hng64_vk::mix(bitmap_rgb32 const &bottom, bitmap_rgb32 const &top, blit con
 	push_constants push{};
 	push.palette = s.add_palette(palette, colors);
 	push.colors = colors;
-	push.blit = b.enabled ? 1 : 0;
+	push.blit = !b.enabled ? 0 : b.hide_3d_sides ? 2 : 1;
 	push.xscroll = b.xscroll * s.scale;
 	push.yinc = b.yinc;
 	push.palbase = b.palbase;
@@ -1215,7 +1215,7 @@ bool hng64_vk::mix(bitmap_rgb32 const &bottom, bitmap_rgb32 const &top, blit con
 	push.native_left = visible.left();
 	push.native_top = first;
 	push.native_width = visible.width();
-	push.stretch2d = s.stretch2d ? (b.stretch_under ? 2 : 1) : 0;
+	push.stretch2d = s.stretch2d ? (b.stretch_under ? 2 : 1) : b.hide_3d_sides ? 3 : 0;
 	bool kept = false;
 	if (first <= last)
 	{
@@ -1241,6 +1241,7 @@ bool hng64_vk::mix(bitmap_rgb32 const &bottom, bitmap_rgb32 const &top, blit con
 	}
 	return s.mix(push, kept, cliprect.top(), cliprect.bottom(), visible, frame);
 }
+
 
 
 hires3d_output::gpu_texture hng64_vk::shared_texture(bitmap_rgb32 const *frame)

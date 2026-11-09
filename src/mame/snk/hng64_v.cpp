@@ -975,12 +975,12 @@ u32 hng64_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, cons
 	if (vk)
 	{
 		// on the GPU: the layers under the 3D kept for the mix
-		int const bg_pad = m_poly_renderer->wide_bg_pad();
+		int const bg_pad = m_poly_renderer->wide_side_pad();
 		if ((m_hires_bottom.width() != bitmap.width()) || (m_hires_bottom.height() != bitmap.height()))
 			m_hires_bottom.allocate(bitmap.width(), bitmap.height(), bg_pad, 0);
 		copybitmap(m_hires_bottom, bitmap, 0, 0, 0, 0, cliprect);
 
-		// -widescreen_bg: the tilemaps under the 3D also on the sides of the
+		// -widescreen: the tilemaps under the 3D also on the sides of the
 		// screen, past its edges (not the sprites; not in the split mode, which
 		// sets its own columns)
 		if (bg_pad && !BIT(m_videoregs[0x00], 0))
@@ -1080,6 +1080,7 @@ u32 hng64_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, cons
 		b.yinc = ysize ? ((512 << 16) / ysize) : 0;
 		b.palbase = BIT(m_tcram[0x4c / 4], 16) ? 0x800 : 0x000;
 		b.stretch_under = m_wide_under_stretched;
+		b.hide_3d_sides = m_wide_under_stretched;
 		bitmap_rgb32 *frame = nullptr;
 		if (vk->mix(m_hires_bottom, bitmap, b, reinterpret_cast<rgb_t const *>(m_palette_3d->pens()), m_palette_3d->entries(), cliprect, screen.visible_area(), frame))
 		{

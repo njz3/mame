@@ -6,7 +6,9 @@
 // with -widescreen, the frame has pad more columns on each side: the 3D
 // buffer too, the layers over it are in the middle or stretched, and the
 // layers under it are bg_pad native columns wider on each side, else as the
-// layers over it (stretch2d 2: stretched with them, their sides are not used)
+// layers over it (stretch2d 2: stretched with them, their sides are not used;
+// 3: a 4:3 screen, black on its sides;
+// blit 2: a 4:3 screen, no 3D past its edges)
 #version 450
 #extension GL_GOOGLE_include_directive : require
 
@@ -40,7 +42,7 @@ void main()
 
 	// native pixels: the screen under the 3D, then the layers over it
 	// (alpha 0xff when opaque, else added to alpha / 128 times what is under)
-	int tx = (pc.stretch2d != 0)
+	int tx = ((pc.stretch2d == 1) || (pc.stretch2d == 2))
 			? (pc.native_left + int(floor((float(dx) + 0.5) * float(pc.native_width) / float(pc.frame_width))))
 			: floor_div(x, pc.scale);
 	int bx = ((pc.bg_pad > 0) && (pc.stretch2d != 2)) ? floor_div(x, pc.scale) : tx;
@@ -48,10 +50,11 @@ void main()
 	uint row = pc.values + pc.base + uint((sy - pc.native_top) * stride * 2);
 	int tcol = tx - pc.native_left;
 	int bcol = bx - pc.native_left + pc.bg_pad;
-	uint dest = ((bcol >= 0) && (bcol < stride)) ? data[row + uint(bcol * 2)] : 0u;
+	bool sides_shown = (pc.stretch2d != 3) || ((tcol >= 0) && (tcol < pc.native_width));
+	uint dest = ((bcol >= 0) && (bcol < stride) && sides_shown) ? data[row + uint(bcol * 2)] : 0u;
 	uint over = ((tcol >= 0) && (tcol < pc.native_width)) ? data[row + uint((tcol + pc.bg_pad) * 2 + 1)] : 0x80000000u;
 
-	if (pc.blit != 0)
+	if ((pc.blit == 1) || ((pc.blit == 2) && (x >= pc.left) && (x < pc.left + pc.native_width * pc.scale)))
 	{
 		// the 3D buffer wraps around, past its widescreen sides
 		int fbw = pc.pens_width - 2 * pc.pad;

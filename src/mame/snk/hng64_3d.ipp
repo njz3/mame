@@ -29,6 +29,7 @@ hng64_poly_renderer::hng64_poly_renderer(hng64_state& state)
 			osd_printf_verbose("hng64: hires3d drawn with Vulkan on %s\n", m_vk->device_name());
 			m_wide_x = float(512 * m_scale + 2 * pad) / float(512 * m_scale);
 			m_wide_bg_pad = bg_pad;
+			m_wide_side_pad = wide ? ((pad + m_scale - 1) / m_scale) : 0;
 			m_scale = 1;
 		}
 		else
