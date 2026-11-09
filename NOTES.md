@@ -251,9 +251,15 @@ Toutes les puces de la liste ont un rendu logiciel HD et un rendu Vulkan
    pièce et accélérateur ; xrally est identique sur 45 s et continue après
    50 s, roadedge et cartfury aussi ; sf2049 continue (sa démo n'est pas
    déterministe, même sur l'ancienne version). dev/ffbedition a le même défaut.
-3. Banshee/Voodoo 3 : essayer sf2049se et les jeux non-course (Viper,
-   nbashowt) ; les blits 2D entre tampons perdent la HD (jamais vus dans
-   sf2049 ni cartfury).
+3. Banshee/Voodoo 3 : sf2049se essayé jusqu'en course, correct (2026-11-09).
+   Restent les jeux non-course (Viper, nbashowt) ; les blits 2D entre tampons
+   perdent la HD (aucun blit lisant un tampon sur 100 s de sf2049 et cartfury).
+   Voodoo : le rastériseur natif tourne encore pendant le jeu, relancé par les
+   lectures du CPU (sur 100 s : sfrush fbiPixelsIn ×2151 et tampon ×4122, soit
+   2,4 cœurs ; sf2049 les 5 registres de stats ×528, 1 cœur ; cartfury tampon
+   ×945, 0,4 cœur). Pour l'arrêter : compter les pixels sur le GPU et relire
+   les zones lues. Pas nécessaire pour la vitesse (177 à 376 % en ×2).
+   Zeus 2 : plus de reprise logicielle mesurable (crusnexo).
 4. System 23, Taito Type Zero et Konami Cobra, quand leur émulation marchera.
    Le GPU PS1 seulement si une HD sans sous-pixel convient.
 5. HNG64 en logiciel aux échelles qui ne sont pas des puissances de 2 (×3,
