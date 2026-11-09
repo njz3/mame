@@ -243,8 +243,9 @@ void f2mc16_device::execute_run()
 	{
 		if (!m_prefix_valid && m_irq_level < m_ps && (m_ps & F_I))
 		{
-			uint8_t irq_level = m_irq_level;
-			uint8_t irq_vector = standard_irq_callback(irq_level, m_pc);
+			uint16_t const irq_level = m_irq_level;
+			// (the interrupt controller gives the vector, whatever the line)
+			uint8_t irq_vector = standard_irq_callback(0, m_pc);
 			if (irq_vector)
 			{
 				take_irq_vector(irq_vector);
