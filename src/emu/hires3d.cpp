@@ -51,6 +51,15 @@ hires3d_output::hires3d_output(screen_device &screen)
 	std::pair<unsigned, unsigned> const aspect = screen.physical_aspect();
 	if ((aspect.first > 0) && (aspect.second > 0))
 		m_wide_factor = std::max((16.0f / 9.0f) / (float(aspect.first) / float(aspect.second)), 1.0f);
+
+	// the chips free their memory after the screens and textures are gone
+	screen.machine().add_notifier(MACHINE_NOTIFY_EXIT, machine_notify_delegate(&hires3d_output::machine_exit, this));
+}
+
+
+void hires3d_output::machine_exit()
+{
+	m_exited = true;
 }
 
 
@@ -118,6 +127,7 @@ void hires3d_output::use_frame(bitmap_rgb32 &bitmap, std::function<void ()> &&re
 {
 	begin_frame();
 	m_draw = &bitmap;
+	m_draw_area = shown_area();
 	m_draw_ready = std::move(ready);
 	m_draw_texture = std::move(texture);
 }
@@ -128,11 +138,21 @@ void hires3d_output::frame_done(const rectangle &cliprect)
 	if (m_draw && (cliprect.bottom() >= m_screen.visible_area().bottom()))
 	{
 		m_published = m_draw;
+		m_published_area = (m_draw == &m_bitmap[m_current]) ? shown_area() : m_draw_area;
 		m_published_ready = std::move(m_draw_ready);
 		m_draw_ready = nullptr;
 		m_published_texture = std::move(m_draw_texture);
 		m_draw_texture = gpu_texture();
 	}
+}
+
+
+rectangle hires3d_output::shown_area() const
+{
+	rectangle area = scaled(m_screen.visible_area());
+	area.min_x -= pad();
+	area.max_x += pad();
+	return area;
 }
 
 
@@ -338,17 +358,65 @@ bool hires3d_output::update_texture(screen_device &screen, render_texture &textu
 				s_reads_pending = true;
 			output->m_texture_texture = std::move(output->m_published_texture);
 			output->m_published_texture = gpu_texture();
-			rectangle area = output->scaled(screen.visible_area());
-			area.min_x -= output->pad();
-			area.max_x += output->pad();
+			// the area the frame was made for: a frame in the memory of a chip
+			// does not cover another one if the visible area changed since
+			rectangle const area = output->m_published_area;
 			output->m_texture_base = &output->m_published->pix(area.top(), area.left());
 			texture.set_bitmap(*output->m_published, area, TEXFORMAT_RGB32);
+			output->m_texture_target = &texture;
+			output->m_texture_frame = output->m_published;
+			output->m_texture_area = area;
 			output->m_shown = (output->m_published == &output->m_bitmap[0]) ? 0 : (output->m_published == &output->m_bitmap[1]) ? 1 : -1;
 			output->m_published = nullptr;
 			return true;
 		}
 	}
 	return false;
+}
+
+
+void hires3d_output::frames_freed(void const *start, size_t bytes)
+{
+	u8 const *const first = static_cast<u8 const *>(start);
+	auto const inside = [first, bytes] (void const *pixel) { return (static_cast<u8 const *>(pixel) >= first) && (static_cast<u8 const *>(pixel) < first + bytes); };
+	for (hires3d_output *output : s_outputs)
+	{
+		if (output->m_exited)
+			continue;
+
+		// not given to the renderer yet: the frame shown stays
+		if (output->m_published && inside(&output->m_published->pix(output->m_published_area.top(), output->m_published_area.left())))
+		{
+			output->m_published = nullptr;
+			output->m_published_ready = nullptr;
+			output->m_published_texture = gpu_texture();
+		}
+		if ((output->m_draw != nullptr) && (output->m_draw != &output->m_bitmap[output->m_current]) && inside(&output->m_draw->pix(output->m_draw_area.top(), output->m_draw_area.left())))
+		{
+			output->m_draw = &output->m_bitmap[output->m_current];
+			output->m_draw_ready = nullptr;
+			output->m_draw_texture = gpu_texture();
+		}
+
+		// shown by the renderer, and drawn again until the next frame: from a
+		// copy, in the own bitmap that is not being drawn
+		if ((output->m_shown < 0) && output->m_texture_target && output->m_texture_frame && inside(output->m_texture_base))
+		{
+			rectangle const &shown = output->m_texture_area;
+			int const own = (output->m_current == 0) ? 1 : 0;
+			bitmap_rgb32 &copy = output->m_bitmap[own];
+			if ((copy.width() <= shown.right()) || (copy.height() <= shown.bottom()))
+				copy.allocate(shown.right() + 1, shown.bottom() + 1);
+			for (int y = shown.top(); y <= shown.bottom(); y++)
+				std::copy_n(&output->m_texture_frame->pix(y, shown.left()), shown.width(), &copy.pix(y, shown.left()));
+			output->m_texture_target->set_bitmap(copy, shown, TEXFORMAT_RGB32);
+			output->m_texture_base = &copy.pix(shown.top(), shown.left());
+			output->m_texture_frame = &copy;
+			output->m_texture_ready = nullptr;
+			output->m_texture_texture = gpu_texture();
+			output->m_shown = own;
+		}
+	}
 }
 
 

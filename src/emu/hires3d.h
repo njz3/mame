@@ -170,6 +170,11 @@ public:
 	// while the emulation is throttled instead of stalling it
 	static void complete_reads();
 
+	// the memory of a frame given to use_frame goes away: the renderer may
+	// still be drawing that frame, and goes on from a copy (call it before
+	// freeing the memory)
+	static void frames_freed(void const *start, size_t bytes);
+
 	// the sink of the OSD renderer, or nullptr (the OSD renderer sets it
 	// when it starts and clears it before it stops)
 	static void set_gpu_sink(hires3d_gpu_sink *sink);
@@ -212,6 +217,14 @@ private:
 	gpu_texture m_published_texture;
 	gpu_texture m_texture_texture;
 	void const *m_texture_base = nullptr;   // first pixel of the frame in the texture
+	void machine_exit();
+	rectangle shown_area() const;           // of a frame made now
+	rectangle m_draw_area;                  // a frame in the memory of a chip was made for
+	rectangle m_published_area;
+	bool m_exited = false;
+	render_texture *m_texture_target = nullptr; // the texture
+	bitmap_rgb32 *m_texture_frame = nullptr;    // the frame in it
+	rectangle m_texture_area;
 	int m_shown = -1;                       // own bitmap shown, or -1
 	u64 m_frame = ~u64(0);
 };

@@ -11,6 +11,8 @@
 #include "emu.h"
 #include "vk3d_context.h"
 
+#include "hires3d.h"
+
 #include <cstring>
 
 
@@ -306,6 +308,10 @@ void vk3d_context::flush_buffer(buffer const &buf, VkDeviceSize offset, VkDevice
 
 void vk3d_context::destroy_buffer(buffer &buf)
 {
+	// a read-back buffer can be the frame the display is drawing
+	if (buf.mapped)
+		hires3d_output::frames_freed(buf.mapped, size_t(buf.size));
+
 	if (buf.handle)
 		vkDestroyBuffer(device, buf.handle, nullptr);
 	if (buf.memory)

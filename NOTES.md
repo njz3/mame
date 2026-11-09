@@ -225,10 +225,15 @@ Toutes les puces de la liste ont un rendu logiciel HD et un rendu Vulkan
    contre 294, crusnexo 306 contre 223. Le gain est faible ou nul en ×2.
    Intel UHD de ce PC (2026-11-09, Vulkan et bgfx forcés dessus) : crusnexo,
    crusnwld, xrally, ridgerac, midnrun, sf2049, winrun, radikalb et sidebs
-   tournent, images identiques à NVIDIA (0,13 % au pire sur sf2049). À finir :
-   sfrush (arrêt une fois sur deux runs, non expliqué, avant le correctif MIPS)
-   et les captures noires de ridgerac et radikalb (image noire du jeu ou
-   défaut d'affichage, non tranché). AMD non testé.
+   tournent, images identiques à NVIDIA (0,13 % au pire sur sf2049). Plantage
+   rare au démarrage de sfrush corrigé : l'adresse fautive était 184 pixels
+   avant une image relue, l'écart du `xoffs` natif. Si la zone visible change
+   entre la préparation et l'affichage, `update_texture` calculait la zone
+   actuelle ; il prend maintenant celle de l'image. Le cas n'est pas réapparu
+   sur 42 lancements, sans plantage, donc le correctif n'a pas été exercé
+   directement. `frames_freed` copie aussi une image montrée dont la mémoire
+   est libérée. Captures noires isolées de ridgerac et radikalb, pas d'image
+   noire dans les captures du jeu. AMD non testé.
 2. HNG64 : les lignes 2D sont gardées sur le GPU, seules celles qui changent
    partent (fait, 2026-11-09 : 23 à 33 % des lignes, temps d'envoi divisé par
    2,4, attente -15 %, images identiques ; pas de gain de vitesse mesurable).
@@ -244,8 +249,8 @@ Toutes les puces de la liste ont un rendu logiciel HD et un rendu Vulkan
    jamais et IP7 reste levée quand Count boucle. L'armement est retiré
    (`mips3.cpp`, `mips3drc.cpp`). sfrush continue après 50 s, en démo et avec
    pièce et accélérateur ; xrally est identique sur 45 s et continue après
-   50 s. Reste à contrôler roadedge, sf2049 et cartfury. dev/ffbedition a le
-   même défaut.
+   50 s, roadedge et cartfury aussi ; sf2049 continue (sa démo n'est pas
+   déterministe, même sur l'ancienne version). dev/ffbedition a le même défaut.
 3. Banshee/Voodoo 3 : essayer sf2049se et les jeux non-course (Viper,
    nbashowt) ; les blits 2D entre tampons perdent la HD (jamais vus dans
    sf2049 ni cartfury).

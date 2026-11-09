@@ -220,7 +220,11 @@ void vk3d_share::release_all()
 		return;
 	m_context.vkDeviceWaitIdle(m_context.device);
 	for (auto &t : m_targets)
+	{
+		// its bitmap can be the frame the display is drawing
+		hires3d_output::frames_freed(&t->bitmap.pix(0), size_t(t->bitmap.rowbytes()) * t->bitmap.height());
 		destroy_target(*t);
+	}
 	m_targets.clear();
 }
 
