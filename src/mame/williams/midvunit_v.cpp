@@ -657,7 +657,7 @@ uint32_t midvunit_base_state::screen_update(screen_device &screen, bitmap_ind16 
 		{
 			if (frame)
 			{
-				m_hires->use_frame(*frame);
+				m_hires->use_frame(*frame, [this] () { if (m_vk) m_vk->frame_ready(); }, m_vk->shared_texture(frame));
 				m_hires->frame_done(cliprect);
 			}
 		}

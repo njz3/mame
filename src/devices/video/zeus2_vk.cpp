@@ -12,7 +12,9 @@
     written since the previous batch, draws into the frame buffer images
     (colour and depth) and may copy rows into a ring of read-back buffers.
     The rows shown are read back as soon as the display moves to them, so
-    the screen update usually finds them ready.
+    the screen update usually finds them ready.  When the display can draw
+    a texture of the GPU (vk3d_share), the rows are copied into it at the
+    screen update instead, and nothing is read back.
 
 ***************************************************************************/
 
@@ -20,6 +22,7 @@
 #include "zeus2_vk.h"
 
 #include "vk3d_context.h"
+#include "vk3d_share.h"
 
 #include <algorithm>
 #include <climits>
@@ -118,6 +121,7 @@ struct zeus2_vk::impl : vk3d_context
 		s32 rows[2]{};          // image rows read, top .. bottom - 1, past the bottom when they wrap
 		int slot = -1;          // batch that copies it
 		bool ready = false;
+		vk3d_share::target *shared = nullptr; // the rows go to this texture of the display instead of host
 	};
 
 	int scale = 1;
@@ -162,6 +166,10 @@ struct zeus2_vk::impl : vk3d_context
 	int pending = -1;                   // entry of the frame read back band by band
 	bool band_pending = false;
 	bool resync_pending = true;
+
+	std::unique_ptr<vk3d_share> share;
+	vk3d_share::target *finishing = nullptr; // texture of the frame the batch ends
+	bool sharing = false;               // the last frame went to a texture: nothing to read back ahead
 
 	bool palette_dirty = true;          // the palette is not in this batch yet
 	u32 palette_offset = 0;
@@ -262,6 +270,7 @@ bool zeus2_vk::impl::init(std::string &error)
 	wanted.dualSrcBlend = VK_TRUE;
 	if (!init_device(error, &wanted))
 		return false;
+	share = std::make_unique<vk3d_share>(*this);
 	if (!enabled_features().dualSrcBlend)
 	{
 		error = "the GPU lacks dualSrcBlend";
@@ -786,6 +795,7 @@ int zeus2_vk::impl::pick_entry()
 	if (result == prefetched)
 		prefetched = -1;
 	readback[result].valid = false;
+	readback[result].shared = nullptr;
 	return result;
 }
 
@@ -874,7 +884,12 @@ bool zeus2_vk::impl::flush()
 		return false;
 	bool const waves = std::find(wave_dirty.begin(), wave_dirty.end(), true) != wave_dirty.end();
 	if (commands.empty() && !waves)
+	{
+		// the rows of the frame went with earlier batches
+		if (finishing)
+			share->submitted(*finishing, true);
 		return true;
+	}
 
 	int const slot_index = next_slot;
 	slot &sl = slots[slot_index];
@@ -971,6 +986,7 @@ bool zeus2_vk::impl::flush()
 	// replay
 	bool in_pass = false;
 	bool copied = false;
+	vk3d_share::target *band_target = finishing;
 	VkPipeline bound = VK_NULL_HANDLE;
 	for (command const &c : commands)
 	{
@@ -983,6 +999,19 @@ bool zeus2_vk::impl::flush()
 			{
 				begin_pass(cmd);
 				vkCmdEndRenderPass(cmd);
+			}
+			if (vk3d_share::target *const shared = readback[c.entry].shared)
+			{
+				// the rows into the texture of the display, one region per
+				// wrap of the frame buffer
+				for (u32 i = 0; i < c.count; i++)
+				{
+					VkBufferImageCopy const &copy = copies[c.first + i];
+					s32 const row = s32(copy.bufferOffset / (VkDeviceSize(copy.bufferRowLength) * 4));
+					share->record(cmd, *shared, color.handle, VK_IMAGE_LAYOUT_GENERAL, copy.imageOffset.x, copy.imageOffset.y - row, row, s32(copy.imageExtent.height));
+				}
+				band_target = shared;
+				continue;
 			}
 			vkCmdCopyImageToBuffer(cmd, color.handle, VK_IMAGE_LAYOUT_GENERAL, readback[c.entry].host.handle, c.count, &copies[c.first]);
 			readback[c.entry].slot = slot_index;
@@ -1025,6 +1054,11 @@ bool zeus2_vk::impl::flush()
 	submit.pCommandBuffers = &cmd;
 	vkResetFences(device, 1, &sl.fence);
 	bool const ok = vkQueueSubmit(queue, 1, &submit, sl.fence) == VK_SUCCESS;
+	if (ok && band_target)
+	{
+		share->submitted(*band_target, band_target == finishing);
+		share->tag(*band_target) = slot_index;
+	}
 	sl.busy = ok;
 	flushes++;
 	commands.clear();
@@ -1061,8 +1095,16 @@ void zeus2_vk::impl::complete(readback_entry &entry)
 
 bitmap_rgb32 *zeus2_vk::impl::show(int index, rectangle const &visible)
 {
-	// high-resolution frame pixel (x, y) is read-back pixel (x - left, y - top)
 	readback_entry &entry = readback[index];
+	if (entry.shared)
+	{
+		// its batch is waited for in frame_ready()
+		shown = index;
+		frames++;
+		return &share->bitmap(*entry.shared);
+	}
+
+	// high-resolution frame pixel (x, y) is read-back pixel (x - left, y - top)
 	complete(entry);
 	s32 const left = visible.left() * scale;
 	s32 const top = visible.top() * scale;
@@ -1278,7 +1320,7 @@ void zeus2_vk::prefetch(u32 display, rectangle const &visible)
 	impl &s = *m;
 	int const w = visible.width() * s.scale + 2 * s.pad;
 	int const h = visible.height() * s.scale;
-	if (s.failed || s.band_pending || visible.empty() || (visible.left() < 0) || (visible.top() < 0) || (w > s.readback_width) || (h > s.readback_height))
+	if (s.sharing || s.failed || s.band_pending || visible.empty() || (visible.left() < 0) || (visible.top() < 0) || (w > s.readback_width) || (h > s.readback_height))
 		return;
 	display &= FRAME_PIXELS - 1;
 	if (s.matches(s.prefetched, display, visible) || s.matches(s.shown, display, visible))
@@ -1330,7 +1372,17 @@ bool zeus2_vk::update(u32 display, rectangle const &cliprect, rectangle const &v
 	// once its bottom is reached
 	s.check_resync();
 	if (!s.band_pending)
+	{
 		s.pending = s.pick_entry();
+
+		// a texture of the display, if whole rows fit in the frame buffer images
+		s32 const x0 = s32((display & ((1U << s.row_shift) - 1)) + visible.left()) * s.scale;
+		s32 const left = visible.left() * s.scale;
+		s32 const first = visible.top() * s.scale;
+		if (x0 + w <= s.width)
+			s.readback[s.pending].shared = s.share->acquire(rectangle(left, left + w - 1, first, first + h - 1));
+		s.sharing = s.readback[s.pending].shared != nullptr;
+	}
 	if (top <= bottom)
 		s.add_copy(s.pending, display, top, bottom, visible);
 	if (!last)
@@ -1343,9 +1395,34 @@ bool zeus2_vk::update(u32 display, rectangle const &cliprect, rectangle const &v
 	s.prefetched = -1;
 	int const index = s.pending;
 	s.pending = -1;
-	if (!s.flush())
+	s.finishing = s.readback[index].shared;
+	bool const flushed = s.flush();
+	s.finishing = nullptr;
+	if (!flushed)
 		return false;
 	s.set_entry(index, display, visible, !several);
 	frame = s.show(index, visible);
 	return true;
+}
+
+
+void zeus2_vk::frame_ready()
+{
+	impl &s = *m;
+	if ((s.shown < 0) || !s.readback[s.shown].shared)
+		return;
+
+	// a frame shown again needs no wait: the batch is only waited for once
+	int &slot = s.share->tag(*s.readback[s.shown].shared);
+	if (slot >= 0)
+		s.wait_slot(s.slots[slot]);
+	slot = -1;
+}
+
+
+hires3d_output::gpu_texture zeus2_vk::shared_texture(bitmap_rgb32 const *frame)
+{
+	impl &s = *m;
+	vk3d_share::target *const shared = s.share->find(frame);
+	return shared ? s.share->texture(*shared) : hires3d_output::gpu_texture();
 }

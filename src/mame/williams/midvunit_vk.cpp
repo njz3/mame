@@ -20,6 +20,7 @@
 #include "midvunit_vk.h"
 
 #include "vk3d_context.h"
+#include "vk3d_share.h"
 
 #include <algorithm>
 #include <cmath>
@@ -120,7 +121,12 @@ struct midvunit_vk::impl : vk3d_context
 		std::vector<u32> pens;
 		int slot = -1;          // batch that copies it
 		bool ready = false;
+		vk3d_share::target *shared = nullptr; // the frame is in this texture of the display, not in host
 	};
+
+	std::unique_ptr<vk3d_share> share;
+	vk3d_share::target *finishing = nullptr; // texture of the frame the batch copies out
+	bool sharing = false;       // the last frame went to a texture: nothing to convert ahead
 
 	int scale = 1;
 	int width = 0;              // page images
@@ -263,6 +269,7 @@ bool midvunit_vk::impl::init(std::string &error)
 {
 	if (!init_device(error))
 		return false;
+	share = std::make_unique<vk3d_share>(*this);
 
 	// render passes: the images stay in the general layout, so that a page
 	// can be drawn into and read by the display conversion; cleared on
@@ -789,18 +796,26 @@ bool midvunit_vk::impl::flush(int readback_width, int readback_height)
 					rb = index;
 			}
 		next_readback = (rb + 1) % READBACKS;
-		VkBufferImageCopy copy{};
-		copy.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-		copy.imageExtent = { u32(readback_width), u32(readback_height), 1 };
-		vkCmdCopyImageToBuffer(cmd, display.handle, VK_IMAGE_LAYOUT_GENERAL, readback[rb].host.handle, 1, &copy);
-		VkBufferMemoryBarrier host{ VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER };
-		host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-		host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
-		host.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		host.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		host.buffer = readback[rb].host.handle;
-		host.size = VK_WHOLE_SIZE;
-		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &host, 0, nullptr);
+		readback[rb].shared = finishing;
+		if (finishing)
+		{
+			share->record(cmd, *finishing, display.handle, VK_IMAGE_LAYOUT_GENERAL, 0, 0);
+		}
+		else
+		{
+			VkBufferImageCopy copy{};
+			copy.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+			copy.imageExtent = { u32(readback_width), u32(readback_height), 1 };
+			vkCmdCopyImageToBuffer(cmd, display.handle, VK_IMAGE_LAYOUT_GENERAL, readback[rb].host.handle, 1, &copy);
+			VkBufferMemoryBarrier host{ VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER };
+			host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+			host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+			host.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			host.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			host.buffer = readback[rb].host.handle;
+			host.size = VK_WHOLE_SIZE;
+			vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &host, 0, nullptr);
+		}
 	}
 	vkEndCommandBuffer(cmd);
 
@@ -809,6 +824,11 @@ bool midvunit_vk::impl::flush(int readback_width, int readback_height)
 	submit.pCommandBuffers = &cmd;
 	vkResetFences(device, 1, &sl.fence);
 	bool const ok = vkQueueSubmit(queue, 1, &submit, sl.fence) == VK_SUCCESS;
+	if (ok && copy_out && finishing)
+	{
+		share->submitted(*finishing, true);
+		share->tag(*finishing) = slot_index;
+	}
 	sl.busy = ok;
 	flushes++;
 	commands.clear();
@@ -875,8 +895,16 @@ void midvunit_vk::impl::set_entry(int index, int page, rectangle const &visible,
 
 bitmap_rgb32 *midvunit_vk::impl::show(int index, rectangle const &visible)
 {
-	// high-resolution screen pixel (x, y) is image pixel (x - left, y - top)
 	readback_entry &entry = readback[index];
+	if (entry.shared)
+	{
+		// its batch is waited for in frame_ready()
+		shown = index;
+		frames++;
+		return &share->bitmap(*entry.shared);
+	}
+
+	// high-resolution screen pixel (x, y) is image pixel (x - left, y - top)
 	complete(entry);
 	s32 const left = visible.left() * scale;
 	s32 const top = visible.top() * scale;
@@ -1114,7 +1142,7 @@ void midvunit_vk::prefetch(int page, rectangle const &visible, rgb_t const *pens
 	page &= 1;
 	int const w = visible.width() * s.scale;
 	int const h = visible.height() * s.scale;
-	if (s.band_pending || !s.fits(visible) || (w > s.display_width) || (h > s.display_height))
+	if (s.sharing || s.band_pending || !s.fits(visible) || (w > s.display_width) || (h > s.display_height))
 		return;
 	for (int index : { s.prefetched, s.shown })
 		if ((index >= 0) && s.matches(s.readback[index], page, visible, pens))
@@ -1174,7 +1202,15 @@ bool midvunit_vk::update(int page, rectangle const &cliprect, rectangle const &v
 	bool const several = s.band_pending;
 	s.band_pending = false;
 	s.prefetched = -1;
-	if (!s.flush(w, h) || (s.last_readback < 0))
+
+	// a texture of the display, or a read-back buffer
+	s32 const left = visible.left() * s.scale;
+	s32 const first = visible.top() * s.scale;
+	s.finishing = s.share->acquire(rectangle(left, left + w - 1, first, first + h - 1));
+	s.sharing = s.finishing != nullptr;
+	bool const flushed = s.flush(w, h);
+	s.finishing = nullptr;
+	if (!flushed || (s.last_readback < 0))
 		return false;
 	int const index = s.last_readback;
 	if (several)
@@ -1183,4 +1219,26 @@ bool midvunit_vk::update(int page, rectangle const &cliprect, rectangle const &v
 		s.set_entry(index, page, visible, pens);
 	frame = s.show(index, visible);
 	return true;
+}
+
+
+void midvunit_vk::frame_ready()
+{
+	impl &s = *m;
+	if ((s.shown < 0) || !s.readback[s.shown].shared)
+		return;
+
+	// a frame shown again needs no wait: the batch is only waited for once
+	int &slot = s.share->tag(*s.readback[s.shown].shared);
+	if (slot >= 0)
+		s.wait_slot(s.slots[slot]);
+	slot = -1;
+}
+
+
+hires3d_output::gpu_texture midvunit_vk::shared_texture(bitmap_rgb32 const *frame)
+{
+	impl &s = *m;
+	vk3d_share::target *const shared = s.share->find(frame);
+	return shared ? s.share->texture(*shared) : hires3d_output::gpu_texture();
 }

@@ -112,7 +112,8 @@ Matériel visé, dans l'ordre :
      (rappel `ready`), et ne réécrit une texture qu'une fois les dessins qui la
      lisent finis (anneau de requêtes D3D11 ; sinon l'image est relue).
    - Branché sur System 22, System 21, Taito JC, HNG64, Gaelco 3D, K001005 et
-     Voodoo (1/2, Banshee, Voodoo 3). Pas encore : V-Unit, Zeus 2, Model 1.
+     Voodoo (1/2, Banshee, Voodoo 3), V-Unit et Zeus 2 (2026-11-09). Pas
+     encore : Model 1.
 8. **Options d'affichage**, comme dans les autres émulateurs des bornes
    (`render.cpp`, `place_view()`) :
    - `-aspect_ratio original|4:3|16:9|4:3_stretch|16:9_stretch|4:3_crop|16:9_crop`
@@ -218,10 +219,16 @@ l'écraser.
 Toutes les puces de la liste ont un rendu logiciel HD et un rendu Vulkan
 (2026-11-02). Reste :
 
-1. Partage avec bgfx pour V-Unit et Zeus 2 (relecture anticipée et image
-   remontrée sans redessin à reprendre), puis l'essayer sur une carte AMD ou
-   Intel.
+1. Essayer le partage avec bgfx sur une carte AMD ou Intel. Mesures sur la
+   RTX 3050 du portable, en ×4, fenêtre sans limite de vitesse : crusnusa
+   441 % contre 287 % en relecture, crusnwld 338 contre 245, offroadc 442
+   contre 294, crusnexo 306 contre 223. Le gain est faible ou nul en ×2.
 2. HNG64 : n'envoyer au GPU que les lignes 2D qui changent (1,8 Mo par image).
+   Course xrally en ×2, sans affichage : 5,1 ms d'attente par image (relecture
+   47 %, envois 30 %, dessin 22 %), soit tout l'écart avec le natif (69 %
+   contre 84 %). Le partage retire environ 40 % de l'attente ; il reste surtout
+   les envois. Le K001005 (midnrun) n'attend que 0,5 ms par image : rien à
+   faire.
 3. Banshee/Voodoo 3 : essayer sf2049se et les jeux non-course (Viper,
    nbashowt) ; les blits 2D entre tampons perdent la HD (jamais vus dans
    sf2049 ni cartfury).

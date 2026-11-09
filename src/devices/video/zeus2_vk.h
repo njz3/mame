@@ -10,9 +10,10 @@
     and depth, with the native row layout) lives on the GPU.  The polygons
     are drawn there by a port of render_triangle and render_poly_8bit, the
     fills and host writes are copied there as blocks, and the rows shown
-    are read back.  Wave RAM (textures) is mirrored on the GPU, and the
-    native frame buffer is still drawn by the software renderer for the
-    emulation.
+    are read back, or copied into a texture of the display on the GPU
+    when the display can draw it.  Wave RAM (textures) is mirrored on the
+    GPU, and the native frame buffer is still drawn by the software
+    renderer for the emulation.
 
 ***************************************************************************/
 
@@ -20,6 +21,8 @@
 #define MAME_VIDEO_ZEUS2_VK_H
 
 #pragma once
+
+#include "hires3d.h"
 
 #include <memory>
 #include <string>
@@ -108,6 +111,12 @@ public:
 	// over the read-back memory, intact
 	// until the next frame is shown, else nullptr; false if the GPU failed
 	bool update(u32 display, rectangle const &cliprect, rectangle const &visible, bitmap_rgb32 *&frame);
+
+	// the frame shown is about to be drawn by the display: waits for the GPU
+	void frame_ready();
+
+	// the texture of the display holding frame (from update), if any
+	hires3d_output::gpu_texture shared_texture(bitmap_rgb32 const *frame);
 
 private:
 	struct impl;

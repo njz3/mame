@@ -287,14 +287,14 @@ uint32_t zeus2_device::screen_update(screen_device &screen, bitmap_rgb32 &bitmap
 		bool const hires_active = m_hires->active();
 		if (hires_active && m_vk)
 		{
-			// on the GPU: the rows shown read back, the frame shown from the
-			// read-back memory
+			// on the GPU: the rows shown read back or copied into a texture
+			// of the display, the frame shown from there
 			bitmap_rgb32 *frame = nullptr;
 			if (m_vk->update(frame_addr_from_xy(0, 0, false), cliprect, screen.visible_area(), frame))
 			{
 				if (frame)
 				{
-					m_hires->use_frame(*frame);
+					m_hires->use_frame(*frame, [this] () { if (m_vk) m_vk->frame_ready(); }, m_vk->shared_texture(frame));
 					m_hires->frame_done(cliprect);
 				}
 

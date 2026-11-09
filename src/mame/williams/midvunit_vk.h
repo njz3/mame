@@ -10,8 +10,9 @@
     on the GPU.  The quads of the DMA queue are drawn there by a port of
     the scanline renderers, the CPU writes into video RAM are copied there
     as blocks, and the page shown is converted through the palette into a
-    display image that is read back.  The native video RAM is still drawn
-    by the software renderer for the emulation.
+    display image that is read back, or copied into a texture of the
+    display on the GPU when the display can draw it.  The native video RAM
+    is still drawn by the software renderer for the emulation.
 
 ***************************************************************************/
 
@@ -19,6 +20,8 @@
 #define MAME_WILLIAMS_MIDVUNIT_VK_H
 
 #pragma once
+
+#include "hires3d.h"
 
 #include <memory>
 #include <string>
@@ -71,6 +74,12 @@ public:
 	// memory, intact until the next frame is shown, else nullptr; false if
 	// the GPU failed
 	bool update(int page, rectangle const &cliprect, rectangle const &visible, rgb_t const *pens, bitmap_rgb32 *&frame);
+
+	// the frame shown is about to be drawn by the display: waits for the GPU
+	void frame_ready();
+
+	// the texture of the display holding frame (from update), if any
+	hires3d_output::gpu_texture shared_texture(bitmap_rgb32 const *frame);
 
 private:
 	struct impl;
