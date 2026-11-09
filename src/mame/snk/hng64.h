@@ -234,6 +234,7 @@ public:
 	bitmap_rgb32 m_hires_bottom;    // on the GPU: the layers under the 3D
 	bitmap_ind8 m_wide_priority;    // -widescreen_bg: for the tilemaps drawn on the sides
 	bitmap_ind8 *m_tilemap_priority = nullptr;  // instead of the screen's
+	bool m_wide_under_stretched = false;        // -widescreen_bg: they do not go on past the edges
 	void blit_3d(bitmap_rgb32 &bitmap, const rectangle &cliprect, int scale);
 	required_device<palette_device> m_palette;
 	required_device<palette_device> m_palette_fade0;

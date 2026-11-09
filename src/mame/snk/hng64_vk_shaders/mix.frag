@@ -6,7 +6,7 @@
 // with -widescreen, the frame has pad more columns on each side: the 3D
 // buffer too, the layers over it are in the middle or stretched, and the
 // layers under it are bg_pad native columns wider on each side, else as the
-// layers over it
+// layers over it (stretch2d 2: stretched with them, their sides are not used)
 #version 450
 #extension GL_GOOGLE_include_directive : require
 
@@ -43,7 +43,7 @@ void main()
 	int tx = (pc.stretch2d != 0)
 			? (pc.native_left + int(floor((float(dx) + 0.5) * float(pc.native_width) / float(pc.frame_width))))
 			: floor_div(x, pc.scale);
-	int bx = (pc.bg_pad > 0) ? floor_div(x, pc.scale) : tx;
+	int bx = ((pc.bg_pad > 0) && (pc.stretch2d != 2)) ? floor_div(x, pc.scale) : tx;
 	int stride = pc.native_width + 2 * pc.bg_pad;
 	uint row = pc.values + pc.base + uint((sy - pc.native_top) * stride * 2);
 	int tcol = tx - pc.native_left;

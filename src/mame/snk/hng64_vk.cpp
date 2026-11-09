@@ -80,8 +80,14 @@ struct command
 	u32 count;
 	s32 top, bottom;    // mix: display rows
 	s32 width;          // mix: display columns
+	bool kept_rows;     // mix: its native pixels are in the kept rows
 	push_constants mix;
 };
+
+// state of a kept native row
+constexpr u8 ROW_VALID = 1;
+constexpr u8 ROW_TO_SEND = 2;           // goes with the next batch
+constexpr u8 ROW_READ = 4;              // a mix of the next batch reads it
 
 u32 float_bits(float value)
 {
@@ -167,6 +173,18 @@ struct hng64_vk::impl : vk3d_context
 	u32 palette_offset = 0;             // last palette of the batch
 	u32 palette_colors = 0;
 
+	// the native rows of the mix stay at the start of the data buffer: only
+	// those that changed are sent. A row is kept here as the GPU will have it
+	// after the next batch, which must not change one a pending mix reads.
+	int row_left = 0;                   // native column of their first pixel
+	u32 row_words = 0;                  // words per row
+	u32 row_count = 0;
+	std::vector<u32> row_values;
+	std::vector<u8> row_flags;
+	std::vector<u32> rows_to_send;      // in increasing order
+	std::vector<u32> native_rows;       // of the current update
+	u32 kept_words() const { return row_words * row_count; }
+
 	// statistics, shown with -verbose
 	osd_ticks_t wait_ticks = 0;
 	u32 blocked_waits = 0;
@@ -177,6 +195,8 @@ struct hng64_vk::impl : vk3d_context
 	u32 flushes = 0;
 	u32 mixes = 0;
 	u32 frames = 0;
+	u64 rows_mixed = 0;
+	u64 rows_sent = 0;
 
 	~impl();
 
@@ -189,7 +209,9 @@ struct hng64_vk::impl : vk3d_context
 	void add_command(command_type type, u32 index);
 	void add_triangle(state const &st, vertex const &a, vertex const &b, vertex const &c);
 	u32 add_palette(rgb_t const *palette, u32 colors);
-	bool mix(push_constants const &push, int top, int bottom, rectangle const &visible, bitmap_rgb32 *&frame);
+	void set_row_layout(int left, u32 words, u32 count);
+	bool keep_rows(u32 const *rows, int first, int last);
+	bool mix(push_constants const &push, bool kept_rows, int top, int bottom, rectangle const &visible, bitmap_rgb32 *&frame);
 	void begin_pass(VkCommandBuffer cmd, VkRenderPass const *variants, VkFramebuffer framebuffer, bool &ready, int w, int h);
 	bool flush(int readback_width, int readback_height);
 	void complete(readback_entry &entry);
@@ -206,6 +228,8 @@ hng64_vk::impl::~impl()
 	if (flushes)
 		osd_printf_verbose("hng64_vk: %u batches, %u frames, %u mixes, %u triangles, %.1f ms waiting for the GPU (%u waits blocked)\n",
 				flushes, frames, mixes, u32(prim_count), wait_ticks * 1000.0 / osd_ticks_per_second(), blocked_waits);
+	if (rows_mixed)
+		osd_printf_verbose("hng64_vk: %u of %u native rows sent to the GPU\n", u32(rows_sent), u32(rows_mixed));
 	if (stamped_batches)
 		osd_printf_verbose("hng64_vk: GPU time over %u batches: %.1f ms uploading, %.1f ms drawing and mixing, %.1f ms copying out\n",
 				stamped_batches, gpu_ms[0], gpu_ms[1], gpu_ms[2]);
@@ -654,6 +678,59 @@ u32 hng64_vk::impl::add_palette(rgb_t const *palette, u32 colors)
 }
 
 
+void hng64_vk::impl::set_row_layout(int left, u32 words, u32 count)
+{
+	if ((left == row_left) && (words == row_words) && (count == row_count))
+		return;
+
+	// the pending mixes read the rows of the old layout
+	if (!commands.empty())
+		flush(0, 0);
+	row_left = left;
+	row_words = words;
+	row_count = count;
+	row_values.assign(size_t(words) * count, 0);
+	row_flags.assign(count, 0);
+	rows_to_send.clear();
+}
+
+
+//-------------------------------------------------
+//  keep_rows - store the native rows first..last,
+//  which rows holds one after the other. False if
+//  one of them must differ from what a pending mix
+//  reads: nothing is stored then
+//-------------------------------------------------
+
+bool hng64_vk::impl::keep_rows(u32 const *rows, int first, int last)
+{
+	size_t const bytes = size_t(row_words) * 4;
+	for (int y = first; y <= last; y++)
+		if ((row_flags[y] & ROW_READ) && std::memcmp(&rows[size_t(y - first) * row_words], &row_values[size_t(y) * row_words], bytes))
+			return false;
+	for (int y = first; y <= last; y++)
+	{
+		u32 const *const row = &rows[size_t(y - first) * row_words];
+		u32 *const kept = &row_values[size_t(y) * row_words];
+		u8 &flags = row_flags[y];
+		if (!(flags & ROW_VALID) || std::memcmp(row, kept, bytes))
+		{
+			std::memcpy(kept, row, bytes);
+			if (!(flags & ROW_TO_SEND))
+			{
+				flags |= ROW_TO_SEND;
+
+				// bands come down the screen, but not always
+				rows_to_send.insert(std::upper_bound(rows_to_send.begin(), rows_to_send.end(), u32(y)), u32(y));
+			}
+		}
+		flags |= ROW_VALID | ROW_READ;
+		rows_mixed++;
+	}
+	return true;
+}
+
+
 void hng64_vk::impl::begin_pass(VkCommandBuffer cmd, VkRenderPass const *variants, VkFramebuffer framebuffer, bool &ready, int w, int h)
 {
 	VkClearValue clears[2]{};
@@ -692,23 +769,36 @@ bool hng64_vk::impl::flush(int readback_width, int readback_height)
 	next_slot = (next_slot + 1) % SLOTS;
 	wait_slot(sl);
 
-	// triangle records, values, then the texture ROM pages
-	u32 const tri_base = 0;
+	// in the data buffer: the kept rows, the triangle records, the values
+	u32 const tri_base = kept_words();
 	u32 const value_base = tri_base + u32(tris.size());
-	u32 const total = value_base + u32(values.size());
+	u32 const total = u32(tris.size()) + u32(values.size());
 	VkDeviceSize const bytes = std::max<VkDeviceSize>(VkDeviceSize(total) * 4, 4);
-	u32 dirty_pages = 0;
-	for (bool dirty : texture_dirty)
-		dirty_pages += dirty ? 1 : 0;
-	VkDeviceSize const host_bytes = bytes + VkDeviceSize(dirty_pages) * TEXTURE_PAGE;
-	if (data.size < bytes)
+	VkDeviceSize const kept_bytes = VkDeviceSize(tri_base) * 4;
+	if (data.size < kept_bytes + bytes)
 	{
 		wait_all();
 		destroy_buffer(data);
-		if (!create_device_buffer(data, std::max<VkDeviceSize>(bytes * 3 / 2, 1 << 20), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT))
+		if (!create_device_buffer(data, std::max<VkDeviceSize>((kept_bytes + bytes) * 3 / 2, 1 << 20), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT))
 			return false;
 		descriptors_dirty = true;
+
+		// a new buffer: every row is to be sent again
+		rows_to_send.clear();
+		for (u32 y = 0; y < row_count; y++)
+			if (row_flags[y] & ROW_VALID)
+			{
+				row_flags[y] |= ROW_TO_SEND;
+				rows_to_send.push_back(y);
+			}
 	}
+
+	// staged in this order: the records and values, the texture ROM pages,
+	// the rows that changed
+	u32 dirty_pages = 0;
+	for (bool dirty : texture_dirty)
+		dirty_pages += dirty ? 1 : 0;
+	VkDeviceSize const host_bytes = bytes + VkDeviceSize(dirty_pages) * TEXTURE_PAGE + VkDeviceSize(rows_to_send.size()) * row_words * 4;
 	if (sl.host.size < host_bytes)
 	{
 		destroy_buffer(sl.host);
@@ -716,8 +806,8 @@ bool hng64_vk::impl::flush(int readback_width, int readback_height)
 			return false;
 	}
 	u32 *const out = reinterpret_cast<u32 *>(sl.host.mapped);
-	std::copy(tris.begin(), tris.end(), out + tri_base);
-	std::copy(values.begin(), values.end(), out + value_base);
+	std::copy(tris.begin(), tris.end(), out);
+	std::copy(values.begin(), values.end(), out + tris.size());
 	std::vector<VkBufferCopy> texture_copies;
 	VkDeviceSize staged = bytes;
 	for (u32 page = 0; page < TEXTURE_PAGES; page++)
@@ -732,6 +822,22 @@ bool hng64_vk::impl::flush(int readback_width, int readback_height)
 		staged += TEXTURE_PAGE;
 		texture_dirty[page] = false;
 	}
+	std::vector<VkBufferCopy> data_copies;
+	data_copies.push_back({ 0, kept_bytes, bytes });
+	VkDeviceSize const row_bytes = VkDeviceSize(row_words) * 4;
+	for (u32 const y : rows_to_send)
+	{
+		std::memcpy(reinterpret_cast<u8 *>(sl.host.mapped) + staged, &row_values[size_t(y) * row_words], size_t(row_bytes));
+		VkDeviceSize const target = VkDeviceSize(y) * row_bytes;
+		if ((data_copies.size() > 1) && (data_copies.back().dstOffset + data_copies.back().size == target))
+			data_copies.back().size += row_bytes;
+		else
+			data_copies.push_back({ staged, target, row_bytes });
+		staged += row_bytes;
+		row_flags[y] &= ~ROW_TO_SEND;
+	}
+	rows_sent += rows_to_send.size();
+	rows_to_send.clear();
 	flush_buffer(sl.host, 0, host_bytes);
 
 	if (descriptors_dirty)
@@ -771,8 +877,7 @@ bool hng64_vk::impl::flush(int readback_width, int readback_height)
 	reused_memory.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
 	reused_memory.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
 	vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &reused_memory, 0, nullptr, 0, nullptr);
-	VkBufferCopy const region{ 0, 0, bytes };
-	vkCmdCopyBuffer(cmd, sl.host.handle, data.handle, 1, &region);
+	vkCmdCopyBuffer(cmd, sl.host.handle, data.handle, u32(data_copies.size()), data_copies.data());
 	if (!texture_copies.empty())
 		vkCmdCopyBuffer(cmd, sl.host.handle, texbuf.handle, u32(texture_copies.size()), texture_copies.data());
 	VkMemoryBarrier uploaded{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
@@ -806,6 +911,10 @@ bool hng64_vk::impl::flush(int readback_width, int readback_height)
 			push.inv_width = 1.0f / display_width;
 			push.inv_height = 1.0f / display_height;
 			push.values = value_base;
+
+			// the shader adds the values base to the first native row
+			if (c.kept_rows)
+				push.base = u32(push.native_top) * row_words - value_base;
 			vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
 			vkCmdDraw(cmd, 3, 1, 0, 0);
 			vkCmdEndRenderPass(cmd);
@@ -885,6 +994,8 @@ bool hng64_vk::impl::flush(int readback_width, int readback_height)
 	tris.clear();
 	values.clear();
 	palette_colors = 0;
+	for (u8 &flags : row_flags)
+		flags &= ~ROW_READ;
 	if (!ok)
 	{
 		failed = true;
@@ -939,7 +1050,7 @@ bitmap_rgb32 *hng64_vk::impl::show(int index, rectangle const &visible)
 }
 
 
-bool hng64_vk::impl::mix(push_constants const &push, int top, int bottom, rectangle const &visible, bitmap_rgb32 *&frame)
+bool hng64_vk::impl::mix(push_constants const &push, bool kept_rows, int top, int bottom, rectangle const &visible, bitmap_rgb32 *&frame)
 {
 	// the rows of this update into the display image; the frame is read back
 	// once its bottom is reached
@@ -956,6 +1067,7 @@ bool hng64_vk::impl::mix(push_constants const &push, int top, int bottom, rectan
 		cmd.top = (top - visible.top()) * scale;
 		cmd.bottom = (bottom + 1 - visible.top()) * scale;
 		cmd.width = w;
+		cmd.kept_rows = kept_rows;
 		cmd.mix = push;
 		cmd.mix.scale = scale;
 		cmd.mix.pens = work;
@@ -964,7 +1076,6 @@ bool hng64_vk::impl::mix(push_constants const &push, int top, int bottom, rectan
 		cmd.mix.left = visible.left() * scale;
 		cmd.mix.top = visible.top() * scale;
 		cmd.mix.pad = pad;
-		cmd.mix.stretch2d = stretch2d ? 1 : 0;
 		cmd.mix.bg_pad = bg_pad;
 		cmd.mix.frame_width = w;
 		commands.push_back(cmd);
@@ -1101,14 +1212,16 @@ bool hng64_vk::mix(bitmap_rgb32 const &bottom, bitmap_rgb32 const &top, blit con
 	int const first = std::max(cliprect.top(), visible.top());
 	int const last = std::min(cliprect.bottom(), visible.bottom());
 	int const stride = visible.width() + 2 * s.bg_pad;
-	push.base = u32(s.values.size());
 	push.native_left = visible.left();
 	push.native_top = first;
 	push.native_width = visible.width();
+	push.stretch2d = s.stretch2d ? (b.stretch_under ? 2 : 1) : 0;
+	bool kept = false;
 	if (first <= last)
 	{
-		s.values.resize(s.values.size() + size_t(last + 1 - first) * stride * 2);
-		u32 *out = &s.values[push.base];
+		s.set_row_layout(visible.left(), u32(stride) * 2, u32(bottom.height()));
+		s.native_rows.resize(size_t(last + 1 - first) * stride * 2);
+		u32 *out = s.native_rows.data();
 		for (int y = first; y <= last; y++)
 		{
 			u32 const *const under = &bottom.pix(y);
@@ -1119,8 +1232,14 @@ bool hng64_vk::mix(bitmap_rgb32 const &bottom, bitmap_rgb32 const &top, blit con
 				*out++ = ((x >= visible.left()) && (x <= visible.right())) ? over[x] : 0x80000000;
 			}
 		}
+		kept = s.keep_rows(s.native_rows.data(), first, last);
+		if (!kept)
+		{
+			push.base = u32(s.values.size());
+			s.values.insert(s.values.end(), s.native_rows.begin(), s.native_rows.end());
+		}
 	}
-	return s.mix(push, cliprect.top(), cliprect.bottom(), visible, frame);
+	return s.mix(push, kept, cliprect.top(), cliprect.bottom(), visible, frame);
 }
 
 

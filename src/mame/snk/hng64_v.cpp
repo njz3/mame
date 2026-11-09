@@ -1005,7 +1005,28 @@ u32 hng64_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, cons
 				}
 			}
 			m_tilemap_priority = nullptr;
+
+			// the layers under the 3D stay in place only where they really go
+			// on past the edges: a menu made for the 4:3 screen is stretched
+			// with the layers over it (with a margin, not to change at every frame)
+			u32 inside = 0;
+			u32 outside = 0;
+			for (int y = cliprect.top(); y <= cliprect.bottom(); y++)
+			{
+				u32 const *const row = &m_hires_bottom.pix(y);
+				for (int x = visarea.left() - bg_pad; x <= visarea.right() + bg_pad; x++)
+					if (row[x] != background)
+						(((x >= visarea.left()) && (x <= visarea.right())) ? inside : outside)++;
+			}
+			u64 const outside_density = u64(outside) * visarea.width() * 10;
+			u64 const inside_density = u64(inside) * 2 * bg_pad;
+			if (outside_density >= inside_density * 6)
+				m_wide_under_stretched = false;
+			else if (outside_density <= inside_density * 3)
+				m_wide_under_stretched = true;
 		}
+		else
+			m_wide_under_stretched = bg_pad != 0;
 
 		// the layers over the 3D, for the mix, not knowing the 3D
 		bitmap.fill(GPU_LAYERS_EMPTY, cliprect);
@@ -1058,6 +1079,7 @@ u32 hng64_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, cons
 		b.xscroll = xscroll + 256;
 		b.yinc = ysize ? ((512 << 16) / ysize) : 0;
 		b.palbase = BIT(m_tcram[0x4c / 4], 16) ? 0x800 : 0x000;
+		b.stretch_under = m_wide_under_stretched;
 		bitmap_rgb32 *frame = nullptr;
 		if (vk->mix(m_hires_bottom, bitmap, b, reinterpret_cast<rgb_t const *>(m_palette_3d->pens()), m_palette_3d->entries(), cliprect, screen.visible_area(), frame))
 		{

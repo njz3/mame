@@ -59,6 +59,7 @@ public:
 		int xscroll;        // native
 		int yinc;           // 16.16
 		u32 palbase;
+		bool stretch_under = false; // -widescreen_2d stretch: the layers under the 3D too
 	};
 
 	// size: the native 3D buffers (square); texture: 16 MB of texels;
