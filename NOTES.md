@@ -223,12 +223,29 @@ Toutes les puces de la liste ont un rendu logiciel HD et un rendu Vulkan
    RTX 3050 du portable, en ×4, fenêtre sans limite de vitesse : crusnusa
    441 % contre 287 % en relecture, crusnwld 338 contre 245, offroadc 442
    contre 294, crusnexo 306 contre 223. Le gain est faible ou nul en ×2.
-2. HNG64 : n'envoyer au GPU que les lignes 2D qui changent (1,8 Mo par image).
-   Course xrally en ×2, sans affichage : 5,1 ms d'attente par image (relecture
-   47 %, envois 30 %, dessin 22 %), soit tout l'écart avec le natif (69 %
-   contre 84 %). Le partage retire environ 40 % de l'attente ; il reste surtout
-   les envois. Le K001005 (midnrun) n'attend que 0,5 ms par image : rien à
-   faire.
+   Intel UHD de ce PC (2026-11-09, Vulkan et bgfx forcés dessus) : crusnexo,
+   crusnwld, xrally, ridgerac, midnrun, sf2049, winrun, radikalb et sidebs
+   tournent, images identiques à NVIDIA (0,13 % au pire sur sf2049). À finir :
+   sfrush (arrêt une fois sur deux runs, non expliqué, avant le correctif MIPS)
+   et les captures noires de ridgerac et radikalb (image noire du jeu ou
+   défaut d'affichage, non tranché). AMD non testé.
+2. HNG64 : les lignes 2D sont gardées sur le GPU, seules celles qui changent
+   partent (fait, 2026-11-09 : 23 à 33 % des lignes, temps d'envoi divisé par
+   2,4, attente -15 %, images identiques ; pas de gain de vitesse mesurable).
+   Course xrally en ×2, sans affichage : 5,1 ms d'attente par image avant ce
+   changement (relecture 47 %, envois 30 %, dessin 22 %). Le K001005 (midnrun)
+   n'attend que 0,5 ms par image : rien à faire.
+   `-widescreen_bg` avec `-widescreen_2d stretch` : les couches sous la 3D sont
+   étirées quand elles ne dépassent pas de l'écran 4:3 (menus de roadedge et
+   xrally), et restent en place sinon (course).
+   **Correctif MIPS** : sfrush se figeait après 49,5 s (toutes nos
+   versions depuis g8e81ca4). Le commit upstream fde5b471bfc arme le compare
+   sur une écriture de Count ; Compare reste à 0xffffffff, le jeu n'y écrit
+   jamais et IP7 reste levée quand Count boucle. L'armement est retiré
+   (`mips3.cpp`, `mips3drc.cpp`). sfrush continue après 50 s, en démo et avec
+   pièce et accélérateur ; xrally est identique sur 45 s et continue après
+   50 s. Reste à contrôler roadedge, sf2049 et cartfury. dev/ffbedition a le
+   même défaut.
 3. Banshee/Voodoo 3 : essayer sf2049se et les jeux non-course (Viper,
    nbashowt) ; les blits 2D entre tampons perdent la HD (jamais vus dans
    sf2049 ni cartfury).

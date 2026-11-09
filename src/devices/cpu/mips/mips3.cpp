@@ -2616,8 +2616,8 @@ void mips3_device::set_cop0_reg(int idx, uint64_t val)
 		case COP0_Count:
 			m_core->cpr[0][idx] = val;
 			m_core->count_zero_time = total_cycles() - ((uint64_t)(uint32_t)val * 2);
-			// a Count write moves the next compare as well
-			m_core->compare_armed = 1;
+			// moves a compare the program armed; none is armed here, a program that
+			// never writes Compare gets no interrupt when Count wraps (sfrush hangs)
 			mips3com_update_cycle_counting();
 			break;
 
