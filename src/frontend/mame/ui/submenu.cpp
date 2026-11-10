@@ -15,6 +15,9 @@
 #include "ui/ui.h"
 #include "ui/utils.h"
 
+#include "hires3d.h"
+#include "vk3d.h"
+
 #if defined(UI_WINDOWS)
 #include "../osd/windows/winmain.h"
 #else
@@ -25,6 +28,7 @@
 #include <limits>
 #include <locale>
 #include <sstream>
+#include <string_view>
 
 
 namespace ui {
@@ -136,7 +140,17 @@ std::vector<submenu::option> submenu::video_options()
 			{ option_type::EMU,  N_("Enforce Aspect Ratio"),                    OPTION_KEEPASPECT },
 			{ option_type::OSD,  N_("Start Out Maximized"),                     OSDOPTION_MAXIMIZE },
 			{ option_type::OSD,  N_("Synchronized Refresh"),                    OSDOPTION_SYNCREFRESH },
-			{ option_type::OSD,  N_("Wait Vertical Sync"),                      OSDOPTION_WAITVSYNC } };
+			{ option_type::OSD,  N_("Wait Vertical Sync"),                      OSDOPTION_WAITVSYNC },
+
+			{ option_type::HEAD, N_("High Resolution 3D Options") },
+			{ option_type::EMU,  N_("3D Resolution Multiplier"),                OPTION_HIRES3D },
+			{ option_type::EMU,  N_("3D Renderer"),                             OPTION_HIRES3D_RENDERER, "auto|vulkan|software" },
+			{ option_type::OSD,  N_("Share 3D Frames with BGFX"),               OSDOPTION_BGFX_HIRES3D_SHARE },
+			{ option_type::EMU,  N_("Aspect Ratio"),                            OPTION_ASPECT_RATIO, "original|4:3|16:9|4:3_stretch|16:9_stretch|4:3_crop|16:9_crop" },
+			{ option_type::EMU,  N_("Crop Position"),                           OPTION_CROP_POSITION },
+			{ option_type::EMU,  N_("Widescreen 3D (16:9 Hack)"),               OPTION_WIDESCREEN },
+			{ option_type::EMU,  N_("Widescreen 2D Layers"),                    OPTION_WIDESCREEN_2D, "4:3|stretch" },
+			{ option_type::EMU,  N_("Widescreen Backgrounds"),                  OPTION_WIDESCREEN_BG } };
 }
 
 //std::vector<submenu::option> submenu::export_options()
@@ -177,7 +191,15 @@ submenu::submenu(mame_ui_manager &mui, render_target &target, std::vector<option
 		case option_type::EMU:
 			sm_option->entry = opts->get_entry(sm_option->name);
 			sm_option->options = opts;
-			if ((sm_option->entry->type() == core_options::option_type::STRING) || (sm_option->entry->type() == core_options::option_type::PATH) || (sm_option->entry->type() == core_options::option_type::MULTIPATH))
+			if (sm_option->choices)
+			{
+				sm_option->value.clear();
+				std::string_view choices(sm_option->choices);
+				for (size_t bar; (bar = choices.find('|')) != std::string_view::npos; choices.remove_prefix(bar + 1))
+					sm_option->value.emplace_back(choices.substr(0, bar));
+				sm_option->value.emplace_back(choices);
+			}
+			else if ((sm_option->entry->type() == core_options::option_type::STRING) || (sm_option->entry->type() == core_options::option_type::PATH) || (sm_option->entry->type() == core_options::option_type::MULTIPATH))
 			{
 				sm_option->value.clear();
 				std::string namestr(sm_option->entry->description());

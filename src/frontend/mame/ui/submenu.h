@@ -44,6 +44,7 @@ public:
 		option_type type;
 		const char *description = nullptr;
 		const char *name = nullptr;
+		const char *choices = nullptr; // values of a string option, separated by '|'
 		core_options::entry::shared_ptr entry;
 		core_options *options = nullptr;
 		std::vector<std::string> value;
