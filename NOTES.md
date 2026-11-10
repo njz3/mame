@@ -849,3 +849,33 @@ Partage sans relecture CPU, vu sur l'écran réel (60 captures du bureau de
 suite, aucune noire) : vr ×1 et ×2, vr ×2 16:9, raceon ×2 et ×2 16:9,
 pocketrc ×3. Le `PrintWindow` de `wincap.ps1` donne des images noires sur
 ces jeux : défaut de la capture, pas de l'affichage.
+
+### Suite du 2026-11-10 : volant, repli logiciel, rétroviseurs
+
+- **GTI Club** : « DEVICE ERROR (STEERING WHEEL) » venait du contrôle au
+  démarrage, à l'adresse ff80fc0c : couple croissant d'un côté (0x91 à 0x9f),
+  de l'autre (0x81 à 0x8f), puis de nouveau le premier côté. Le volant doit
+  bouger de 0x60 à un couple donné, aller de butée à butée et être centré. Un
+  petit modèle dans `gticlub.cpp` donne la position lue pendant ce contrôle,
+  du premier 0x91 à l'arrêt du moteur (0x00) ; ensuite le port du volant
+  reprend la main, sur les bornes aussi. thunderh et slrasslt ne sont pas
+  concernés. La démo 3D est vue de ×1 à ×4, avec et sans `-widescreen`.
+- **Repli logiciel** : System 23, PS1 et Voodoo restaient noirs ou muets si le
+  GPU échouait. Ils passent en natif avec un message. Essayé en provoquant la
+  panne (submit qui échoue après 400 appels, patch temporaire non commité) :
+  500gp, pocketrc, vr, ridgerac, sfrush, sidebs, roadedge, speedup, crusnusa,
+  winrun, gticlub2 reviennent à l'image. Le moteur `-video none` n'a pas pu
+  reproduire l'écran noir de 500gp vu sous forte charge : sa cause reste
+  supposée.
+- **Thrill Drive 2 et Xtrial Racing** : le jeu change de largeur de tampon à
+  chaque image pour son rétroviseur, ce qui détruisait les images GPU
+  (`hires_layout`) : le titre restait affiché pendant la course. Une cible
+  plus étroite garde maintenant les images. Elle est aussi dessinée par le
+  rasteriseur natif, car le rétroviseur est relu comme texture depuis la
+  mémoire native (`tmu_written` au retour à la largeur normale). Courses
+  complètes sur GPU : thrilld, thrild2, xtrial, de ×1 à ×4.
+- **Motocross Go!** : les pneus ont bien la couleur du sol sur une vraie borne
+  (vidéo vue par le propriétaire). Aucun défaut.
+- Vérification finale, Voodoo et Hang Pilot, 96 essais : thrild2, xtrial,
+  thrilld, gticlub2, sf2049se, sfrush, calspeed, cartfury, roadburn, racingj,
+  racingj2, hangplt, ×1 à ×4, avec et sans `-widescreen`, sans erreur.
