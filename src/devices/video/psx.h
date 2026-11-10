@@ -12,7 +12,11 @@
 
 #pragma once
 
+#include "hires3d.h"
 #include "machine/ram.h"
+#include "psxgpu_vk.h"
+
+#include <memory>
 
 #define PSXGPU_DEBUG_VIEWER ( 0 )
 
@@ -201,6 +205,18 @@ private:
 	};
 
 	void updatevisiblearea();
+	struct vk_vertices
+	{
+		psxgpu_vk::vertex vert[ 4 ];
+		int count = 0;
+		void add( int x, int y, PAIR const &bgr, int u = 0, int v = 0 );
+	};
+
+	void vk_primitive( psxgpu_vk::primitive &p, uint8_t n_cmd, bool textured, int n_tx, int n_ty, int n_clutx, int n_cluty );
+	void vk_poly( uint8_t n_cmd, vk_vertices &v, bool textured, int n_tx, int n_ty, int n_clutx, int n_cluty );
+	void vk_rect( uint8_t n_cmd, int x, int y, int w, int h, PAIR const &bgr );
+	void vk_sprite( uint8_t n_cmd, int x, int y, int w, int h, PAIR const &bgr, int u, int v, int du, int dv, int n_tx, int n_ty, int n_clutx, int n_cluty );
+	void vk_line( uint8_t n_cmd, int x0, int y0, PAIR const &bgr0, int x1, int y1, PAIR const &bgr1 );
 	void decode_tpage( uint32_t tpage );
 	void FlatPolygon( int n_points );
 	void FlatTexturedPolygon( int n_points );
@@ -264,6 +280,9 @@ private:
 	PACKET m_packet;
 
 	uint16_t *p_p_vram[ 1024 ];
+
+	std::unique_ptr<hires3d_output> m_hires;   // -hires3d, on the GPU
+	std::unique_ptr<psxgpu_vk> m_vk;
 
 	uint16_t p_n_redshade[ MAX_LEVEL * MAX_SHADE ];
 	uint16_t p_n_greenshade[ MAX_LEVEL * MAX_SHADE ];

@@ -10,6 +10,11 @@
 #include "emu.h"
 #include "psx.h"
 
+#include "emuopts.h"
+#include "vk3d.h"
+
+#include <cmath>
+
 #include "cpu/psx/psx.h"
 
 #include "screen.h"
@@ -53,6 +58,18 @@ void psxgpu_device::set_cpu(psxcpu_device* cpu)
 void psxgpu_device::device_start()
 {
 	screen().register_vblank_callback(vblank_state_delegate(&psxgpu_device::vblank, this));
+
+	// -hires3d: the primitives are also drawn on the GPU, at the high resolution
+	m_hires = std::make_unique<hires3d_output>(screen());
+	if ((m_hires->scale() > 1) && strcmp(machine().options().value(OPTION_HIRES3D_RENDERER), "software"))
+	{
+		std::string error;
+		m_vk = psxgpu_vk::create(m_hires->scale(), error);
+		if (m_vk)
+			osd_printf_verbose("psxgpu: hires3d drawn with Vulkan on %s\n", m_vk->device_name());
+		else
+			osd_printf_warning("psxgpu: Vulkan not available (%s), no high resolution\n", error);
+	}
 
 	for( int n_colour = 0; n_colour < 0x10000; n_colour++ )
 	{
@@ -755,6 +772,12 @@ uint32_t psxgpu_device::update_screen(screen_device &screen, bitmap_rgb32 &bitma
 		else
 		{
 			/* 15bit */
+			if( m_vk && m_hires->active() )
+			{
+				rectangle shown = m_hires->scaled( screen.visible_area() );
+				if( m_vk->show( p_p_vram, n_x + n_displaystartx, ( n_y + n_displaystarty ) & 1023, n_columns, n_lines, n_x + n_left, n_y + n_top, n_screenwidth, n_screenheight, *m_hires, shown ) )
+					m_hires->frame_done( screen.visible_area() );
+			}
 			n_line = n_lines;
 			while( n_line > 0 )
 			{
@@ -789,6 +812,109 @@ type 2
 f  e| d  c| b| a  9| 8  7| 6  5| 4| 3  2  1  0
     |iy|ix|ty|     |   tp|  abr|ty|         tx
 */
+
+void psxgpu_device::vk_primitive( psxgpu_vk::primitive &p, uint8_t n_cmd, bool textured, int n_tx, int n_ty, int n_clutx, int n_cluty )
+{
+	p.textured = textured;
+	p.raw = textured && ( n_cmd & 0x01 );
+	p.semi = ( n_cmd & 0x02 ) != 0;
+	p.interleaved = n_ti != 0;
+	p.abr = n_abr;
+	p.tp = n_tp;
+	p.tx = n_tx;
+	p.ty = n_ty;
+	p.clut_x = n_clutx;
+	p.clut_y = n_cluty;
+	p.tww = n_tww;
+	p.twh = n_twh;
+	p.clip_left = n_drawarea_x1;
+	p.clip_top = n_drawarea_y1;
+	p.clip_right = n_drawarea_x2;
+	p.clip_bottom = n_drawarea_y2;
+}
+
+void psxgpu_device::vk_vertices::add( int x, int y, PAIR const &bgr, int u, int v )
+{
+	vert[ count++ ] = { float( x ), float( y ), float( BGR_R( bgr ) ), float( BGR_G( bgr ) ), float( BGR_B( bgr ) ), float( u ), float( v ) };
+}
+
+void psxgpu_device::vk_poly( uint8_t n_cmd, vk_vertices &v, bool textured, int n_tx, int n_ty, int n_clutx, int n_cluty )
+{
+	psxgpu_vk::primitive p;
+	vk_primitive( p, n_cmd, textured, n_tx, n_ty, n_clutx, n_cluty );
+	// the GPU does not draw a triangle wider or taller than 1023 pixels
+	auto const culled = [ &v ]( int a, int b, int c )
+	{
+		auto const far = [ &v ]( int i, int j )
+		{
+			return std::abs( v.vert[ i ].x - v.vert[ j ].x ) > 1023.0f || std::abs( v.vert[ i ].y - v.vert[ j ].y ) > 1023.0f;
+		};
+		return far( a, b ) || far( b, c ) || far( c, a );
+	};
+	psxgpu_vk::vertex out[ 6 ];
+	int triangles = 0;
+	auto const add = [ & ]( int a, int b, int c )
+	{
+		if( culled( a, b, c ) )
+			return;
+		for( int i : { a, b, c } )
+		{
+			out[ triangles * 3 + ( ( i == a ) ? 0 : ( i == b ) ? 1 : 2 ) ] = v.vert[ i ];
+			out[ triangles * 3 + ( ( i == a ) ? 0 : ( i == b ) ? 1 : 2 ) ].x += n_drawoffset_x;
+			out[ triangles * 3 + ( ( i == a ) ? 0 : ( i == b ) ? 1 : 2 ) ].y += n_drawoffset_y;
+		}
+		triangles++;
+	};
+	add( 0, 1, 2 );
+	if( v.count == 4 )
+		add( 1, 3, 2 ); // the second triangle of a PlayStation quad
+	if( triangles )
+		m_vk->draw( p, out, triangles );
+}
+
+void psxgpu_device::vk_rect( uint8_t n_cmd, int x, int y, int w, int h, PAIR const &bgr )
+{
+	psxgpu_vk::primitive p;
+	vk_primitive( p, n_cmd, false, 0, 0, 0, 0 );
+	float const x0 = float( x + n_drawoffset_x ), y0 = float( y + n_drawoffset_y ), x1 = x0 + w, y1 = y0 + h;
+	float const r = BGR_R( bgr ), g = BGR_G( bgr ), b = BGR_B( bgr );
+	psxgpu_vk::vertex const v[ 6 ] = {
+		{ x0, y0, r, g, b, 0, 0 }, { x1, y0, r, g, b, 0, 0 }, { x1, y1, r, g, b, 0, 0 },
+		{ x0, y0, r, g, b, 0, 0 }, { x1, y1, r, g, b, 0, 0 }, { x0, y1, r, g, b, 0, 0 } };
+	m_vk->draw( p, v, 2 );
+}
+
+void psxgpu_device::vk_sprite( uint8_t n_cmd, int x, int y, int w, int h, PAIR const &bgr, int u, int v, int du, int dv, int n_tx, int n_ty, int n_clutx, int n_cluty )
+{
+	psxgpu_vk::primitive p;
+	vk_primitive( p, n_cmd, true, n_tx, n_ty, n_clutx, n_cluty );
+	float const x0 = float( x + n_drawoffset_x ), y0 = float( y + n_drawoffset_y ), x1 = x0 + w, y1 = y0 + h;
+	float const r = BGR_R( bgr ), g = BGR_G( bgr ), b = BGR_B( bgr );
+	// the texel of a pixel is the one at its corner, in both directions
+	float const u0 = float( ( du < 0 ) ? u + 1 : u ), v0 = float( ( dv < 0 ) ? v + 1 : v );
+	float const u1 = u0 + float( du * w ), v1 = v0 + float( dv * h );
+	psxgpu_vk::vertex const out[ 6 ] = {
+		{ x0, y0, r, g, b, u0, v0 }, { x1, y0, r, g, b, u1, v0 }, { x1, y1, r, g, b, u1, v1 },
+		{ x0, y0, r, g, b, u0, v0 }, { x1, y1, r, g, b, u1, v1 }, { x0, y1, r, g, b, u0, v1 } };
+	m_vk->draw( p, out, 2 );
+}
+
+void psxgpu_device::vk_line( uint8_t n_cmd, int x0, int y0, PAIR const &bgr0, int x1, int y1, PAIR const &bgr1 )
+{
+	psxgpu_vk::primitive p;
+	vk_primitive( p, n_cmd, false, 0, 0, 0, 0 );
+	float const ax = float( x0 + n_drawoffset_x ) + 0.5f, ay = float( y0 + n_drawoffset_y ) + 0.5f;
+	float const bx = float( x1 + n_drawoffset_x ) + 0.5f, by = float( y1 + n_drawoffset_y ) + 0.5f;
+	float dx = bx - ax, dy = by - ay;
+	float const len = std::sqrt( dx * dx + dy * dy );
+	if( len < 0.001f ) { dx = 1.0f; dy = 0.0f; } else { dx /= len; dy /= len; }
+	float const ex = dx * 0.5f, ey = dy * 0.5f, nx = -dy * 0.5f, ny = dx * 0.5f;
+	float const r0 = BGR_R( bgr0 ), g0 = BGR_G( bgr0 ), b0 = BGR_B( bgr0 ), r1 = BGR_R( bgr1 ), g1 = BGR_G( bgr1 ), b1 = BGR_B( bgr1 );
+	psxgpu_vk::vertex const v0a{ ax - ex + nx, ay - ey + ny, r0, g0, b0, 0, 0 }, v0b{ ax - ex - nx, ay - ey - ny, r0, g0, b0, 0, 0 };
+	psxgpu_vk::vertex const v1a{ bx + ex + nx, by + ey + ny, r1, g1, b1, 0, 0 }, v1b{ bx + ex - nx, by + ey - ny, r1, g1, b1, 0, 0 };
+	psxgpu_vk::vertex const out[ 6 ] = { v0a, v1a, v1b, v0a, v1b, v0b };
+	m_vk->draw( p, out, 2 );
+}
 
 void psxgpu_device::decode_tpage( uint32_t tpage )
 {
@@ -1399,6 +1525,7 @@ void psxgpu_device::FlatPolygon( int n_points )
 	PAIR n_cx2; n_cx2.d = 0;
 
 	SOLIDSETUP
+	if( m_vk ) { vk_vertices v; for( int i = 0; i < n_points; i++ ) v.add( S11_COORD_X( m_packet.FlatPolygon.vertex[ i ].n_coord ), S11_COORD_Y( m_packet.FlatPolygon.vertex[ i ].n_coord ), m_packet.FlatPolygon.n_bgr ); vk_poly( n_cmd, v, false, 0, 0, 0, 0 ); }
 
 	PAIR n_r; n_r.w.h = BGR_R( m_packet.FlatPolygon.n_bgr ); n_r.w.l = 0;
 	PAIR n_g; n_g.w.h = BGR_G( m_packet.FlatPolygon.n_bgr ); n_g.w.l = 0;
@@ -1522,6 +1649,7 @@ void psxgpu_device::FlatTexturedPolygon( int n_points )
 
 	decode_tpage( m_packet.FlatTexturedPolygon.vertex[ 1 ].n_texture.w.h );
 	TEXTURESETUP
+	if( m_vk ) { vk_vertices v; for( int i = 0; i < n_points; i++ ) v.add( S11_COORD_X( m_packet.FlatTexturedPolygon.vertex[ i ].n_coord ), S11_COORD_Y( m_packet.FlatTexturedPolygon.vertex[ i ].n_coord ), m_packet.FlatTexturedPolygon.n_bgr, TEXTURE_U( m_packet.FlatTexturedPolygon.vertex[ i ].n_texture ), TEXTURE_V( m_packet.FlatTexturedPolygon.vertex[ i ].n_texture ) ); vk_poly( n_cmd, v, true, n_tx, n_ty, n_clutx, n_cluty ); }
 
 	PAIR n_r; n_r.w.h = n_cmd & 0x01 ? 0x80 : BGR_R( m_packet.FlatTexturedPolygon.n_bgr ); n_r.w.l = 0;
 	PAIR n_g; n_g.w.h = n_cmd & 0x01 ? 0x80 : BGR_G( m_packet.FlatTexturedPolygon.n_bgr ); n_g.w.l = 0;
@@ -1675,6 +1803,7 @@ void psxgpu_device::GouraudPolygon( int n_points )
 	PAIR n_cb2; n_cb2.d = 0;
 
 	SOLIDSETUP
+	if( m_vk ) { vk_vertices v; for( int i = 0; i < n_points; i++ ) v.add( S11_COORD_X( m_packet.GouraudPolygon.vertex[ i ].n_coord ), S11_COORD_Y( m_packet.GouraudPolygon.vertex[ i ].n_coord ), m_packet.GouraudPolygon.vertex[ i ].n_bgr ); vk_poly( n_cmd, v, false, 0, 0, 0, 0 ); }
 
 	FINDTOPLEFT( GouraudPolygon )
 
@@ -1847,6 +1976,7 @@ void psxgpu_device::GouraudTexturedPolygon( int n_points )
 
 	decode_tpage( m_packet.GouraudTexturedPolygon.vertex[ 1 ].n_texture.w.h );
 	TEXTURESETUP
+	if( m_vk ) { vk_vertices v; for( int i = 0; i < n_points; i++ ) v.add( S11_COORD_X( m_packet.GouraudTexturedPolygon.vertex[ i ].n_coord ), S11_COORD_Y( m_packet.GouraudTexturedPolygon.vertex[ i ].n_coord ), m_packet.GouraudTexturedPolygon.vertex[ i ].n_bgr, TEXTURE_U( m_packet.GouraudTexturedPolygon.vertex[ i ].n_texture ), TEXTURE_V( m_packet.GouraudTexturedPolygon.vertex[ i ].n_texture ) ); vk_poly( n_cmd, v, true, n_tx, n_ty, n_clutx, n_cluty ); }
 
 	FINDTOPLEFT( GouraudTexturedPolygon )
 
@@ -2038,6 +2168,7 @@ void psxgpu_device::MonochromeLine()
 	uint8_t n_b = BGR_B( m_packet.MonochromeLine.n_bgr );
 
 	TRANSPARENCYSETUP
+	if( m_vk ) vk_line( n_cmd, S11_COORD_X( m_packet.MonochromeLine.vertex[ 0 ].n_coord ), S11_COORD_Y( m_packet.MonochromeLine.vertex[ 0 ].n_coord ), m_packet.MonochromeLine.n_bgr, S11_COORD_X( m_packet.MonochromeLine.vertex[ 1 ].n_coord ), S11_COORD_Y( m_packet.MonochromeLine.vertex[ 1 ].n_coord ), m_packet.MonochromeLine.n_bgr );
 
 	int32_t n_xlen;
 	if( n_xend > n_xstart )
@@ -2130,6 +2261,7 @@ void psxgpu_device::GouraudLine()
 	uint8_t n_cmd = BGR_C( m_packet.GouraudLine.vertex[ 0 ].n_bgr );
 
 	TRANSPARENCYSETUP
+	if( m_vk ) vk_line( n_cmd, S11_COORD_X( m_packet.GouraudLine.vertex[ 0 ].n_coord ), S11_COORD_Y( m_packet.GouraudLine.vertex[ 0 ].n_coord ), m_packet.GouraudLine.vertex[ 0 ].n_bgr, S11_COORD_X( m_packet.GouraudLine.vertex[ 1 ].n_coord ), S11_COORD_Y( m_packet.GouraudLine.vertex[ 1 ].n_coord ), m_packet.GouraudLine.vertex[ 1 ].n_bgr );
 
 	int32_t n_xstart = S11_COORD_X( m_packet.GouraudLine.vertex[ 0 ].n_coord );
 	int32_t n_ystart = S11_COORD_Y( m_packet.GouraudLine.vertex[ 0 ].n_coord );
@@ -2243,6 +2375,8 @@ void psxgpu_device::FrameBufferRectangleDraw()
 	DebugMeshEnd();
 #endif
 
+	if( m_vk ) m_vk->fill( COORD_X( m_packet.FlatRectangle.n_coord ) & 1023, COORD_Y( m_packet.FlatRectangle.n_coord ) & 1023, SIZE_W( m_packet.FlatRectangle.n_size ), SIZE_H( m_packet.FlatRectangle.n_size ), rgb_t( BGR_R( m_packet.FlatRectangle.n_bgr ), BGR_G( m_packet.FlatRectangle.n_bgr ), BGR_B( m_packet.FlatRectangle.n_bgr ) ) );
+
 	PAIR n_r; n_r.w.h = BGR_R( m_packet.FlatRectangle.n_bgr ); n_r.w.l = 0;
 	PAIR n_g; n_g.w.h = BGR_G( m_packet.FlatRectangle.n_bgr ); n_g.w.l = 0;
 	PAIR n_b; n_b.w.h = BGR_B( m_packet.FlatRectangle.n_bgr ); n_b.w.l = 0;
@@ -2287,6 +2421,7 @@ void psxgpu_device::FlatRectangle()
 	uint8_t n_cmd = BGR_C( m_packet.FlatRectangle.n_bgr );
 
 	SOLIDSETUP
+	if( m_vk ) vk_rect( n_cmd, S11_COORD_X( m_packet.FlatRectangle.n_coord ), S11_COORD_Y( m_packet.FlatRectangle.n_coord ), SIZE_W( m_packet.FlatRectangle.n_size ), SIZE_H( m_packet.FlatRectangle.n_size ), m_packet.FlatRectangle.n_bgr );
 
 	PAIR n_r; n_r.w.h = BGR_R( m_packet.FlatRectangle.n_bgr ); n_r.w.l = 0;
 	PAIR n_g; n_g.w.h = BGR_G( m_packet.FlatRectangle.n_bgr ); n_g.w.l = 0;
@@ -2336,6 +2471,7 @@ void psxgpu_device::FlatRectangle8x8()
 	uint8_t n_cmd = BGR_C( m_packet.FlatRectangle8x8.n_bgr );
 
 	SOLIDSETUP
+	if( m_vk ) vk_rect( n_cmd, S11_COORD_X( m_packet.FlatRectangle8x8.n_coord ), S11_COORD_Y( m_packet.FlatRectangle8x8.n_coord ), 8, 8, m_packet.FlatRectangle8x8.n_bgr );
 
 	PAIR n_r; n_r.w.h = BGR_R( m_packet.FlatRectangle8x8.n_bgr ); n_r.w.l = 0;
 	PAIR n_g; n_g.w.h = BGR_G( m_packet.FlatRectangle8x8.n_bgr ); n_g.w.l = 0;
@@ -2385,6 +2521,7 @@ void psxgpu_device::FlatRectangle16x16()
 	uint8_t n_cmd = BGR_C( m_packet.FlatRectangle16x16.n_bgr );
 
 	SOLIDSETUP
+	if( m_vk ) vk_rect( n_cmd, S11_COORD_X( m_packet.FlatRectangle16x16.n_coord ), S11_COORD_Y( m_packet.FlatRectangle16x16.n_coord ), 16, 16, m_packet.FlatRectangle16x16.n_bgr );
 
 	PAIR n_r; n_r.w.h = BGR_R( m_packet.FlatRectangle16x16.n_bgr ); n_r.w.l = 0;
 	PAIR n_g; n_g.w.h = BGR_G( m_packet.FlatRectangle16x16.n_bgr ); n_g.w.l = 0;
@@ -2438,6 +2575,7 @@ void psxgpu_device::FlatTexturedRectangle()
 
 	TEXTURESETUP
 	SPRITESETUP
+	if( m_vk ) vk_sprite( n_cmd, S11_COORD_X( m_packet.FlatTexturedRectangle.n_coord ), S11_COORD_Y( m_packet.FlatTexturedRectangle.n_coord ), SIZE_W( m_packet.FlatTexturedRectangle.n_size ), SIZE_H( m_packet.FlatTexturedRectangle.n_size ), m_packet.FlatTexturedRectangle.n_bgr, TEXTURE_U( m_packet.FlatTexturedRectangle.n_texture ), TEXTURE_V( m_packet.FlatTexturedRectangle.n_texture ), n_du, n_dv, n_tx, n_ty, n_clutx, n_cluty );
 
 	PAIR n_r; n_r.w.h = n_cmd & 0x01 ? 0x80 : BGR_R( m_packet.FlatTexturedRectangle.n_bgr ); n_r.w.l = 0;
 	PAIR n_g; n_g.w.h = n_cmd & 0x01 ? 0x80 : BGR_G( m_packet.FlatTexturedRectangle.n_bgr ); n_g.w.l = 0;
@@ -2495,6 +2633,7 @@ void psxgpu_device::Sprite8x8()
 
 	TEXTURESETUP
 	SPRITESETUP
+	if( m_vk ) vk_sprite( n_cmd, S11_COORD_X( m_packet.Sprite8x8.n_coord ), S11_COORD_Y( m_packet.Sprite8x8.n_coord ), 8, 8, m_packet.Sprite8x8.n_bgr, TEXTURE_U( m_packet.Sprite8x8.n_texture ), TEXTURE_V( m_packet.Sprite8x8.n_texture ), n_du, n_dv, n_tx, n_ty, n_clutx, n_cluty );
 
 	PAIR n_r; n_r.w.h = n_cmd & 0x01 ? 0x80 : BGR_R( m_packet.Sprite8x8.n_bgr ); n_r.w.l = 0;
 	PAIR n_g; n_g.w.h = n_cmd & 0x01 ? 0x80 : BGR_G( m_packet.Sprite8x8.n_bgr ); n_g.w.l = 0;
@@ -2553,6 +2692,7 @@ void psxgpu_device::Sprite16x16()
 
 	TEXTURESETUP
 	SPRITESETUP
+	if( m_vk ) vk_sprite( n_cmd, S11_COORD_X( m_packet.Sprite16x16.n_coord ), S11_COORD_Y( m_packet.Sprite16x16.n_coord ), 16, 16, m_packet.Sprite16x16.n_bgr, TEXTURE_U( m_packet.Sprite16x16.n_texture ), TEXTURE_V( m_packet.Sprite16x16.n_texture ), n_du, n_dv, n_tx, n_ty, n_clutx, n_cluty );
 
 	PAIR n_r; n_r.w.h = n_cmd & 0x01 ? 0x80 : BGR_R( m_packet.Sprite16x16.n_bgr ); n_r.w.l = 0;
 	PAIR n_g; n_g.w.h = n_cmd & 0x01 ? 0x80 : BGR_G( m_packet.Sprite16x16.n_bgr ); n_g.w.l = 0;
@@ -2609,6 +2749,7 @@ void psxgpu_device::Dot()
 	int32_t n_y = S11_COORD_Y( m_packet.Dot.vertex.n_coord );
 
 	TRANSPARENCYSETUP
+	if( m_vk ) vk_rect( n_cmd, S11_COORD_X( m_packet.Dot.vertex.n_coord ), S11_COORD_Y( m_packet.Dot.vertex.n_coord ), 1, 1, m_packet.Dot.n_bgr );
 
 	int drawx = n_x + n_drawoffset_x;
 	int drawy = n_y + n_drawoffset_y;
@@ -2689,6 +2830,13 @@ void psxgpu_device::MoveImage()
 	DebugMesh( S11_COORD_X( m_packet.MoveImage.vertex[ 1 ].n_coord ) + SIZE_W( m_packet.MoveImage.n_size ), S11_COORD_Y( m_packet.MoveImage.vertex[ 1 ].n_coord ) + SIZE_H( m_packet.MoveImage.n_size ) );
 	DebugMeshEnd();
 #endif
+
+	if( m_vk )
+	{
+		// what was drawn so far must take its textures from the VRAM before the move
+		m_vk->flush( p_p_vram );
+		m_vk->move( COORD_X( m_packet.MoveImage.vertex[ 0 ].n_coord ) & 1023, COORD_Y( m_packet.MoveImage.vertex[ 0 ].n_coord ) & 1023, COORD_X( m_packet.MoveImage.vertex[ 1 ].n_coord ) & 1023, COORD_Y( m_packet.MoveImage.vertex[ 1 ].n_coord ) & 1023, SIZE_W( m_packet.MoveImage.n_size ), SIZE_H( m_packet.MoveImage.n_size ) );
+	}
 
 	int16_t n_srcy = COORD_Y( m_packet.MoveImage.vertex[ 0 ].n_coord );
 	int16_t n_dsty = COORD_Y( m_packet.MoveImage.vertex[ 1 ].n_coord );
@@ -3117,6 +3265,8 @@ void psxgpu_device::gpu_write( uint32_t *p_ram, int32_t n_size )
 						( n_vramy + ( m_packet.n_entry[ 1 ] >> 16 ) ) & 1023,
 						data & 0xffff );
 
+					if( m_vk && !n_vramx && !n_vramy )
+						m_vk->flush( p_p_vram ); // the primitives drawn so far use the textures before this image
 					uint16_t *p_vram = p_p_vram[ ( n_vramy + ( m_packet.n_entry[ 1 ] >> 16 ) ) & 1023 ] + ( ( n_vramx + m_packet.n_entry[ 1 ] ) & 1023 );
 					WRITE_PIXEL( data & 0xffff )
 					n_vramx++;
@@ -3129,6 +3279,8 @@ void psxgpu_device::gpu_write( uint32_t *p_ram, int32_t n_size )
 							LOGMASKED(LOG_WRITE, "%s: %02x: send image to framebuffer %u,%u %u,%u\n", machine().describe_context(), m_packet.n_entry[ 0 ] >> 24,
 								m_packet.n_entry[ 1 ] & 0xffff, ( m_packet.n_entry[ 1 ] >> 16 ),
 								m_packet.n_entry[ 2 ] & 0xffff, ( m_packet.n_entry[ 2 ] >> 16 ) );
+							if( m_vk )
+								m_vk->upload( m_packet.n_entry[ 1 ] & 1023, ( m_packet.n_entry[ 1 ] >> 16 ) & 1023, m_packet.n_entry[ 2 ] & 0xffff, m_packet.n_entry[ 2 ] >> 16 );
 							n_gpu_buffer_offset = 0;
 							n_vramx = 0;
 							n_vramy = 0;

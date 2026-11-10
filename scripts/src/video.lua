@@ -1463,6 +1463,8 @@ if VIDEOS["PSX"] then
 	files {
 		MAME_DIR .. "src/devices/video/psx.cpp",
 		MAME_DIR .. "src/devices/video/psx.h",
+		MAME_DIR .. "src/devices/video/psxgpu_vk.cpp",
+		MAME_DIR .. "src/devices/video/psxgpu_vk.h",
 	}
 end
 
