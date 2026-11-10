@@ -879,3 +879,21 @@ ces jeux : défaut de la capture, pas de l'affichage.
 - Vérification finale, Voodoo et Hang Pilot, 96 essais : thrild2, xtrial,
   thrilld, gticlub2, sf2049se, sfrush, calspeed, cartfury, roadburn, racingj,
   racingj2, hangplt, ×1 à ×4, avec et sans `-widescreen`, sans erreur.
+
+### Suite du 2026-11-11 : menu vidéo, image noire de Thrill Drive 2
+
+- **Menu** : « Video Options » (réglages généraux et par jeu) a une section
+  « High Resolution 3D Options » : `-hires3d`, `-hires3d_renderer`,
+  `-bgfx_hires3d_share`, `-aspect_ratio`, `-crop_position`, `-widescreen`,
+  `-widescreen_2d`, `-widescreen_bg`. Pris en compte au lancement suivant,
+  pas à la volée (choix du propriétaire).
+- **Thrill Drive 2, Xtrial Racing** : une image sur deux du jeu sortait noire
+  avec Vulkan en ×2 à ×4 (le propriétaire voyait l'image clignoter). Le
+  rétroviseur, dessiné en natif sur la cible étroite, prenait quand même une
+  des trois copies haute résolution des tampons de couleur et chassait celle
+  d'un tampon à afficher ; ce tampon était alors montré depuis sa version
+  native, vide quand seul le GPU dessine. La cible étroite ne passe plus par
+  la copie haute résolution avec Vulkan. Les essais précédents (une capture
+  toutes les 300 images) tombaient toujours sur une bonne image : vérifié
+  cette fois image par image, en course, thrild2 ×2 à ×4, xtrial ×3 et ×4,
+  écarts entre images égaux au natif ; gticlub2 et sf2049se inchangés.

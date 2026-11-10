@@ -91,6 +91,13 @@ Display
   a background that does not extend past the 4:3 screen (HNG64 menus) is
   stretched with the rest.
 
+Since mame3d 0.289-2253-g3f418df
+- The high resolution 3D and display options can be set in the Video
+  Options menu (general settings and per machine), under "High Resolution
+  3D Options". They apply from the next game launched.
+- Thrill Drive 2, Xtrial Racing: every other frame was black with Vulkan
+  (x2 to x4), so the picture flickered. Fixed.
+
 Since mame3d 0.289-2240-g09f9d69
 - Sega Model 1: Vulkan picture handed to bgfx without read-back, and
   -widescreen.
