@@ -38,6 +38,7 @@
 !/.travis.yml
 !/makefile
 !/mame.doxygen
+!/README-mame3d.txt
 !/*.md
 !/*.bdf
 !/LICENSE
