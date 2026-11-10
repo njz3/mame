@@ -1242,6 +1242,10 @@ It can also be used with Final Furlong when wired correctly.
 #include "machine/nvram.h"
 #include "machine/rtc4543.h"
 #include "sound/c352.h"
+#include "emuopts.h"
+#include "hires3d.h"
+#include "namcos23_vk.h"
+#include "vk3d.h"
 #include "video/poly.h"
 #include "video/rgbutil.h"
 #include "emupal.h"
@@ -1531,6 +1535,10 @@ public:
 	namcos23_renderer(namcos23_state &state, const u16 *tmlrom, const u8 *tmhrom, const u8 *texrom, const u16 *texram,
 		const u32 tileid_mask, const u32 tile_mask);
 	void render_flush(screen_device &screen, bitmap_rgb32 &bitmap);
+	void set_vulkan(namcos23_vk *vk) { m_vk = vk; }
+	void send_polygons();
+	u32 const *tiles() const { return m_tile_words.get(); }
+	u32 tile_count() const { return (m_tileid_mask | 0xff) + 1; }
 	void render_sprite_scanline(s32 scanline, const extent_t& extent, const namcos23_render_data& object, int threadid);
 
 	template <bool Stencil, bool Shade, bool PolyFade, bool ColorFade, bool Blend, bool PolyAlpha>
@@ -1543,10 +1551,12 @@ private:
 	namcos23_state& m_state;
 	std::unique_ptr<u32[]> m_tmrom_decoded;
 	std::unique_ptr<u8[]> m_texattr_decoded;
+	std::unique_ptr<u32[]> m_tile_words;
 	const u8 *m_texrom;
 	const u16 *m_texram;
 	u32 m_tileid_mask;
 	u32 m_tile_mask;
+	namcos23_vk *m_vk = nullptr;
 };
 
 typedef namcos23_renderer::vertex_t poly_vertex;
@@ -1895,6 +1905,10 @@ protected:
 	void mcu_p6_w(u8 data);
 
 	virtual u32 screen_update(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect);
+	u32 screen_update_vulkan(screen_device &screen, const rectangle &cliprect);
+public:
+	pen_t const *palette_base() const { return m_palette->pens(); }
+protected:
 	TIMER_CALLBACK_MEMBER(subcpu_scanline_on_tick);
 	TIMER_CALLBACK_MEMBER(subcpu_scanline_off_tick);
 	virtual void vblank(int state);
@@ -1935,6 +1949,9 @@ protected:
 	required_shared_ptr<u32> m_generic_paletteram_32;
 
 	c404_t m_c404;
+	std::unique_ptr<hires3d_output> m_hires;     // -hires3d, on the GPU
+	std::unique_ptr<namcos23_vk> m_vk;
+	std::vector<u16> m_vk_text;
 	c361_t m_c361;
 	c417_t m_c417;
 	c412_t m_c412;
@@ -2318,6 +2335,7 @@ namcos23_renderer::namcos23_renderer(namcos23_state &state, const u16 *tmlrom, c
 {
 	m_tmrom_decoded = std::make_unique<u32[]>((m_tileid_mask | 0xff) + 1);
 	m_texattr_decoded = std::make_unique<u8[]>((m_tileid_mask | 0xff) + 1);
+	m_tile_words = std::make_unique<u32[]>((m_tileid_mask | 0xff) + 1);
 	for (u32 tileid = 0; tileid <= m_tileid_mask; tileid++)
 	{
 		u8 attr = tmhrom[tileid >> 1];
@@ -2327,6 +2345,7 @@ namcos23_renderer::namcos23_renderer(namcos23_state &state, const u16 *tmlrom, c
 			attr >>= 4;
 		m_tmrom_decoded[tileid] = ((tmlrom[tileid] | ((attr & 1) << 16)) & m_tile_mask) << 8;
 		m_texattr_decoded[tileid] = attr >> 1;
+		m_tile_words[tileid] = m_tmrom_decoded[tileid] | (attr >> 1);
 	}
 }
 
@@ -4376,6 +4395,49 @@ static int render_poly_compare(const void *i1, const void *i2)
 		render_triangle_fan<4>(scissor, render_delegate(&namcos23_renderer::render_scanline<stencil, shade, polyfade, colorfade, blend, polyalpha>, this), 6, p->pv); \
 	break;
 
+void namcos23_renderer::send_polygons()
+{
+	render_t &render = m_state.m_render;
+	pen_t const *const palette = m_state.palette_base();
+	for (int i = 0; i < render.poly_count; i++)
+	{
+		const namcos23_poly_entry *p = render.poly_order[i];
+		if (p->rd.sprite || (p->vertex_count < 3))
+			continue;
+		const namcos23_render_data &rd = p->rd;
+		namcos23_vk::polygon out;
+		out.stencil = rd.stencil_enabled;
+		out.shade = rd.shade_enabled;
+		out.poly_fade = rd.pfade_enabled;
+		out.color_fade = rd.fadefactor != 0xff;
+		out.blend = rd.blend_enabled;
+		out.poly_alpha = rd.alpha != 0xff;
+		out.alpha_enabled = rd.alpha_enabled;
+		out.tbase = rd.tbase;
+		out.cmode = rd.cmode;
+		out.palette = u32(rd.pens - palette);
+		out.intensity_base = rd.intensity_base;
+		out.fade_factor = rd.fadefactor;
+		out.fade_factor_inv = rd.fadefactor_inv;
+		out.fade_r = rd.fadecolor_r;
+		out.fade_g = rd.fadecolor_g;
+		out.fade_b = rd.fadecolor_b;
+		out.poly_r = rd.polycolor_r;
+		out.poly_g = rd.polycolor_g;
+		out.poly_b = rd.polycolor_b;
+		out.alpha = rd.alpha;
+		out.alpha_pen = rd.poly_alpha_pen;
+		out.clip_left = (320 - rd.vp_size_x) + rd.vp_offset_x;
+		out.clip_right = (320 + rd.vp_size_x) + rd.vp_offset_x;
+		out.clip_top = (240 - rd.vp_size_y) - rd.vp_offset_y;
+		out.clip_bottom = (240 + rd.vp_size_y) - rd.vp_offset_y;
+		namcos23_vk::vertex v[16];
+		for (int j = 0; j < p->vertex_count; j++)
+			v[j] = { p->pv[j].x, p->pv[j].y, p->pv[j].p[0], p->pv[j].p[1], p->pv[j].p[2], p->pv[j].p[3] };
+		m_vk->add_polygon(out, v, p->vertex_count);
+	}
+}
+
 void namcos23_renderer::render_flush(screen_device &screen, bitmap_rgb32 &bitmap)
 {
 	render_t &render = m_state.m_render;
@@ -4387,6 +4449,13 @@ void namcos23_renderer::render_flush(screen_device &screen, bitmap_rgb32 &bitmap
 		render.poly_order[i] = &render.polys[i];
 
 	qsort(render.poly_order, render.poly_count, sizeof(namcos23_poly_entry *), render_poly_compare);
+
+	if (m_vk)
+	{
+		send_polygons();
+		render.poly_count = 0;
+		return;
+	}
 
 	const static rectangle scissor(0, 639, 0, 479);
 
@@ -4847,11 +4916,35 @@ void namcos23_state::video_start()
 	m_render.polymgr = std::make_unique<namcos23_renderer>(*this, m_tmlrom, m_tmhrom, m_texrom, m_c412.sram, m_tileid_mask, m_tile_mask);
 
 	m_ptrom_limit = memregion("pointrom")->bytes()/4;
+
+	// -hires3d: on the GPU (nothing in software); -widescreen too, even at x1
+	m_hires = std::make_unique<hires3d_output>(*m_screen);
+	m_hires->allow_widescreen(true);
+	if (((m_hires->scale() > 1) || m_hires->wide()) && strcmp(machine().options().value(OPTION_HIRES3D_RENDERER), "software"))
+	{
+		std::string error;
+		m_vk = namcos23_vk::create(m_hires->scale(), m_hires->wide() ? m_hires->pad() : 0, m_hires->wide() && m_hires->stretch_2d(), m_texrom, memregion("textile")->bytes(),
+				m_render.polymgr->tiles(), m_render.polymgr->tile_count(), m_tileid_mask, error);
+		if (m_vk)
+		{
+			osd_printf_verbose("namcos23: hires3d drawn with Vulkan on %s\n", m_vk->device_name());
+			m_vk_text.resize(640 * 480);
+			m_render.polymgr->set_vulkan(m_vk.get());
+		}
+		else
+			osd_printf_warning("namcos23: Vulkan not available (%s), no high resolution\n", error);
+	}
+	m_hires->allow_widescreen(m_vk != nullptr);
 }
 
 void gorgon_state::video_start()
 {
 	namcos23_state::video_start();
+
+	// its sprites are not drawn on the GPU
+	m_render.polymgr->set_vulkan(nullptr);
+	m_vk.reset();
+	m_hires->allow_widescreen(false);
 	m_sprrom = memregion("sprites")->base();
 }
 
@@ -4987,6 +5080,65 @@ u32 gorgon_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, con
 	return namcos23_state::screen_update(screen, bitmap, cliprect);
 }
 
+u32 namcos23_state::screen_update_vulkan(screen_device &screen, const rectangle &cliprect)
+{
+	screen.priority().fill(0, cliprect);
+	m_mix_bitmap->fill(0xffff, cliprect);
+	if (m_c404.layer_flags & 4)
+	{
+		apply_text_scroll();
+		draw_text_layer(screen);
+	}
+	for (int y = 0; y < 480; y++)
+	{
+		u16 const *const src = &m_mix_bitmap->pix(y);
+		u8 const *const pri = &screen.priority().pix(y);
+		u16 *const out = &m_vk_text[size_t(y) * 640];
+		for (int x = 0; x < 640; x++)
+			out[x] = (pri[x] & 4) ? src[x] : 0xffff;
+	}
+
+	s32 bg_r = (s32)m_c404.bgcolor_r;
+	s32 bg_g = (s32)m_c404.bgcolor_g;
+	s32 bg_b = (s32)m_c404.bgcolor_b;
+	if (m_c404.fade_flags & 1 && m_c404.screen_fade_factor)
+	{
+		const s32 scale1 = (s32)(0xff - m_c404.screen_fade_factor);
+		const s32 scale2 = 0x100 - scale1;
+		bg_r = ((bg_r * scale1) + ((s32)m_c404.screen_fade_r * scale2)) >> 8;
+		bg_g = ((bg_g * scale1) + ((s32)m_c404.screen_fade_g * scale2)) >> 8;
+		bg_b = ((bg_b * scale1) + ((s32)m_c404.screen_fade_b * scale2)) >> 8;
+	}
+	m_vk->begin_frame(rgb_t(bg_r, bg_g, bg_b));
+
+	// the polygons of this frame, sorted, go to the GPU
+	bitmap_rgb32 unused;
+	render_run(screen, unused);
+
+	namcos23_vk::text_mix mix{};
+	mix.fade = (m_c404.fade_flags & 2) && m_c404.screen_fade_factor;
+	mix.fade_factor = 0xff - m_c404.screen_fade_factor;
+	mix.fade_factor_inv = 0x100 - mix.fade_factor;
+	mix.fade_r = m_c404.screen_fade_r;
+	mix.fade_g = m_c404.screen_fade_g;
+	mix.fade_b = m_c404.screen_fade_b;
+	mix.alpha_factor = 0xff - m_c404.alpha_factor;
+	mix.alpha_factor_inv = m_c404.alpha_factor ? (0x100 - mix.alpha_factor) : 0;
+	mix.alpha_mask = m_c404.alpha_mask;
+	mix.alpha_low = m_c404.alpha_check12;
+	mix.alpha_high = m_c404.alpha_check13;
+
+	rectangle shown = m_hires->scaled(screen.visible_area());
+	if (m_hires->wide())
+	{
+		shown.min_x -= m_hires->pad();
+		shown.max_x += m_hires->pad();
+	}
+	if (m_vk->end_frame(m_palette->pens(), m_palette->entries(), &m_vk_text[0], mix, &m_c404.ram[0], m_c412.sram, *m_hires, shown))
+		m_hires->frame_done(screen.visible_area());
+	return 0;
+}
+
 u32 namcos23_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect)
 {
 	if (machine().video().skip_this_frame())
@@ -4997,6 +5149,9 @@ u32 namcos23_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, c
 
 		return UPDATE_HAS_NOT_CHANGED;
 	}
+
+	if (m_vk && m_hires->active())
+		return screen_update_vulkan(screen, cliprect);
 
 	screen.priority().fill(0, cliprect);
 
