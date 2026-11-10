@@ -53,6 +53,9 @@ public:
 
 	std::string const &device_name() const;
 
+	// the GPU stopped working: nothing is drawn any more
+	bool failed() const;
+
 	// triangles of a primitive, count * 3 vertices
 	void draw(primitive const &p, vertex const *v, int count);
 

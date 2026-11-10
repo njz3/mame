@@ -94,6 +94,7 @@ struct psxgpu_vk::impl : vk3d_context
 	buffer host;
 	buffer readback;
 	bool busy = false;
+	bool failed = false;
 
 	std::unique_ptr<vk3d_share> share;
 
@@ -386,7 +387,8 @@ void psxgpu_vk::impl::wait()
 	if (!busy)
 		return;
 	osd_ticks_t const start = osd_ticks();
-	vkWaitForFences(device, 1, &fence, VK_TRUE, ~u64(0));
+	if (vkWaitForFences(device, 1, &fence, VK_TRUE, ~u64(0)) != VK_SUCCESS)
+		failed = true;
 	vkResetFences(device, 1, &fence);
 	wait_ticks += osd_ticks() - start;
 	busy = false;
@@ -537,8 +539,11 @@ bool psxgpu_vk::impl::submit(u16 const *const *vram_rows, bool with_output)
 	wait();
 	u32 const record_words = u32(records.size());
 	VkDeviceSize const bytes = VkDeviceSize(VRAM_WORDS + record_words) * 4;
-	if (!ensure_data(bytes))
+	if (failed || !ensure_data(bytes))
+	{
+		failed = true;
 		return false;
+	}
 	u32 *const out = reinterpret_cast<u32 *>(host.mapped);
 	for (int y = 0; y < VRAM_HEIGHT; y++)
 		std::memcpy(reinterpret_cast<u16 *>(out) + size_t(y) * VRAM_WIDTH, vram_rows[y], VRAM_WIDTH * 2);
@@ -591,9 +596,17 @@ std::string const &psxgpu_vk::device_name() const
 }
 
 
+bool psxgpu_vk::failed() const
+{
+	return m->failed;
+}
+
+
 void psxgpu_vk::draw(primitive const &p, vertex const *v, int count)
 {
 	impl &s = *m;
+	if (s.failed)
+		return;
 	int const left = std::clamp(p.clip_left, 0, VRAM_WIDTH) * s.scale;
 	int const top = std::clamp(p.clip_top, 0, VRAM_HEIGHT) * s.scale;
 	int const right = std::clamp(p.clip_right + 1, 0, VRAM_WIDTH) * s.scale;
@@ -626,6 +639,8 @@ void psxgpu_vk::draw(primitive const &p, vertex const *v, int count)
 void psxgpu_vk::fill(int x, int y, int w, int h, rgb_t color)
 {
 	impl &s = *m;
+	if (s.failed)
+		return;
 	float const x0 = float(x), y0 = float(y), x1 = float(x + w), y1 = float(y + h);
 	float const r = color.r(), g = color.g(), b = color.b();
 	vertex const v[6] = {
@@ -650,12 +665,16 @@ void psxgpu_vk::flush(u16 const *const *vram)
 	submit.pCommandBuffers = &cmd;
 	if (s.vkQueueSubmit(s.queue, 1, &submit, s.fence) == VK_SUCCESS)
 		s.busy = true;
+	else
+		s.failed = true;
 }
 
 
 void psxgpu_vk::upload(int x, int y, int w, int h)
 {
 	impl &s = *m;
+	if (s.failed)
+		return;
 	float const x0 = float(x), y0 = float(y), x1 = float(x + w), y1 = float(y + h);
 	vertex const v[6] = {
 		{ x0, y0, 0, 0, 0, x0, y0 }, { x1, y0, 0, 0, 0, x1, y0 }, { x1, y1, 0, 0, 0, x1, y1 },
@@ -668,7 +687,7 @@ void psxgpu_vk::upload(int x, int y, int w, int h)
 void psxgpu_vk::move(int sx, int sy, int dx, int dy, int w, int h)
 {
 	impl &s = *m;
-	if ((w <= 0) || (h <= 0) || (sx < 0) || (sy < 0) || (dx < 0) || (dy < 0) || (sx + w > VRAM_WIDTH) || (dx + w > VRAM_WIDTH) || (sy + h > VRAM_HEIGHT) || (dy + h > VRAM_HEIGHT))
+	if (s.failed || (w <= 0) || (h <= 0) || (sx < 0) || (sy < 0) || (dx < 0) || (dy < 0) || (sx + w > VRAM_WIDTH) || (dx + w > VRAM_WIDTH) || (sy + h > VRAM_HEIGHT) || (dy + h > VRAM_HEIGHT))
 		return;
 	command c{};
 	c.type = CMD_MOVE;
@@ -739,7 +758,10 @@ bool psxgpu_vk::show(u16 const *const *vram, int x, int y, int w, int h, int lef
 	submit.commandBufferCount = 1;
 	submit.pCommandBuffers = &cmd;
 	if (s.vkQueueSubmit(s.queue, 1, &submit, s.fence) != VK_SUCCESS)
+	{
+		s.failed = true;
 		return false;
+	}
 	s.busy = true;
 	s.frames++;
 
@@ -751,6 +773,8 @@ bool psxgpu_vk::show(u16 const *const *vram, int x, int y, int w, int h, int lef
 	}
 
 	s.wait();
+	if (s.failed)
+		return false;
 	if (!s.readback.coherent)
 	{
 		VkMappedMemoryRange mapped{ VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE };

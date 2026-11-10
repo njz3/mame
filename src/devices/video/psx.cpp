@@ -775,8 +775,14 @@ uint32_t psxgpu_device::update_screen(screen_device &screen, bitmap_rgb32 &bitma
 			if( m_vk && m_hires->active() )
 			{
 				rectangle shown = m_hires->scaled( screen.visible_area() );
-				if( m_vk->show( p_p_vram, n_x + n_displaystartx, ( n_y + n_displaystarty ) & 1023, n_columns, n_lines, n_x + n_left, n_y + n_top, n_screenwidth, n_screenheight, *m_hires, shown ) )
+				bool const shown_on_gpu = !m_vk->failed() && m_vk->show( p_p_vram, n_x + n_displaystartx, ( n_y + n_displaystarty ) & 1023, n_columns, n_lines, n_x + n_left, n_y + n_top, n_screenwidth, n_screenheight, *m_hires, shown );
+				if( shown_on_gpu )
 					m_hires->frame_done( screen.visible_area() );
+				else if( !m_vk_reported )
+				{
+					m_vk_reported = true;
+					m_hires->disable_vulkan( "frame submission failed" );
+				}
 			}
 			n_line = n_lines;
 			while( n_line > 0 )

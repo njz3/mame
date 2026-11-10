@@ -99,6 +99,7 @@ struct namcos23_vk::impl : vk3d_context
 	buffer host;
 	buffer readback;
 	bool busy = false;
+	bool failed = false;      // the GPU stopped working
 
 	std::unique_ptr<vk3d_share> share;
 	vk3d_share::target *shown_shared = nullptr;
@@ -427,7 +428,8 @@ void namcos23_vk::impl::wait()
 	if (!busy)
 		return;
 	osd_ticks_t const start = osd_ticks();
-	vkWaitForFences(device, 1, &fence, VK_TRUE, ~u64(0));
+	if (vkWaitForFences(device, 1, &fence, VK_TRUE, ~u64(0)) != VK_SUCCESS)
+		failed = true;
 	vkResetFences(device, 1, &fence);
 	wait_ticks += osd_ticks() - start;
 	busy = false;
@@ -518,6 +520,8 @@ bool namcos23_vk::end_frame(pen_t const *palette, u32 colors, u16 const *text, t
 {
 	impl &s = *m;
 	s.wait();
+	if (s.failed)
+		return false;
 
 	u32 const record_words = u32(s.records.size());
 	u32 const palette_base = record_words;
@@ -648,6 +652,8 @@ bool namcos23_vk::end_frame(pen_t const *palette, u32 colors, u16 const *text, t
 
 	// read back now: the frame is in the output's own bitmap
 	s.wait();
+	if (s.failed)
+		return false;
 	if (!s.readback.coherent)
 	{
 		VkMappedMemoryRange range{ VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE };

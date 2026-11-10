@@ -1905,7 +1905,7 @@ protected:
 	void mcu_p6_w(u8 data);
 
 	virtual u32 screen_update(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect);
-	u32 screen_update_vulkan(screen_device &screen, const rectangle &cliprect);
+	bool screen_update_vulkan(screen_device &screen, const rectangle &cliprect);
 public:
 	pen_t const *palette_base() const { return m_palette->pens(); }
 protected:
@@ -1951,6 +1951,7 @@ protected:
 	c404_t m_c404;
 	std::unique_ptr<hires3d_output> m_hires;     // -hires3d, on the GPU
 	std::unique_ptr<namcos23_vk> m_vk;
+	bool m_vk_failed = false;
 	std::vector<u16> m_vk_text;
 	c361_t m_c361;
 	c417_t m_c417;
@@ -5080,7 +5081,7 @@ u32 gorgon_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, con
 	return namcos23_state::screen_update(screen, bitmap, cliprect);
 }
 
-u32 namcos23_state::screen_update_vulkan(screen_device &screen, const rectangle &cliprect)
+bool namcos23_state::screen_update_vulkan(screen_device &screen, const rectangle &cliprect)
 {
 	screen.priority().fill(0, cliprect);
 	m_mix_bitmap->fill(0xffff, cliprect);
@@ -5135,8 +5136,18 @@ u32 namcos23_state::screen_update_vulkan(screen_device &screen, const rectangle 
 		shown.max_x += m_hires->pad();
 	}
 	if (m_vk->end_frame(m_palette->pens(), m_palette->entries(), &m_vk_text[0], mix, &m_c404.ram[0], m_c412.sram, *m_hires, shown))
+	{
 		m_hires->frame_done(screen.visible_area());
-	return 0;
+		return true;
+	}
+
+	// the GPU failed: in software from now on, the renderer stays alive for
+	// the frame the display may still hold
+	m_hires->disable_vulkan("frame submission failed");
+	m_render.polymgr->set_vulkan(nullptr);
+	m_hires->allow_widescreen(false);
+	m_vk_failed = true;
+	return false;
 }
 
 u32 namcos23_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect)
@@ -5150,8 +5161,8 @@ u32 namcos23_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, c
 		return UPDATE_HAS_NOT_CHANGED;
 	}
 
-	if (m_vk && m_hires->active())
-		return screen_update_vulkan(screen, cliprect);
+	if (m_vk && !m_vk_failed && m_hires->active() && screen_update_vulkan(screen, cliprect))
+		return 0;
 
 	screen.priority().fill(0, cliprect);
 

@@ -283,6 +283,7 @@ private:
 
 	std::unique_ptr<hires3d_output> m_hires;   // -hires3d, on the GPU
 	std::unique_ptr<psxgpu_vk> m_vk;
+	bool m_vk_reported = false;
 
 	uint16_t p_n_redshade[ MAX_LEVEL * MAX_SHADE ];
 	uint16_t p_n_greenshade[ MAX_LEVEL * MAX_SHADE ];
