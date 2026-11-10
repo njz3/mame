@@ -799,3 +799,38 @@ Toutes les puces de la liste ont un rendu logiciel HD et un rendu Vulkan
     n'est pas une puissance de 2) masque ses coordonnées avec `taille - 1`
     et montre des bandes répétées ; le chemin GPU passe maintenant par un
     modulo et est correct en ×3. Le chemin logiciel n'est pas corrigé.
+
+## État au 2026-11-10 (session interrompue, à reprendre)
+
+Mandat : tous les points de la liste sauf 1, 4, 8, 9, puis essais de tous les
+jeux en ×1 à ×4, avec et sans `-widescreen`. Pas de push, pas de release.
+
+- **Model 1** (bf63fc36f50) : partage bgfx et 16:9 faits.
+- **System 23** (84f118c06f9) : rendu Vulkan (`namcos23_vk`), hors Gorgon. Race
+  On! : course complète en ×2 (65 % de la vitesse, limité par le CPU émulé).
+- **PlayStation** (ce5c31da416) : `psxgpu_vk`. Le rendu logiciel continue sur la
+  VRAM native (textures, lectures du jeu) ; les primitives sont redessinées
+  dans une copie de la VRAM à haute résolution, et la zone affichée en est
+  tirée. Le GPU rejette comme le matériel les triangles de plus de 1023
+  pixels (sinon blocs colorés en bas à gauche dans kartduel). 15 bits
+  seulement : le mode 24 bits et l'écran éteint restent en natif. Pas de 16:9
+  (projection faite par le jeu). Essayé en démo, lecture GPU :
+  pocketrc ×3, kartduel ×2 ×4. **Pas encore vu dans une fenêtre bgfx.**
+- **Viper et Thrill Drive** : thrild2, xtrial (Viper) et thrilld (Hornet)
+  démarrent et jouent leur démo sans modification, malgré « not working ».
+  thrilld demande d'initialiser sa mémoire (bouton Test) ; il tourne en ×2 sur
+  le GPU. thrild2 et xtrial essayés en natif seulement.
+- **Point 3** : en course sur le GPU : roadburn ×3, windheat ×2, racingj ×2,
+  racingj2 ×2, calspeed ×2. racingj et racingj2 demandent aussi l'initialisation.
+  Le rectangle gris de Racing Jam (rétroviseur, aperçu de voiture) existe aussi
+  en natif et en logiciel : ce n'est pas le rendu GPU.
+- **Matrice** : 121 essais sur 336 faits, tous sortis avec le code 0 : 500gp,
+  acedrive, crusnexo, crusnusa, crusnwld, dirtdash, driveyes, gticlub, hangplt,
+  kartduel, midnrun, motoxgo, offroadc, pocketrc (8 configurations chacun),
+  raceon (6 sur 8), calspeed, cartfury, gticlub2 (1 sur 8). Le code de sortie
+  seul est vérifié : les images n'ont pas encore été regardées. Deux instances
+  du même jeu à disque dur (CHD) ne peuvent pas tourner ensemble : ces jeux
+  sont à passer un par un.
+- **À faire** : finir la matrice (avec une passe séquentielle pour les jeux à
+  CHD), regarder les images, essais en fenêtre bgfx de pocketrc ×3, raceon ×2
+  et vr ×2 en 16:9, thrild2 et xtrial sur le GPU.
