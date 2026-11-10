@@ -52,6 +52,9 @@ public:
 
 	std::string const &device_name() const;
 
+	// the GPU stopped working
+	bool failed() const;
+
 	// the static texel tables, recognised by address: rgb332, alpha8, int8,
 	// ai44 (256 entries), rgb565, argb1555, argb4444 (65536 entries)
 	void set_static_lookups(rgb_t const *const tables[7]);

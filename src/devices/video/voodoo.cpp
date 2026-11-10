@@ -2413,7 +2413,7 @@ u32 voodoo_1_device::reg_fastfill_w(u32 chipmask, u32 regnum, u32 data)
 	// 2 pixels per clock (only the GPU draws it, as for triangles)
 	u32 pixels;
 	bool const hires = hires_wanted();
-	if (hires && gpu_only())
+	if (hires && gpu_only() && !hires_offscreen())
 	{
 		auto const fbzmode = poly.raster.fbzmode();
 		pixels = (fbzmode.rgb_buffer_mask() || fbzmode.aux_buffer_mask()) ? std::max(poly.clipright - poly.clipleft, 0) * std::max(poly.clipbottom - poly.cliptop, 0) : 0;
@@ -2425,7 +2425,11 @@ u32 voodoo_1_device::reg_fastfill_w(u32 chipmask, u32 regnum, u32 data)
 	{
 		pixels = m_renderer->enqueue_fastfill(poly);
 		if (hires)
+		{
+			if (m_vk && hires_offscreen())
+				hires_note_offscreen(poly.destbase);
 			hires_fastfill(poly);
+		}
 	}
 	return pixels / 2;
 }
@@ -2809,6 +2813,14 @@ int voodoo_1_device::update_common(bitmap_rgb32 &bitmap, const rectangle &clipre
 	bool changed = m_video_changed;
 	m_video_changed = false;
 
+	// the GPU failed: the chip draws at the native resolution from now on
+	if (m_vk && m_vk->failed())
+	{
+		m_hires->disable_vulkan("frame submission failed");
+		m_vk_failed = std::move(m_vk);
+		m_hires_scale = 1;
+	}
+
 	// select the buffer to draw
 	int drawbuf = m_frontbuf;
 	if (DEBUG_BACKBUF && machine().input().code_pressed(KEYCODE_L))
@@ -3188,7 +3200,7 @@ s32 voodoo_1_device::triangle()
 	// estimated from its area
 	s32 pixels;
 	bool const hires = hires_wanted();
-	if (hires && gpu_only())
+	if (hires && gpu_only() && !hires_offscreen())
 	{
 		pixels = estimated_pixels(poly, vert);
 		m_lfb_stats.pixels_in += pixels;
@@ -3201,7 +3213,11 @@ s32 voodoo_1_device::triangle()
 	{
 		pixels = m_renderer->enqueue_triangle(poly, vert);
 		if (hires)
+		{
+			if (m_vk && hires_offscreen())
+				hires_note_offscreen(poly.destbase);
 			hires_triangle(poly, vert);
+		}
 	}
 
 	// update stats
@@ -3653,11 +3669,33 @@ int voodoo_1_device::hires_find_slot(u32 offset) const
 //  screen height changed (Banshee and later)
 //-------------------------------------------------
 
+void voodoo_1_device::hires_note_offscreen(u16 const *buffer)
+{
+	m_hires_mirror_offset = u32(reinterpret_cast<u8 const *>(buffer) - m_fbram);
+	m_hires_mirror_rowpixels = m_renderer->rowpixels();
+}
+
+
 void voodoo_1_device::hires_layout()
 {
 	u32 const rowpixels = m_renderer->rowpixels();
 	u32 const rows = m_height;
+
+	// back from a narrow target: the GPU reads it as a texture from the
+	// native memory, where the native rasterizer drew it
+	if (m_vk && (m_hires_mirror_offset != ~0U) && (rowpixels >= m_hires_rowpixels))
+	{
+		m_renderer->wait("hires_layout");
+		u32 const bytes = std::min<u32>(m_hires_mirror_rowpixels * rows * 2, m_fbmask + 1 - m_hires_mirror_offset);
+		m_vk->tmu_written(0, m_fbram + m_hires_mirror_offset, bytes);
+		m_hires_mirror_offset = ~0U;
+	}
+
 	if (!m_hires_shared || ((rowpixels == m_hires_rowpixels) && (rows == m_hires_rows)))
+		return;
+	// a narrower target fits in the GPU images, which are addressed by row and
+	// column: Thrill Drive 2 changes the stride for its mirror on every frame
+	if (m_vk && (rowpixels != 0) && (rowpixels < m_hires_rowpixels) && (rows == m_hires_rows))
 		return;
 	m_hires_rowpixels = rowpixels;
 	m_hires_rows = rows;

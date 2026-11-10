@@ -642,6 +642,11 @@ protected:
 	void hires_fbram_written(u32 byteoffs);
 	int hires_find_slot(u32 offset) const;
 	void hires_layout();
+	void hires_note_offscreen(u16 const *buffer);
+
+	// drawing in a target narrower than the screen (a rear-view mirror): the
+	// games use it as a texture, which comes from the native memory
+	bool hires_offscreen() const { return m_hires_shared && (m_renderer->rowpixels() < m_hires_rowpixels); }
 	void hires_mem_writing(u32 byteoffs, u32 bytes);
 	void hires_mem_written(u32 byteoffs, u32 bytes);
 	bool hires_in_buffers(u32 byteoffs, u32 bytes) const;
@@ -695,10 +700,13 @@ protected:
 	std::unique_ptr<hires3d_output> m_hires; // output, when there is a screen
 	int m_hires_scale = 1;                   // resolution multiplier (1 = off)
 	std::unique_ptr<voodoo::voodoo_vk> m_vk; // GPU renderer
+	std::unique_ptr<voodoo::voodoo_vk> m_vk_failed; // kept for the frame the display may still hold
 	u64 m_hires_frame = 0;                   // last frame shown at the high resolution
 	bool m_hires_shared = false;             // Banshee and later: copies per buffer address
 	u32 m_hires_rows = 0;                    // their rows (native)
 	u32 m_hires_rowpixels = 0;               // their row width (native)
+	u32 m_hires_mirror_offset = ~0U;         // the narrow target drawn lately, or ~0
+	u32 m_hires_mirror_rowpixels = 0;        // its row width
 	u32 m_hires_slot[3] = { ~0U, ~0U, ~0U }; // colour buffer held by each copy
 	u64 m_hires_slot_use[3] = { };           // when each was last drawn into
 	u64 m_hires_uses = 0;

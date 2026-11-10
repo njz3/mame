@@ -297,6 +297,7 @@ struct voodoo_vk::impl : vk3d_context
 	VkRect2D clip(s32 left, s32 top, s32 right, s32 bottom) const; // right/bottom exclusive
 	void begin_pass(VkCommandBuffer cmd, int buffer);
 	bool flush(int readback_index, bool wait, vk3d_share::target *shared = nullptr, s32 sx = 0, s32 sy = 0);
+	bool failed = false;
 	bool shared_holds(int buffer, rectangle const &area, s32 xoffs, s32 yoffs) const;
 	void copy_shared(int buffer, rectangle const &area, s32 xoffs, s32 yoffs);
 };
@@ -875,7 +876,8 @@ void voodoo_vk::impl::wait_slot(slot &target)
 	if (!target.busy)
 		return;
 	osd_ticks_t const start = osd_ticks();
-	vkWaitForFences(device, 1, &target.fence, VK_TRUE, ~u64(0));
+	if (vkWaitForFences(device, 1, &target.fence, VK_TRUE, ~u64(0)) != VK_SUCCESS)
+		failed = true;
 	wait_ticks += osd_ticks() - start;
 	target.busy = false;
 }
@@ -1073,7 +1075,10 @@ bool voodoo_vk::impl::flush(int readback_index, bool wait, vk3d_share::target *s
 	VkBuffer const old_lookup = data[DATA_LOOKUP].handle;
 	for (int i = 0; i < DATA_COUNT; i++)
 		if (!ensure_device(data[i], bytes[i]) || !ensure_host(sl.host[i], bytes[i]))
+		{
+			failed = true;
 			return false;
+		}
 	if (data[DATA_LOOKUP].handle != old_lookup)
 		static_uploaded = false;
 	size_t const lookup_start = static_uploaded ? VKL_STATIC_SIZE : 0;
@@ -1081,7 +1086,10 @@ bool voodoo_vk::impl::flush(int readback_index, bool wait, vk3d_share::target *s
 	{
 		VkBuffer const old_tmu = tmu[i].host.handle;
 		if (tmu_size[i] && !ensure_stream(tmu[i], tmu_size[i]))
+		{
+			failed = true;
 			return false;
+		}
 		if (tmu[i].host.handle != old_tmu)
 		{
 			std::fill(tmu_dirty[i].begin(), tmu_dirty[i].end(), 1);
@@ -1314,7 +1322,10 @@ bool voodoo_vk::impl::flush(int readback_index, bool wait, vk3d_share::target *s
 	flushes++;
 	reset_batch();
 	if (!ok)
+	{
+		failed = true;
 		return false;
+	}
 
 	// the copy into the texture of the display is drawable once the batch is done
 	if ((readback_index >= 0) && shared)
@@ -1446,6 +1457,12 @@ voodoo_vk::~voodoo_vk()
 std::string const &voodoo_vk::device_name() const
 {
 	return m->name;
+}
+
+
+bool voodoo_vk::failed() const
+{
+	return m->failed;
 }
 
 
