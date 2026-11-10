@@ -800,12 +800,12 @@ Toutes les puces de la liste ont un rendu logiciel HD et un rendu Vulkan
     et montre des bandes répétées ; le chemin GPU passe maintenant par un
     modulo et est correct en ×3. Le chemin logiciel n'est pas corrigé.
 
-## État au 2026-11-10 (session interrompue, à reprendre)
+## Bilan du 2026-11-10 : rendu GPU étendu et essais complets
 
 Mandat : tous les points de la liste sauf 1, 4, 8, 9, puis essais de tous les
 jeux en ×1 à ×4, avec et sans `-widescreen`. Pas de push, pas de release.
 
-- **Model 1** (bf63fc36f50) : partage bgfx et 16:9 faits.
+- **Model 1** (bf63fc36f50) : partage bgfx et 16:9.
 - **System 23** (84f118c06f9) : rendu Vulkan (`namcos23_vk`), hors Gorgon. Race
   On! : course complète en ×2 (65 % de la vitesse, limité par le CPU émulé).
 - **PlayStation** (ce5c31da416) : `psxgpu_vk`. Le rendu logiciel continue sur la
@@ -814,23 +814,38 @@ jeux en ×1 à ×4, avec et sans `-widescreen`. Pas de push, pas de release.
   tirée. Le GPU rejette comme le matériel les triangles de plus de 1023
   pixels (sinon blocs colorés en bas à gauche dans kartduel). 15 bits
   seulement : le mode 24 bits et l'écran éteint restent en natif. Pas de 16:9
-  (projection faite par le jeu). Essayé en démo, lecture GPU :
-  pocketrc ×3, kartduel ×2 ×4. **Pas encore vu dans une fenêtre bgfx.**
+  (projection faite par le jeu).
 - **Viper et Thrill Drive** : thrild2, xtrial (Viper) et thrilld (Hornet)
   démarrent et jouent leur démo sans modification, malgré « not working ».
-  thrilld demande d'initialiser sa mémoire (bouton Test) ; il tourne en ×2 sur
-  le GPU. thrild2 et xtrial essayés en natif seulement.
+  thrilld, racingj et racingj2 demandent d'initialiser leur mémoire (bouton Test).
 - **Point 3** : en course sur le GPU : roadburn ×3, windheat ×2, racingj ×2,
-  racingj2 ×2, calspeed ×2. racingj et racingj2 demandent aussi l'initialisation.
-  Le rectangle gris de Racing Jam (rétroviseur, aperçu de voiture) existe aussi
-  en natif et en logiciel : ce n'est pas le rendu GPU.
-- **Matrice** : 121 essais sur 336 faits, tous sortis avec le code 0 : 500gp,
-  acedrive, crusnexo, crusnusa, crusnwld, dirtdash, driveyes, gticlub, hangplt,
-  kartduel, midnrun, motoxgo, offroadc, pocketrc (8 configurations chacun),
-  raceon (6 sur 8), calspeed, cartfury, gticlub2 (1 sur 8). Le code de sortie
-  seul est vérifié : les images n'ont pas encore été regardées. Deux instances
-  du même jeu à disque dur (CHD) ne peuvent pas tourner ensemble : ces jeux
-  sont à passer un par un.
-- **À faire** : finir la matrice (avec une passe séquentielle pour les jeux à
-  CHD), regarder les images, essais en fenêtre bgfx de pocketrc ×3, raceon ×2
-  et vr ×2 en 16:9, thrild2 et xtrial sur le GPU.
+  racingj2 ×2, calspeed ×2. Le rectangle gris de Racing Jam (rétroviseur,
+  aperçu de voiture) existe aussi en natif et en logiciel.
+
+### Matrice
+
+40 jeux, ×1 à ×4, avec et sans `-widescreen` : 320 essais, tous avec le code
+de sortie 0, sans `-video` (image relue du GPU), 60 à 230 s émulées, images
+comparées d'une configuration à l'autre (dernière capture de chaque essai).
+Jeux joués par script (130 s) car bloqués à 60 s sur calibrage ou démarrage :
+crusnexo, crusnusa, hangplt, raceon, motoxgo, kartduel ; sf2049 et sf2049se
+vont plus loin sur 130 s sans script. Les jeux à disque dur (CHD) ne peuvent
+pas tourner à plusieurs instances : un par un.
+
+- Pas essayés : netmerc et wingwar, ROM `hd44780` absente du NAS.
+- gticlub : erreur de volant (point 4, exclu) ; essayé jusqu'au menu de test
+  seulement, sa 3D n'est pas vue dans la matrice.
+- 500gp : écran noir persistant en fin d'essai en ×2 et ×3, seulement avec plus
+  de 5 instances en même temps sur le GPU de ce portable (3 essais sur 8 de la
+  première passe, puis ×2 dans une passe chargée). Jamais vu seul ni sur la
+  moitié des passes à 5 instances. Hypothèse non vérifiée : soumission Vulkan
+  qui échoue (`end_frame` rend false sans rien dire, le bitmap natif n'est pas
+  dessiné). Une seule instance tourne sur une borne.
+- Le 16:9 du menu de raceon laisse des côtés noirs en haut et en bas (décor 2D).
+
+### En fenêtre bgfx
+
+Partage sans relecture CPU, vu sur l'écran réel (60 captures du bureau de
+suite, aucune noire) : vr ×1 et ×2, vr ×2 16:9, raceon ×2 et ×2 16:9,
+pocketrc ×3. Le `PrintWindow` de `wincap.ps1` donne des images noires sur
+ces jeux : défaut de la capture, pas de l'affichage.
