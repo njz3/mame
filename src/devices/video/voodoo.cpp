@@ -2424,12 +2424,13 @@ u32 voodoo_1_device::reg_fastfill_w(u32 chipmask, u32 regnum, u32 data)
 	else
 	{
 		pixels = m_renderer->enqueue_fastfill(poly);
-		if (hires)
-		{
-			if (m_vk && hires_offscreen())
-				hires_note_offscreen(poly.destbase);
+		// a narrow target with Vulkan is only drawn natively: it must not take
+		// one of the copies of the colour buffers from a buffer on its way to
+		// the screen
+		if (hires && m_vk && hires_offscreen())
+			hires_note_offscreen(poly.destbase);
+		else if (hires)
 			hires_fastfill(poly);
-		}
 	}
 	return pixels / 2;
 }
@@ -3212,12 +3213,11 @@ s32 voodoo_1_device::triangle()
 	else
 	{
 		pixels = m_renderer->enqueue_triangle(poly, vert);
-		if (hires)
-		{
-			if (m_vk && hires_offscreen())
-				hires_note_offscreen(poly.destbase);
+		// a narrow target with Vulkan is only drawn natively (see fastfill)
+		if (hires && m_vk && hires_offscreen())
+			hires_note_offscreen(poly.destbase);
+		else if (hires)
 			hires_triangle(poly, vert);
-		}
 	}
 
 	// update stats
