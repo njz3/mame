@@ -298,6 +298,8 @@ protected:
 	INTERRUPT_GEN_MEMBER(sound_irq);
 
 	int adc1038_input_callback(int input);
+	void wheel_motor_w(uint8_t data);
+	void wheel_motor_update();
 
 	void sound_memmap(address_map &map) ATTR_COLD;
 
@@ -322,6 +324,14 @@ protected:
 	memory_view m_cg_view;
 
 	bool m_sound_irq_enabled = false;
+
+	// the boot check of the wheel motor (see wheel_motor_update)
+	enum { WHEEL_NO_CHECK, WHEEL_WAITING, WHEEL_CHECKING };
+	bool m_wheel_check_at_boot = false;
+	uint8_t m_wheel_state = WHEEL_NO_CHECK;
+	uint8_t m_wheel_command = 0;
+	double m_wheel_position = 0.0;
+	attotime m_wheel_time;
 };
 
 // with GN678 Video board
@@ -452,6 +462,7 @@ void gticlub_base_state::sysreg_w(offs_t offset, uint8_t data)
 
 		case 2:
 			// GTI club drive commands
+			wheel_motor_w(data);
 			m_wheel_motor = data;
 			m_pcb_output[0] = data;
 			break;
@@ -510,6 +521,10 @@ void gticlub_base_state::machine_start()
 	m_maincpu->ppcdrc_add_fastram(0x00000000, 0x000fffff, false, m_work_ram);
 
 	save_item(NAME(m_sound_irq_enabled));
+	save_item(NAME(m_wheel_state));
+	save_item(NAME(m_wheel_command));
+	save_item(NAME(m_wheel_position));
+	save_item(NAME(m_wheel_time));
 }
 
 void gticlub_state::gticlub_map(address_map &map)
@@ -778,6 +793,12 @@ INPUT_PORTS_END
 
 int gticlub_base_state::adc1038_input_callback(int input)
 {
+	if ((input == 0) && (m_wheel_state == WHEEL_CHECKING))
+	{
+		wheel_motor_update();
+		return int(m_wheel_position);
+	}
+
 	switch (input)
 	{
 	case 0:  return m_analog[0]->read();
@@ -788,8 +809,49 @@ int gticlub_base_state::adc1038_input_callback(int input)
 	}
 }
 
+/*
+    At boot, GTI Club drives the wheel with its motor and checks that it
+    follows: more and more torque one way (0x91 to 0x9f), the other way
+    (0x81 to 0x8f), then the first way again.  The wheel has to move by
+    0x60 at some torque, and go from stop to stop, centered, or the game
+    stops at "DEVICE ERROR (STEERING WHEEL)".  It then centers the wheel
+    and stops the motor (0x00).  Without a motor to follow, the position
+    read during the check comes from this small model of the wheel: bit 7
+    drives the motor, bit 4 is the direction, bits 0-3 the torque.
+*/
+void gticlub_base_state::wheel_motor_update()
+{
+	attotime const now = machine().time();
+	if (BIT(m_wheel_command, 7))
+	{
+		double const speed = (m_wheel_command & 0x0f) * (BIT(m_wheel_command, 4) ? 120.0 : -120.0);
+		m_wheel_position = std::clamp(m_wheel_position + speed * (now - m_wheel_time).as_double(), double(0x004), double(0x3fb));
+	}
+	m_wheel_time = now;
+}
+
+void gticlub_base_state::wheel_motor_w(uint8_t data)
+{
+	if (m_wheel_state == WHEEL_CHECKING)
+	{
+		wheel_motor_update();
+		if (data == 0)
+			m_wheel_state = WHEEL_NO_CHECK;
+	}
+	else if ((m_wheel_state == WHEEL_WAITING) && (data == 0x91))
+	{
+		m_wheel_state = WHEEL_CHECKING;
+		m_wheel_position = 0x200;
+		m_wheel_time = machine().time();
+	}
+	m_wheel_command = data;
+}
+
 void gticlub_base_state::machine_reset()
 {
+	m_wheel_state = m_wheel_check_at_boot ? WHEEL_WAITING : WHEEL_NO_CHECK;
+	m_wheel_command = 0;
+
 	m_dsp[0]->set_input_line(INPUT_LINE_RESET, ASSERT_LINE);
 	if (m_dsp[1].found())
 		m_dsp[1]->set_input_line(INPUT_LINE_RESET, ASSERT_LINE);
@@ -953,6 +1015,7 @@ void gticlub_state::gticlub(machine_config &config)
 	ADC1038(config, m_adc1038);
 	m_adc1038->set_input_callback(FUNC(gticlub_state::adc1038_input_callback));
 	m_adc1038->set_gti_club_hack(true);
+	m_wheel_check_at_boot = true;
 
 	K056230(config, m_k056230, 0U);
 	m_k056230->irq_cb().set_inputline(m_maincpu, INPUT_LINE_IRQ2);
@@ -999,6 +1062,7 @@ void thunderh_state::thunderh(machine_config &config)
 	gticlub(config);
 
 	m_adc1038->set_gti_club_hack(false);
+	m_wheel_check_at_boot = false;
 
 	// TODO: replace K056230 from main gticlub config with a LANC tied to gn680 I/O board
 
@@ -1011,6 +1075,7 @@ void gticlub_state::slrasslt(machine_config &config)
 	gticlub(config);
 
 	m_adc1038->set_gti_club_hack(false);
+	m_wheel_check_at_boot = false;
 }
 
 void hangplt_state::hangplt(machine_config &config)
