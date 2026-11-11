@@ -897,3 +897,34 @@ ces jeux : défaut de la capture, pas de l'affichage.
   toutes les 300 images) tombaient toujours sur une bonne image : vérifié
   cette fois image par image, en course, thrild2 ×2 à ×4, xtrial ×3 et ×4,
   écarts entre images égaux au natif ; gticlub2 et sf2049se inchangés.
+
+### Suite du 2026-11-11 : fusion upstream, annonce UDP, chasse au clignotement
+
+- **Fusion** de MAME upstream (59 commits, 754eb0adb02). Seul conflit : le
+  compteur MIPS, qu'upstream a corrigé comme nous (adb51e24801) ; les
+  fichiers mips3 sont repris d'upstream. Deux nouveaux `.lay` demandaient
+  de régénérer le projet (`make vs2022`) avant la compilation.
+- **Sorties réseau** (208804e82b9) : au lancement d'un jeu, `-output network`
+  envoie en broadcast UDP sur le port 8001 `mame_start = <jeu>\r` puis
+  `tcp = 8000\r`, comme Supermodel njz3. BackForceFeeder et le FFB Plugin
+  njz3 écoutent ce port, maintenant tous deux en partagé (SO_REUSEADDR).
+  Vu avec un récepteur pour vr et ridgerac ; rien sans `-output network`.
+  Le serveur TCP 8000 accepte plusieurs clients à la fois.
+- **Chasse au clignotement**, sur le build fusionné : 40 jeux, natif puis
+  Vulkan ×2, ×3, ×4 et ×2 `-widescreen`, une capture par image dans deux
+  fenêtres de 40 images (démo, puis partie avec pièce, Start et
+  accélérateur), chaque image comparée à l'image native de même numéro, et
+  les images noires comptées. Le banc retrouve les 21 images noires de
+  thrild2 avec l'exe d'avant le correctif. Résultat : aucune image noire,
+  aucun pic. Les écarts restants ne sont pas des défauts d'image :
+  - sfrush : la dernière capture, prise à la sortie de `-seconds_to_run`
+    (reste d'image native, déjà connu) ;
+  - raceon : l'image Vulkan est décalée d'une image entière, régulièrement,
+    selon la fenêtre (rythme de l'émulation, pas vérifié plus loin) ;
+  - roadburn, xtrial, calspeed : la course part autrement qu'en natif
+    (place, classement), le chrono égal ; images justes, rétroviseurs
+    compris. Sans doute le nombre de pixels estimé quand seul le GPU
+    dessine, relu par le jeu (pas vérifié) ;
+  - pocketrc : scène immobile, seule la netteté en ×4 diffère.
+  Limites : 80 images par essai, toujours la même conduite ; seulement la
+  carte NVIDIA de ce PC.
