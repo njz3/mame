@@ -123,7 +123,10 @@ public:
 		if (m_started)
 		{
 			if (m_machine)
+			{
 				broadcast_message(util::string_format("mame_start = %s", m_machine->system().name));
+				announce_start();
+			}
 		}
 		else
 		{
@@ -142,7 +145,7 @@ public:
 
 			// open a listening socket
 			std::error_code err;
-			asio::ip::tcp::endpoint local(asio::ip::address_v6::any(), 8000);
+			asio::ip::tcp::endpoint local(asio::ip::address_v6::any(), TCP_PORT);
 			m_acceptor.open(local.protocol(), err);
 			if (!err)
 				m_acceptor.bind(local, err);
@@ -164,6 +167,8 @@ public:
 						osd_printf_verbose("Output: worker thread completed\n");
 					});
 			m_started = true;
+			if (m_machine)
+				announce_start();
 		}
 
 		return 0;
@@ -210,6 +215,8 @@ public:
 
 private:
 	static constexpr unsigned MESSAGE_RESERVED_SIZE = 128;
+	static constexpr unsigned short TCP_PORT = 8000;
+	static constexpr unsigned short UDP_PORT = 8001;
 
 	using queued_message = std::pair<std::string, unsigned>;
 	using queued_message_list = std::list<queued_message>;
@@ -284,6 +291,32 @@ private:
 	using client_list = std::list<client>;
 
 	running_machine &machine() { return *m_machine; }
+
+	// a UDP broadcast when a game starts, for the clients that wait for one
+	// before connecting (BackForceFeeder, as Supermodel sends it): the game's
+	// name and the TCP port of the outputs
+	void announce_start()
+	{
+		std::string const message = util::string_format("mame_start = %s\rtcp = %u\r", m_machine->system().name, TCP_PORT);
+		std::error_code err;
+		asio::io_context context;
+		asio::ip::udp::socket socket(context);
+		socket.open(asio::ip::udp::v4(), err);
+		if (!err)
+			socket.set_option(asio::socket_base::broadcast(true), err);
+		if (!err)
+			socket.send_to(asio::buffer(message), asio::ip::udp::endpoint(asio::ip::address_v4::broadcast(), UDP_PORT), 0, err);
+		if (err)
+		{
+			osd_printf_verbose("Output: error sending the start broadcast to UDP port %u: %s (%s:%d)\n",
+					UDP_PORT, err.message(), err.category().name(), err.value());
+		}
+		else
+		{
+			osd_printf_verbose("Output: start broadcast sent to UDP port %u\n", UDP_PORT);
+		}
+		socket.close(err);
+	}
 
 	void start_accept()
 	{
