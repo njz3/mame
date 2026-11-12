@@ -101,7 +101,7 @@ Since mame3d 0.289-2257-g2826ec5
 - LINK.md in the source tree: how to set up every linked racing game
   (NVRAM, DIP switches, test menus, pitfalls). All linked games tested
   again on one PC with this version, native and Vulkan x2/x4.
-- FFBPlugin folder: plugin 2.1.0.1 (commit d75d3b4), which reads MAME's
+- FFBPlugin folder: plugin 2.1.0.6 (commit 09c2657), which reads MAME's
   -output network and finds the wheel again when its GUID was saved with
   another SDL2 version (see below).
 - Merge of upstream MAME from 2026-11-11 (59 commits).
@@ -247,9 +247,9 @@ Known issues
   FFBPlugin folder, which holds a fixed version.
 
 FFBPlugin folder (FFB Arcade Plugin, njz3 fork)
-Same content as FFBArcadePlugin-2.1.0.1-gd75d3b4-njz3-windows-x64.zip
-(github.com/njz3/FFBArcadePlugin, branch dev/mame-racer, commit d75d3b4).
-- dinput8.dll: FFB Arcade Plugin 2.1.0.1 (njz3 fork), Release x64:
+Same content as FFBArcadePlugin-2.1.0.6-g09c2657-njz3-windows-x64.zip
+(github.com/njz3/FFBArcadePlugin, branch dev/mame-racer, commit 09c2657).
+- dinput8.dll: FFB Arcade Plugin 2.1.0.6 (njz3 fork), Release x64:
     - Endprodukt's MAME racing games ported onto the refactored plugin;
     - fix of the nameFFB pointer to a freed string (crash when quitting
       MAME, memory leak);
@@ -262,7 +262,7 @@ Same content as FFBArcadePlugin-2.1.0.1-gd75d3b4-njz3-windows-x64.zip
     - finds the wheel or vJoy again when its DeviceGUID was saved with
       another SDL2 version (SDL 2.32.8 puts a CRC in bytes 2-3 of the
       GUID, so older ini files no longer matched);
-    - its version (2.1.0.1-gd75d3b4) is in the file properties and on the
+    - its version (2.1.0.6-g09c2657) is in the file properties and on the
       first line of FFBlog.txt, with the SDL version.
   Only depends on SDL2.dll and Windows DLLs.
 - FFBPluginGUI.exe + MetroFramework*.dll: the configuration program. It
@@ -272,12 +272,17 @@ Same content as FFBArcadePlugin-2.1.0.1-gd75d3b4-njz3-windows-x64.zip
   Needs .NET Framework 4.7.2 and the Visual C++ 2015-2022 x64
   redistributable (C++/CLI).
 - SDL2.dll (SDL 2.32.8), MAME64.dll: as supplied with the plugin.
+- FFBPluginReadme.md: the plugin guide (Markdown; it replaces
+  FFBPluginReadme.txt), with the list of MAME games: those that work as
+  they are, those that need a setting, those that do not work yet. Games
+  that need MAME njz3 are marked.
 - FFBPlugin.ini: "MAME 64bit Outputs" profile (GameId=22), for a new
   install only.
 - On an existing install, replace DINPUT8.dll, SDL2.dll and
-  FFBPluginGUI.exe; keep FFBPlugin.ini and the other configuration files in
-  place: the saved wheel GUID works again.
-- Settings each MAME game needs for force feedback (Virtua Racing cabinet
-  type, Rave Racer feedback steering, ...): see the section "Settings each
-  MAME game needs for force feedback" of the plugin README
-  (github.com/njz3/FFBArcadePlugin, branch dev/mame-racer).
+  FFBPluginGUI.exe, add FFBPluginReadme.md (FFBPluginReadme.txt can be
+  deleted); keep FFBPlugin.ini and the other configuration files in place:
+  the saved wheel GUID works again.
+- Settings some MAME games need for force feedback (Virtua Racing
+  cabinet type, Rave Racer feedback steering in each cabinet's NVRAM,
+  Cruis'n Exotica, Over Rev, Super Monaco GP, Super GT 24h): see "Games
+  that need a setting" in FFBPlugin\FFBPluginReadme.md.
