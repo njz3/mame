@@ -91,6 +91,20 @@ Display
   a background that does not extend past the 4:3 screen (HNG64 menus) is
   stretched with the rest.
 
+Since mame3d 0.289-2257-g2826ec5
+- Option -output network: when a game starts, MAME broadcasts
+  "mame_start = <game>" then "tcp = 8000" on UDP port 8001 (as Supermodel
+  njz3 does), so BackForceFeeder and the FFB plugin find the output server
+  by themselves. The TCP server on port 8000 accepts several clients.
+- Gunbuster link: the receive buffer was shifted the wrong way after each
+  message. Fixed (not tested in game).
+- LINK.md in the source tree: how to set up every linked racing game
+  (NVRAM, DIP switches, test menus, pitfalls). All linked games tested
+  again on one PC with this version, native and Vulkan x2/x4.
+- FFBPlugin folder: plugin commit a70875b, which reads MAME's -output
+  network (see below).
+- Merge of upstream MAME from 2026-11-11 (59 commits).
+
 Since mame3d 0.289-2253-g3f418df
 - The high resolution 3D and display options can be set in the Video
   Options menu (general settings and per machine), under "High Resolution
@@ -175,7 +189,7 @@ Since MAME njz3 FFB edition 0.289-1946-g8e81ca4
 - Capcom link (CPS2): the USART buffer is no longer emptied by the network
   thread.
 
-Based on upstream MAME from 2026-11-08, with:
+Based on upstream MAME from 2026-11-11, with:
 
 - Option -write_directory / -writedir <folder> (or the write_directory key
   in mame.ini): everything MAME writes (mame.ini, ui.ini, plugin.ini, game
@@ -232,14 +246,18 @@ Known issues
   FFBPlugin folder, which holds a fixed version.
 
 FFBPlugin folder (FFB Arcade Plugin, njz3 fork)
-Same content as FFBArcadePlugin-2.0.0.54-gdc3b244-njz3-windows-x64.zip
-(github.com/njz3/FFBArcadePlugin, branch dev/mame-racer, commit dc3b244).
+Same content as FFBArcadePlugin-2.0.0.54-ga70875b-njz3-windows-x64.zip
+(github.com/njz3/FFBArcadePlugin, branch dev/mame-racer, commit a70875b).
 - dinput8.dll: FFB Arcade Plugin 2.0.0.54, rebuilt (Release x64):
     - Endprodukt's MAME racing games ported onto the refactored plugin;
     - fix of the nameFFB pointer to a freed string (crash when quitting
       MAME, memory leak);
     - static C/C++ runtime: the Visual C++ redistributable is no longer
-      needed.
+      needed;
+    - also reads the network outputs (MAME -output network, Supermodel
+      -outputs=net, Flycast): TCP port 8000, or the port announced on UDP
+      port 8001 (opened shared, so BackForceFeeder can listen too).
+      MAMENetworkOutputs=0 in FFBPlugin.ini turns them off.
   Only depends on SDL2.dll and Windows DLLs.
 - FFBPluginGUI.exe + MetroFramework*.dll: the configuration program. It
   lists wheels and vJoy again on the MAME, Demul and FFB Test pages.
