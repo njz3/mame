@@ -85,11 +85,15 @@ float hires3d_output::view_widening()
 {
 	// (the windows are destroyed after the devices are stopped, and resized)
 	for (hires3d_output *output : s_outputs)
+	{
+		if (output->m_screen.started() && output->anamorphic() && output->m_screen.machine().render().is_live(output->m_screen))
+			return output->m_wide_factor;
 		if (output->m_screen.started() && output->wide() && output->active())
 		{
 			float const width = float(output->m_screen.visible_area().width() * output->m_scale);
 			return (width + 2.0f * float(output->pad())) / width;
 		}
+	}
 	return 1.0f;
 }
 

@@ -103,6 +103,13 @@ public:
 	bool stretch_2d() const { return m_stretch_2d; }
 	bool wide_bg() const { return m_wide_bg; }
 
+	// -widescreen for a game patched to project a wider view into its own
+	// frame (anamorphic, the driver patches it): the frame keeps the size of
+	// the screen and is shown at 16:9, wide_factor() times wider
+	void allow_anamorphic(bool allow) { m_anamorphic_allowed = allow; }
+	bool anamorphic() const { return m_wide_option && m_anamorphic_allowed && (m_wide_factor > 1.0f); }
+	float wide_factor() const { return m_wide_factor; }
+
 	// for the renderer: the factor the shape of the screens is multiplied by
 	// (the widescreen frames are wider than the screen)
 	static float view_widening();
@@ -201,6 +208,7 @@ private:
 	int m_scale;
 	bool m_wide_option = false;             // -widescreen
 	bool m_wide_allowed = false;            // the chip can draw it
+	bool m_anamorphic_allowed = false;      // the game is patched for it
 	bool m_stretch_2d = false;              // -widescreen_2d stretch
 	bool m_wide_bg = false;                 // -widescreen_bg
 	float m_wide_factor = 1.0f;             // 16:9 over the shape of the screen

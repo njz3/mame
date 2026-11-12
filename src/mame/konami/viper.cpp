@@ -403,10 +403,13 @@ The golf club acts like a LED gun. PCB power input is 12V.
 #include "sound/dmadac.h"
 #include "video/voodoo_banshee.h"
 
+#include "emuopts.h"
 #include "emupal.h"
+#include "hires3d.h"
 #include "screen.h"
 #include "speaker.h"
 
+#include <bit>
 #include <iostream>
 
 // configurable logging
@@ -725,6 +728,15 @@ private:
 	bool m_sound_irq_enabled = false;
 
 	TIMER_DEVICE_CALLBACK_MEMBER(sound_timer_callback);
+
+	// mame3d -widescreen on Thrill Drive 2: the camera setup of the game is
+	// patched to multiply the horizontal tangent of the field of view by the
+	// widening, and the screen is shown at 16:9 (an anamorphic frame)
+	void widescreen_start() ATTR_COLD;
+	void widescreen_update();
+	std::unique_ptr<hires3d_output> m_widescreen;
+	uint32_t m_widescreen_site = 0;
+	int m_widescreen_wait = 0;
 
 	// MPC8240 EPIC, to be device-ified
 	enum
@@ -2473,7 +2485,117 @@ void viper_state::uart_int(int state)
 void viper_state::voodoo_vblank(int state)
 {
 	if (state)
+	{
+		widescreen_update();
 		mpc8240_interrupt(MPC8240_IRQ0);
+	}
+}
+
+namespace {
+
+// PowerPC encodings for the widescreen patch
+constexpr uint32_t ppc_fmuls(int d, int a, int c) { return (59U << 26) | (d << 21) | (a << 16) | (c << 6) | (25 << 1); }
+constexpr uint32_t ppc_fneg(int d, int b) { return (63U << 26) | (d << 21) | (b << 11) | (40 << 1); }
+constexpr uint32_t ppc_stfs(int s, int d, int a) { return (52U << 26) | (s << 21) | (a << 16) | (d & 0xffff); }
+constexpr uint32_t ppc_lfs(int s, int d, int a) { return (48U << 26) | (s << 21) | (a << 16) | (d & 0xffff); }
+constexpr uint32_t ppc_lis(int d, int i) { return (15U << 26) | (d << 21) | (i & 0xffff); }
+constexpr uint32_t ppc_b(uint32_t from, uint32_t to) { return (18U << 26) | ((to - from) & 0x03fffffc); }
+
+// the patch: code and constant in work RAM the game leaves empty, between
+// the exception vectors and the program (with memory added outside the work
+// RAM for them, at 0x02000000 or 0xfe100000, the game stops on its blue boot
+// screen)
+constexpr uint32_t WIDESCREEN_CAVE = 0x00003600;
+constexpr uint32_t WIDESCREEN_FACTOR = WIDESCREEN_CAVE + 0x80;
+
+// the end of the camera setup of Thrill Drive 2, the tangent of the field
+// of view in f1, the near plane in f4 and the viewport shape (h/w) in f0:
+//     stfs  f8, 0x3c(r30)     tangent times the previous shape: vertical
+//     ...
+//     fmuls f2, f1, f4        <- site: right = tangent * near
+//     fneg  f1, f2            left
+//     fmuls f4, f0, f2        top = shape * right
+//     stfs  f0, 0x40(r30)
+//     fneg  f3, f4            bottom
+//     bl    <frustum planes>
+// (the horizontal tangent is stored at 0x34 and 0x38 before the site)
+constexpr uint32_t WIDESCREEN_SIGNATURE[5] = { ppc_fmuls(2, 1, 4), ppc_fneg(1, 2), ppc_fmuls(4, 0, 2), ppc_stfs(0, 0x40, 30), ppc_fneg(3, 4) };
+constexpr uint32_t WIDESCREEN_VERTICAL = ppc_stfs(8, 0x3c, 30);
+
+} // anonymous namespace
+
+void viper_state::widescreen_start()
+{
+	if (!machine().options().bool_value(OPTION_WIDESCREEN) || strncmp(machine().system().name, "thrild2", 7))
+		return;
+	m_widescreen = std::make_unique<hires3d_output>(*m_screen);
+	m_widescreen->allow_anamorphic(true);
+	if (!m_widescreen->anamorphic())
+		m_widescreen.reset();
+}
+
+void viper_state::widescreen_update()
+{
+	if (!m_widescreen)
+		return;
+	address_space &space = m_maincpu->space(AS_PROGRAM);
+	float const factor = m_widescreen->wide_factor();
+	auto const write_cave = [&space, factor] (uint32_t site)
+	{
+		// right and top from the tangent as the game does, then the tangent
+		// and right times the widening: the view gets wider, not taller
+		uint32_t const code[] = {
+				ppc_fmuls(2, 1, 4),                             // right = tangent * near
+				ppc_fmuls(4, 0, 2),                             // top = shape * right
+				ppc_lis(11, WIDESCREEN_FACTOR >> 16),
+				ppc_lfs(9, WIDESCREEN_FACTOR & 0xffff, 11),
+				ppc_fmuls(1, 1, 9),                             // tangent * widening
+				ppc_stfs(1, 0x34, 30),
+				ppc_stfs(1, 0x38, 30),
+				ppc_fmuls(2, 2, 9),                             // right * widening
+				ppc_fneg(1, 2),
+				ppc_stfs(0, 0x40, 30),
+				ppc_fneg(3, 4),
+				ppc_b(WIDESCREEN_CAVE + 11 * 4, site + 20) };   // back to the call
+		for (size_t i = 0; i < std::size(code); i++)
+			if (space.read_dword(WIDESCREEN_CAVE + i * 4) != code[i])
+				space.write_dword(WIDESCREEN_CAVE + i * 4, code[i]);
+		if (space.read_dword(WIDESCREEN_FACTOR) != std::bit_cast<uint32_t>(factor))
+			space.write_dword(WIDESCREEN_FACTOR, std::bit_cast<uint32_t>(factor));
+	};
+
+	// patched: the code is written again if the game wrote over it
+	if (m_widescreen_site && (space.read_dword(m_widescreen_site) == ppc_b(m_widescreen_site, WIDESCREEN_CAVE)))
+	{
+		write_cave(m_widescreen_site);
+		return;
+	}
+
+	// the program is loaded from the card: looked for once a second until
+	// it is there, and again if it is loaded again
+	m_widescreen_site = 0;
+	if (m_widescreen_wait-- > 0)
+		return;
+	m_widescreen_wait = 60;
+	auto const word = [this] (uint32_t a) { uint64_t const w = m_workram[a >> 3]; return uint32_t((a & 4) ? w : (w >> 32)); };
+	uint32_t site = 0;
+	for (uint32_t a = 0x10; a < 0x400000; a += 4)
+	{
+		if ((word(a) == WIDESCREEN_SIGNATURE[0]) && (word(a + 4) == WIDESCREEN_SIGNATURE[1]) && (word(a + 8) == WIDESCREEN_SIGNATURE[2])
+				&& (word(a + 12) == WIDESCREEN_SIGNATURE[3]) && (word(a + 16) == WIDESCREEN_SIGNATURE[4])
+				&& ((word(a + 20) & 0xfc000003) == 0x48000001) && (word(a - 16) == WIDESCREEN_VERTICAL))
+		{
+			site = a;
+			break;
+		}
+	}
+	if (!site)
+		return;
+
+	write_cave(site);
+	space.write_dword(site, ppc_b(site, WIDESCREEN_CAVE));
+	m_widescreen_site = site;
+	osd_printf_verbose("viper: -widescreen, camera setup patched at %08x (field of view %.3f times wider)\n", site, factor);
 }
 
 void viper_state::voodoo_pciint(int state)
@@ -2519,6 +2641,8 @@ void viper_state::machine_start()
 
 	/* configure fast RAM regions for DRC */
 	m_maincpu->ppcdrc_add_fastram(0x00000000, 0x00ffffff, false, m_workram);
+
+	widescreen_start();
 
 	save_item(NAME(m_cf_card_ide));
 	save_item(NAME(m_unk_serial_bit_w));

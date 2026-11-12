@@ -954,3 +954,31 @@ ces jeux : défaut de la capture, pas de l'affichage.
   image tout de suite).
 - **Pocket Racer** : natif reproductible, logiciel identique, Vulkan ne
   diffère que par la netteté.
+
+### Suite du 2026-11-12 (soir) : Thrill Drive 2 en 16:9, Race On!
+
+- **Thrill Drive 2, `-widescreen`** (viper.cpp, toutes les versions) : le jeu
+  projette lui-même sa 3D, le hack passe donc par son code. La structure
+  caméra (viewport 512x384, near 0,2, far 280, FOV 50°, tanH 1,1918, tanV
+  0,8938 en 0x5729a0) est remplie une fois par une fonction (0x040b40 dans
+  les quatre versions) : `tan(fov)`, tanH en +0x34/+0x38, tanV = tanH × forme
+  en +0x3c, puis le frustum (gauche, droite, haut, bas) passé à la fonction
+  qui construit les plans de découpe. Le driver cherche cette fin de fonction
+  par signature, y met un saut vers 12 instructions écrites en 0x3600 (RAM vide
+  entre les vecteurs et le programme) qui multiplient tanH et la droite du
+  frustum par 4/3 sans toucher au haut ni à tanV : projection et culling
+  s'élargissent ensemble. L'écran garde sa taille et est montré étiré en 16:9
+  (`hires3d_output::allow_anamorphic`). Toutes les caméras sont élargies, le
+  rétroviseur garde donc sa forme ; textes et compteurs sont étirés.
+  - Essais : modifier tanH à chaud élargit la vue (le frustum seul n'a aucun
+    effet, l'angle non plus). Les watchpoints du débogueur ne voient rien :
+    la RAM est en fastram DRC. Code hors RAM de travail (0x02000000,
+    0xfe100000) : le jeu reste sur son écran bleu de démarrage (cause non
+    cherchée ; peut-être la traduction d'adresses du PowerPC).
+  - Vérifié : thrild2, thrild2j, thrild2a, thrild2c patchés à la même
+    adresse, course correcte sans `-hires3d` et en Vulkan ×2 et ×4 ; sans
+    `-widescreen`, image identique à avant au pixel près.
+- **Thrill Drive 1** (Hornet) : pas fait. Le PowerPC 403 n'a pas de FPU, la
+  projection est faite par le DSP SHARC de la carte graphique (sommets déjà
+  projetés dans sa mémoire interne) : il faudrait retrouver la caméra dans le
+  microcode du DSP.
