@@ -928,3 +928,29 @@ ces jeux : défaut de la capture, pas de l'affichage.
   - pocketrc : scène immobile, seule la netteté en ×4 diffère.
   Limites : 80 images par essai, toujours la même conduite ; seulement la
   carte NVIDIA de ce PC.
+
+### Suite du 2026-11-12 : fusion upstream, cas bizarres du banc
+
+- **Fusion** de MAME upstream (8 commits, 9a52a4806ab), sans conflit.
+  `diexec.h` change (`signal_external_write`) : presque tout recompile.
+- **Méthode** : en plus des captures, une empreinte de la RAM du CPU
+  principal (8 Mo, un mot sur seize, toutes les 10 images, mêmes entrées
+  que le banc) dit si l'émulation elle-même s'écarte du natif, et deux
+  lancements natifs disent si le jeu est reproductible.
+- **California Speed** : la course partait autrement en Vulkan. Cause :
+  quand seul le GPU dessine, le nombre de pixels d'un triangle (qui donne
+  la durée de l'opération vue par le jeu) était l'aire découpée par le
+  rectangle de clip ; le rasterizer natif (`POLY_FLAG_NO_CLIPPING`) compte
+  les étendues de chaque ligne sans découpe. `estimated_pixels` refait
+  maintenant exactement son calcul, et le remplissage rapide suit
+  `render_tile`. Après correction, RAM identique au natif en ×2 et ×4 sur
+  toute la partie.
+- **Road Burners, Xtrial Racing** : deux lancements natifs diffèrent déjà
+  (roadburn dès l'image 430, au démarrage). Les horloges M48T37 (Vegas)
+  et M48T58 (Viper) lisent l'heure du PC ; ce n'est pas mame3d.
+- **Race On!** : RAM identique au natif en ×2 et ×4 ; l'image ×4 est
+  parfois en retard d'une image (pas à chaque lancement), l'affichage
+  seulement. Cause non trouvée (le rendu Vulkan du System 23 relit son
+  image tout de suite).
+- **Pocket Racer** : natif reproductible, logiciel identique, Vulkan ne
+  diffère que par la netteté.

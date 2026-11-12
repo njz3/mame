@@ -2416,7 +2416,9 @@ u32 voodoo_1_device::reg_fastfill_w(u32 chipmask, u32 regnum, u32 data)
 	if (hires && gpu_only() && !hires_offscreen())
 	{
 		auto const fbzmode = poly.raster.fbzmode();
-		pixels = (fbzmode.rgb_buffer_mask() || fbzmode.aux_buffer_mask()) ? std::max(poly.clipright - poly.clipleft, 0) * std::max(poly.clipbottom - poly.cliptop, 0) : 0;
+		// the count of poly_manager::render_tile: sorting the corners by row
+		// swaps the columns too, and a tile whose left is past its right is empty
+		pixels = (fbzmode.rgb_buffer_mask() || fbzmode.aux_buffer_mask()) ? std::max((poly.clipright - poly.clipleft) * (poly.clipbottom - poly.cliptop), 0) : 0;
 		hires_fastfill(poly);
 		if (m_renderer->object_data().count() >= 4096)
 			recycle_renderer();
@@ -3525,62 +3527,58 @@ void voodoo_1_device::hires_fill_rows(u16 const *buffer, u32 first, u32 count, u
 
 //-------------------------------------------------
 //  estimated_pixels - the pixels of a triangle
-//  that only the GPU draws: its area inside the
-//  clip rectangle, for the chip timing
+//  that only the GPU draws, for the chip timing:
+//  the same count as the native rasterizer
+//  (poly_manager::render_triangle without
+//  clipping, the clip rectangle is applied per
+//  pixel), so the timing seen by the game does
+//  not change with -hires3d
 //-------------------------------------------------
 
-s32 voodoo_1_device::estimated_pixels(poly_data const &poly, voodoo_renderer::vertex_t const *vert) const
+s32 voodoo_1_device::estimated_pixels(poly_data const &, voodoo_renderer::vertex_t const *vert) const
 {
-	// polygon clipped against the rectangle (screen rows, flipped with the Y origin)
-	float px[8], py[8], qx[8], qy[8];
-	int count = 3;
-	for (int i = 0; i < 3; i++)
+	// same rounding as poly_manager::round_coordinate
+	auto const round = [] (float value) -> s32
 	{
-		px[i] = vert[i].x;
-		py[i] = vert[i].y;
-	}
-	auto const fbzmode = poly.raster.fbzmode();
-	if (fbzmode.enable_clipping())
+		if (value >= float(std::numeric_limits<s32>::max()))
+			return std::numeric_limits<s32>::max();
+		float const ipart = std::floor(value);
+		if (ipart < float(std::numeric_limits<s32>::min()))
+			return std::numeric_limits<s32>::min();
+		return s32(ipart) + (((value - ipart) > 0.5f) ? 1 : 0);
+	};
+
+	// sort by Y
+	voodoo_renderer::vertex_t const *v1 = &vert[0];
+	voodoo_renderer::vertex_t const *v2 = &vert[1];
+	voodoo_renderer::vertex_t const *v3 = &vert[2];
+	if (v2->y < v1->y)
+		std::swap(v1, v2);
+	if (v3->y < v2->y)
 	{
-		float const top = fbzmode.y_origin() ? float(poly.yorigin + 1 - poly.clipbottom) : float(poly.cliptop);
-		float const bottom = fbzmode.y_origin() ? float(poly.yorigin + 1 - poly.cliptop) : float(poly.clipbottom);
-		float const limit[4] = { float(poly.clipleft), float(poly.clipright), top, bottom };
-		for (int edge = 0; (edge < 4) && (count > 0); edge++)
-		{
-			// keep the side of the edge inside the rectangle
-			auto const inside = [&] (float x, float y) { return (edge == 0) ? (x >= limit[0]) : (edge == 1) ? (x <= limit[1]) : (edge == 2) ? (y >= limit[2]) : (y <= limit[3]); };
-			int out = 0;
-			for (int i = 0; i < count; i++)
-			{
-				int const j = (i + 1) % count;
-				bool const in_i = inside(px[i], py[i]);
-				bool const in_j = inside(px[j], py[j]);
-				if (in_i)
-				{
-					qx[out] = px[i];
-					qy[out] = py[i];
-					out++;
-				}
-				if (in_i != in_j)
-				{
-					float const t = (edge < 2) ? ((limit[edge] - px[i]) / (px[j] - px[i])) : ((limit[edge] - py[i]) / (py[j] - py[i]));
-					qx[out] = px[i] + t * (px[j] - px[i]);
-					qy[out] = py[i] + t * (py[j] - py[i]);
-					out++;
-				}
-			}
-			count = out;
-			std::copy_n(qx, count, px);
-			std::copy_n(qy, count, py);
-		}
+		std::swap(v2, v3);
+		if (v2->y < v1->y)
+			std::swap(v1, v2);
 	}
-	float area = 0.0f;
-	for (int i = 0; i < count; i++)
+
+	s32 const v1y = round(v1->y);
+	s32 const v3y = round(v3->y);
+	float const dxdy_v1v2 = (v2->y == v1->y) ? 0.0f : (v2->x - v1->x) / (v2->y - v1->y);
+	float const dxdy_v1v3 = (v3->y == v1->y) ? 0.0f : (v3->x - v1->x) / (v3->y - v1->y);
+	float const dxdy_v2v3 = (v3->y == v2->y) ? 0.0f : (v3->x - v2->x) / (v3->y - v2->y);
+
+	// sum of the X extents of the scanlines
+	s32 pixels = 0;
+	for (s32 curscan = v1y; curscan < v3y; curscan++)
 	{
-		int const j = (i + 1) % count;
-		area += px[i] * py[j] - px[j] * py[i];
+		float const fully = float(curscan) + 0.5f;
+		float const startx = v1->x + (fully - v1->y) * dxdy_v1v3;
+		float const stopx = (fully < v2->y) ? (v1->x + (fully - v1->y) * dxdy_v1v2) : (v2->x + (fully - v2->y) * dxdy_v2v3);
+		s32 const istartx = round(startx);
+		s32 const istopx = round(stopx);
+		pixels += std::abs(istopx - istartx);
 	}
-	return s32(fabsf(area) * 0.5f);
+	return pixels;
 }
 
 
