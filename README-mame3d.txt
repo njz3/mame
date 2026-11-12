@@ -91,6 +91,19 @@ Display
   a background that does not extend past the 4:3 screen (HNG64 menus) is
   stretched with the rest.
 
+Since mame3d 0.289-2323-g2748796
+- FFBPlugin folder: FFB Arcade Plugin 2.1.0.6 (commit 09c2657): it finds
+  the wheel again when its GUID was saved with another SDL2 version, shows
+  its version, and comes with FFBPluginReadme.md (see below).
+- California Speed (Voodoo, Vulkan): the race went differently from
+  native. When only the GPU draws, the pixel count that sets the chip
+  timing seen by the game is now the same as the native rasterizer's.
+  Checked against native over a whole race, x2 and x4.
+- Road Burners and Xtrial Racing also race differently from one run to the
+  next in native MAME: their clock chip reads the PC time. Not a mame3d
+  issue.
+- Merge of upstream MAME from 2026-11-12 (8 commits).
+
 Since mame3d 0.289-2257-g2826ec5
 - Option -output network: when a game starts, MAME broadcasts
   "mame_start = <game>" then "tcp = 8000" on UDP port 8001 (as Supermodel
@@ -101,9 +114,8 @@ Since mame3d 0.289-2257-g2826ec5
 - LINK.md in the source tree: how to set up every linked racing game
   (NVRAM, DIP switches, test menus, pitfalls). All linked games tested
   again on one PC with this version, native and Vulkan x2/x4.
-- FFBPlugin folder: plugin 2.1.0.6 (commit 09c2657), which reads MAME's
-  -output network and finds the wheel again when its GUID was saved with
-  another SDL2 version (see below).
+- FFBPlugin folder: plugin commit a70875b, which reads MAME's -output
+  network.
 - Merge of upstream MAME from 2026-11-11 (59 commits).
 
 Since mame3d 0.289-2253-g3f418df
