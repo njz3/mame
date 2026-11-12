@@ -158,7 +158,7 @@ public:
 	// shader modules live as long as the context
 	VkShaderModule create_module(u32 const *code, size_t size);
 
-	// submit command_buffer and wait for it
+	// submit command_buffer and wait for it (the fence is left unsignaled)
 	bool submit_and_wait();
 
 	osd::dynamic_module::ptr library;

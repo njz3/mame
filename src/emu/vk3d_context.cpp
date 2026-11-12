@@ -388,5 +388,12 @@ bool vk3d_context::submit_and_wait()
 	vkResetFences(device, 1, &fence);
 	if (vkQueueSubmit(queue, 1, &submit, fence) != VK_SUCCESS)
 		return false;
-	return vkWaitForFences(device, 1, &fence, VK_TRUE, ~u64(0)) == VK_SUCCESS;
+	bool const done = vkWaitForFences(device, 1, &fence, VK_TRUE, ~u64(0)) == VK_SUCCESS;
+
+	// left unsignaled: the renderers that submit with this fence wait for it
+	// and reset it afterwards (a fence still signaled from here made every
+	// wait of the System 23 renderer return at once, and the frame read back
+	// was the previous one)
+	vkResetFences(device, 1, &fence);
+	return done;
 }

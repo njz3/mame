@@ -978,6 +978,21 @@ ces jeux : défaut de la capture, pas de l'affichage.
   - Vérifié : thrild2, thrild2j, thrild2a, thrild2c patchés à la même
     adresse, course correcte sans `-hires3d` et en Vulkan ×2 et ×4 ; sans
     `-widescreen`, image identique à avant au pixel près.
+- **Race On!, image en retard** (vk3d_context.cpp) : l'image Vulkan avait
+  une image de retard sur le natif, sur des fenêtres entières, selon le
+  lancement et plus souvent en ×3 et ×4. Les listes de rendu et les sommets
+  envoyés au GPU étaient identiques au natif image par image (empreintes),
+  l'image relue juste après la fence était celle d'avant, et redevenait juste
+  après `vkDeviceWaitIdle` (pas avec une invalidation seule, ni avec des
+  barrières complètes). Cause : `submit_and_wait()`, qui envoie les textures
+  au démarrage, laissait la fence du contexte signalée ; le rendu du System 23
+  envoie chaque image avec cette fence, la croit libre et l'attend puis la
+  remet à zéro. Envoyée signalée, chaque attente rendait la main tout de
+  suite, et la relecture prenait l'image précédente tant que le GPU restait
+  en retard sur le CPU. La fence est maintenant remise à zéro après
+  `submit_and_wait()` (les autres puces ont leurs propres fences, ou
+  remettent celle-ci à zéro avant d'envoyer). Après correction : ×2, ×3, ×4,
+  deux lancements, aucun décalage, ×3 identique au natif.
 - **Thrill Drive 1** (Hornet) : pas fait. Le PowerPC 403 n'a pas de FPU, la
   projection est faite par le DSP SHARC de la carte graphique (sommets déjà
   projetés dans sa mémoire interne) : il faudrait retrouver la caméra dans le

@@ -100,6 +100,9 @@ Display
 
 Since mame3d 0.289-2336-g705501b
 - Thrill Drive 2: 16:9 with -widescreen (see Display).
+- Race On!, 500 GP, Motocross Go! (Vulkan): the picture was sometimes one
+  frame late, for long stretches, depending on the run: the wait for the
+  GPU returned at once and the previous frame was read back. Fixed.
 
 Since mame3d 0.289-2323-g2748796
 - FFBPlugin folder: FFB Arcade Plugin 2.1.0.6 (commit 09c2657): it finds
