@@ -358,9 +358,9 @@ private:
 
 						m_received_bytes -= bytes + HEADER_LENGTH;
 						std::copy_n(
-								&m_receive_buf[0],
+								&m_receive_buf[bytes + HEADER_LENGTH],
 								m_received_bytes,
-								&m_receive_buf[bytes + HEADER_LENGTH]);
+								&m_receive_buf[0]);
 					}
 					start_receive();
 				});
