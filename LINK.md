@@ -1,192 +1,192 @@
-# Jeux de course en link avec MAME njz3 — mode d'emploi et astuces
+# Linked racing games with MAME njz3 — how-to and tips
 
-Ce document rassemble les réglages et les étapes pour faire courir ensemble plusieurs instances de MAME
-(plusieurs bornes, ou plusieurs fenêtres sur un même PC). Il s'appuie sur les essais du 2026-11-02 au 2026-11-12
-(exe 0.289 njz3 : release g8e81ca4, puis g6b9d67c pour Konami, puis `dev/mame3d` g754eb0adb02).
-Détails sur la puce Namco : `C139.md` (en anglais : `C139_en.md`).
+This document gathers the settings and steps needed to make several MAME instances race together
+(several cabinets, or several windows on one PC). It is based on the tests run from 2026-11-02 to 2026-11-12
+(0.289 njz3 builds: release g8e81ca4, then g6b9d67c for Konami, then `dev/mame3d` g754eb0adb02).
+Details on the Namco chip: `C139_en.md` (French: `C139.md`).
 
-Les NVRAM prêtes à l'emploi (une par borne et par jeu) et la liste pour l'image (`liste-image.csv`) sont dans le
-dossier de notes partagé des sessions : `link-tests-0289/` (README en français, mêmes informations que ci-dessous).
+The ready-made NVRAMs (one per cabinet and per game) and the list for the cabinet image (`liste-image.csv`) are in
+the sessions' shared notes folder: `link-tests-0289/` (README in French, same information as below).
 
 ---
 
-## 1. Principe
+## 1. Basics
 
-- Chaque instance ouvre **une connexion TCP entrante** et **une connexion sortante vers la borne suivante** :
+- Each instance opens **one incoming TCP connection** and **one outgoing connection to the next cabinet**:
   ```
-  mame.exe <jeu> -comm_localhost <mon IP> -comm_localport <mon port> -comm_remotehost <IP suivante> -comm_remoteport <port suivant>
+  mame.exe <game> -comm_localhost <my IP> -comm_localport <my port> -comm_remotehost <next IP> -comm_remoteport <next port>
   ```
-  Valeurs par défaut : `0.0.0.0:15112` en local, `127.0.0.1:15112` en distant. Une instance seule avec ces valeurs
-  se connecte à elle-même : l'anneau est bouclé, le jeu reste jouable seul.
-- Les bornes forment un **anneau** : cab1 → cab2 → cab3 → cab4 → cab1. À 2 bornes : cab1 → cab2 → cab1.
-- **`-comm_framesync` n'est pas utilisé** : tous les essais se font sans.
-- **Chaque borne a sa propre NVRAM** (ou ses propres lignes DIP dans le cfg) : c'est là que le jeu lit son numéro
-  de borne, son rôle (maître ou esclave) et le nombre de machines. Sans cela, chaque borne court seule.
-- L'ordre et l'écart de démarrage n'ont pas d'importance : tous les jeux se lient avec 0, 4 ou 15 s d'écart
-  entre les bornes. La connexion se rétablit seule si une borne démarre en retard.
+  Defaults: `0.0.0.0:15112` locally, `127.0.0.1:15112` remotely. A lone instance with these values connects
+  to itself: the ring is looped back, and the game stays playable alone.
+- The cabinets form a **ring**: cab1 → cab2 → cab3 → cab4 → cab1. With 2 cabinets: cab1 → cab2 → cab1.
+- **`-comm_framesync` is not used**: every test was run without it.
+- **Each cabinet has its own NVRAM** (or its own DIP lines in its cfg). That is where the game reads its cabinet
+  number, its role (master or slave) and the number of machines. Without it, each cabinet races alone.
+- Start order and start offset do not matter: every game links with 0, 4 or 15 s between the cabinets.
+  The connection comes up on its own when a cabinet starts late.
 
-### Sur les bornes
+### On the cabinets
 
-`RunMAMELinkGame.cmd` appelle `set_cab_id.bat`, qui donne `CAB_ID` (`_link_cab1` ou `_link_cab2`),
-puis `set_cab_network<CAB_ID>.bat` :
+`RunMAMELinkGame.cmd` calls `set_cab_id.bat`, which sets `CAB_ID` (`_link_cab1` or `_link_cab2`),
+then `set_cab_network<CAB_ID>.bat`:
 
-| Borne | LOCALIP | LOCALPORT | NEXTIP | NEXTPORT |
+| Cabinet | LOCALIP | LOCALPORT | NEXTIP | NEXTPORT |
 |---|---|---|---|---|
 | cab1 | 192.168.1.4 | 15112 | 192.168.1.5 | 15113 |
 | cab2 | 192.168.1.5 | 15113 | 192.168.1.4 | 15112 |
 
-Le dossier d'écriture est `-writedir C:\Racecab\Saves\mame_link_cabN` (UWF). Au premier lancement, MAME lit les
-NVRAM en place dans `nvram\<jeu>`, que Build-Config pose depuis `nvram_link_cabN`. Ensuite, il ne lit plus que
-celles du writedir. **Pour changer la NVRAM d'une borne, il faut donc vider `Saves\mame_link_cabN\nvram\<jeu>`.**
+The write directory is `-writedir C:\Racecab\Saves\mame_link_cabN` (UWF). On the first run, MAME reads the NVRAMs
+in place in `nvram\<game>`, which Build-Config copies from `nvram_link_cabN`. After that it only reads the ones in
+the writedir. **To change a cabinet's NVRAM, first empty `Saves\mame_link_cabN\nvram\<game>`.**
 
-Pour 3 ou 4 bornes, il faut aussi des scripts `set_cab_network_link_cab3/4.bat` qui ferment l'anneau
+For 3 or 4 cabinets, `set_cab_network_link_cab3/4.bat` scripts are also needed to close the ring
 (cab2 → cab3, cab3 → cab4, cab4 → cab1).
 
-Touches des bornes : pièce = vJoy 1, Test = vJoy 2, Service = vJoy 3, Start = vJoy 4.
+Cabinet buttons: coin = vJoy 1, Test = vJoy 2, Service = vJoy 3, Start = vJoy 4.
 
-### Sur un seul PC (essais)
+### On a single PC (tests)
 
-Une adresse de boucle locale et un port par instance, un `-writedir` par instance (sinon les NVRAM se mélangent) :
+One loopback address and one port per instance, and one `-writedir` per instance (otherwise the NVRAMs get mixed):
 ```
 mame.exe raverace -writedir cab1 -comm_localhost 127.0.0.4 -comm_localport 15112 -comm_remotehost 127.0.0.5 -comm_remoteport 15113
 mame.exe raverace -writedir cab2 -comm_localhost 127.0.0.5 -comm_localport 15113 -comm_remotehost 127.0.0.4 -comm_remoteport 15112
 ```
-Mettre la NVRAM de la borne N dans `cabN\nvram\<jeu>\` avant le premier lancement.
-Pour 4 instances : 127.0.0.4 à .7, ports 15112 à 15115, la dernière pointe vers la première.
+Put cabinet N's NVRAM in `cabN\nvram\<game>\` before the first run.
+For 4 instances: 127.0.0.4 to .7, ports 15112 to 15115, the last one pointing back to the first.
 
 ---
 
-## 2. Réglages par jeu
+## 2. Per-game settings
 
-### 2.1 Namco (C139) : tout est dans la NVRAM
+### 2.1 Namco (C139): everything is in the NVRAM
 
-Avec le nouveau C139 (depuis g8e81ca4), **aucun réglage de port n'est nécessaire** : les ports standard 15112/15113
-suffisent pour tous les jeux. Il suffit de poser la NVRAM de la borne : rien à faire dans les menus.
+With the new C139 (since g8e81ca4), **no port tweak is needed**: the standard ports 15112/15113 work for every game.
+Just put the cabinet's NVRAM in place: nothing to do in the menus.
 
-| Jeu (set) | Bornes | Ce qui distingue les bornes |
+| Game (set) | Cabinets | What tells the cabinets apart |
 |---|---|---|
-| ridgera2 (Ridge Racer 2) | 2-4 | CPU NO. 1-4 et CAR TYPE 1-4 (EEPROM 0x71C/0x71D) |
-| raverace (Rave Racer) | 2-4 | CPU NUMBER 1-4 et CAR TYPE 1-4 (EEPROM 0x2C0/0x2C1) |
+| ridgera2 (Ridge Racer 2) | 2-4 | CPU NO. 1-4 and CAR TYPE 1-4 (EEPROM 0x71C/0x71D) |
+| raverace (Rave Racer) | 2-4 | CPU NUMBER 1-4 and CAR TYPE 1-4 (EEPROM 0x2C0/0x2C1) |
 | acedrive (Ace Driver) | 2-8 | PCB ID NUMBER 1-4 (EEPROM 0x111) |
 | victlap (Ace Driver Victory Lap) | 2-8 | PCB ID NUMBER 1-4 (EEPROM 0x10C) |
-| winrun91, winrungp (Winning Run '91, Suzuka GP) | 2-8 | CAR TYPE et CPU NO. (octets 8-9, somme en 0xC) |
-| finallap, finalap2, finalap3 (Final Lap 1/2/3) | 2-8 | n° de PCB 0xFE01-0xFE04 (octets 0x10-0x11) |
-| fourtrax (Four Trax) | 2-8 | GRID NO 0-3 (octet 8) |
-| suzuka8h, suzuk8h2 (Suzuka 8 Hours 1/2) | 2-8 | GRID NO 0-3 (octet 9) |
-| dirtfoxj (Dirt Fox) | 2-8 | CAR TYPE 1-4 (octet 0x47, somme en 0x41) |
+| winrun91, winrungp (Winning Run '91, Suzuka GP) | 2-8 | CAR TYPE and CPU NO. (bytes 8-9, checksum at 0xC) |
+| finallap, finalap2, finalap3 (Final Lap 1/2/3) | 2-8 | PCB number 0xFE01-0xFE04 (bytes 0x10-0x11) |
+| fourtrax (Four Trax) | 2-8 | GRID NO 0-3 (byte 8) |
+| suzuka8h, suzuk8h2 (Suzuka 8 Hours 1/2) | 2-8 | GRID NO 0-3 (byte 9) |
+| dirtfoxj (Dirt Fox) | 2-8 | CAR TYPE 1-4 (byte 0x47, checksum at 0x41) |
 | cybrcycc (Cyber Cycles) | 2-4 | ID NUMBER 0-3 (EEPROM 0x26) |
-| adillor (Armadillo Racing) | 2-4 | PCB ID 0-3 (enregistrement à somme de contrôle, voir `C139.md` § 7) |
+| adillor (Armadillo Racing) | 2-4 | PCB ID 0-3 (checksummed settings record, see `C139_en.md` § 7) |
 | alpinr2b (Alpine Racer 2) | 2 | ID NO. 0 LEFT / 1 RIGHT (EEPROM 0x32) |
 
-Pour refaire un réglage à la main :
-- **raverace** : Test (bascule). Volant à droite pour descendre, à gauche pour monter, accélérateur pour entrer,
-  éditer ou valider. Aller dans GAME OPTIONS (2e ligne). Le curseur arrive sur NEXT PAGE ; 13 crans à gauche mènent à
-  CPU NUMBER. Faire accélérateur, volant à droite (+1), accélérateur. 1 cran à droite mène à CAR TYPE : même manœuvre.
-  Descendre jusqu'à EXIT, accélérateur, puis Test (bascule) pour sortir. La ligne sous le curseur clignote.
-- **acedrive / victlap** : Test (bascule). Levier (Shift Up) pour descendre, accélérateur pour entrer.
-  Aller dans GAME OPTIONS, sur PCB ID NUMBER. Accélérateur, Shift Up (1 → 2), accélérateur.
-  Shift Up jusqu'à EXIT, accélérateur, puis Test.
-- **winrun91 / winrungp** : Test (bascule) ouvre GAME OPTIONS 1. Volant pour changer de ligne, levier Up/Down pour
-  changer la valeur. Mettre CAR TYPE A → B et CPU NO. 1 → 2, puis Test. La ligne « LINK OK n » ne fait qu'afficher.
-- Les jeux sans tableau de menu ici (Final Lap, Four Trax, Suzuka, Dirt Fox, Cyber Cycles, Armadillo, Alpine Racer 2) :
-  utiliser les NVRAM fournies.
+To redo a setting by hand:
+- **raverace**: Test (toggle). Wheel right to go down, left to go up, accelerator to enter, edit or confirm.
+  Go to GAME OPTIONS (2nd line). The cursor lands on NEXT PAGE; 13 steps left lead to CPU NUMBER.
+  Press accelerator, wheel right (+1), accelerator. 1 step right leads to CAR TYPE: same moves.
+  Go down to EXIT, accelerator, then Test (toggle) to leave. The line under the cursor blinks.
+- **acedrive / victlap**: Test (toggle). Lever (Shift Up) to go down, accelerator to enter.
+  Go to GAME OPTIONS, onto PCB ID NUMBER. Accelerator, Shift Up (1 → 2), accelerator.
+  Shift Up down to EXIT, accelerator, then Test.
+- **winrun91 / winrungp**: Test (toggle) opens GAME OPTIONS 1. Wheel to change line, lever Up/Down to change the value.
+  Set CAR TYPE A → B and CPU NO. 1 → 2, then Test. The "LINK OK n" line is display only.
+- Games without a menu path here (Final Lap, Four Trax, Suzuka, Dirt Fox, Cyber Cycles, Armadillo, Alpine Racer 2):
+  use the provided NVRAMs.
 
-### 2.2 Konami (K056230) : DIP MAME « Network ID »
+### 2.2 Konami (K056230): MAME "Network ID" DIP
 
-midnrun (Midnight Run), windheat (Winding Heat), gticlub (GTI Club). Rien à régler dans le jeu : cab1 garde l'ID 1
-par défaut, et les autres bornes reçoivent une ligne DIP dans la section `<input>` de leur cfg :
+midnrun (Midnight Run), windheat (Winding Heat), gticlub (GTI Club). Nothing to set in the game: cab1 keeps the
+default ID 1, and the other cabinets get a DIP line in the `<input>` section of their cfg:
 
-| Jeu | cab2 | cab3 | cab4 |
+| Game | cab2 | cab3 | cab4 |
 |---|---|---|---|
 | midnrun, windheat | `<port tag=":IN3" type="DIPSWITCH" mask="12" defvalue="12" value="8" />` | value="4" | value="0" |
 | gticlub | `<port tag=":IN3" type="DIPSWITCH" mask="3" defvalue="3" value="2" />` | value="1" | value="0" |
 
-**gticlub** refait le réglage des commandes à chaque démarrage. Avec une EEPROM vierge et sans volant, il affiche
-« DEVICE ERROR (STEERING WHEEL) – PUSH TEST SWITCH TO SKIP » au bout d'environ 70 s. Les EEPROM fournies sont déjà
-passées. Sinon : un appui bref sur Test, puis Shift Down une fois (le menu boucle sur GAME MODE), puis Start.
+**gticlub** redoes its controls setup on every boot. With a blank EEPROM and no wheel, it shows
+"DEVICE ERROR (STEERING WHEEL) – PUSH TEST SWITCH TO SKIP" after about 70 s. The provided EEPROMs are already
+past it. Otherwise: one short press on Test, then Shift Down once (the menu wraps to GAME MODE), then Start.
 
-### 2.3 Sega : menus de test ou DIP
+### 2.3 Sega: test menus or DIPs
 
-| Jeu | Carte | Réglage | Où |
+| Game | Board | Setting | Where |
 |---|---|---|---|
-| **scrossa** (pas scross !) | s32comm | cab1 NETWORK / MASTER, cab2 NETWORK / SLAVE | menu test (EEPROM) + `scrossa.cfg` (entrées) |
-| orunners (OutRunners) | s32comm | NETWORK ASSIGNMENTS → COMMUNICATION NETWORK : cab1 MASTER / ID 1, cab2 SLAVE / ID 2 | menu test |
-| f1lap (F1 Super Lap) | s32comm | GAME ASSIGNMENTS → NETWORK ID NUMBER : cab1 « 1 MASTER », cab2 « 2 » | menu test, **puis relancer le jeu** |
-| radr (Rad Rally) | s32comm | Game & system setting → Network ID number (changer avec Start) : cab1 « 1 Master », cab2 « 2 » | menu test |
-| vr (Virtua Racing), vformula (Virtua Formula) | m1comm | GAME SYSTEM → LINK ID : cab1 MASTER, cab2 SLAVE | menu test, **sortir par EXIT puis YES** |
-| pdriftl (Power Drift Link) | ybdcomm | Link_SW1 : Cabinet ID 1/2, Cabinet Count 2 sur les deux | DIP MAME (cfg) |
-| smgp (Super Monaco GP) | xbdcomm | Machine ID 1/2, Number of Machines 2 | DIP MAME (cfg) |
+| **scrossa** (not scross!) | s32comm | cab1 NETWORK / MASTER, cab2 NETWORK / SLAVE | test menu (EEPROM) + `scrossa.cfg` (inputs) |
+| orunners (OutRunners) | s32comm | NETWORK ASSIGNMENTS → COMMUNICATION NETWORK: cab1 MASTER / ID 1, cab2 SLAVE / ID 2 | test menu |
+| f1lap (F1 Super Lap) | s32comm | GAME ASSIGNMENTS → NETWORK ID NUMBER: cab1 "1 MASTER", cab2 "2" | test menu, **then restart the game** |
+| radr (Rad Rally) | s32comm | Game & system setting → Network ID number (change with Start): cab1 "1 Master", cab2 "2" | test menu |
+| vr (Virtua Racing), vformula (Virtua Formula) | m1comm | GAME SYSTEM → LINK ID: cab1 MASTER, cab2 SLAVE | test menu, **leave through EXIT, then YES** |
+| pdriftl (Power Drift Link) | ybdcomm | Link_SW1: Cabinet ID 1/2, Cabinet Count 2 on both | MAME DIP (cfg) |
+| smgp (Super Monaco GP) | xbdcomm | Machine ID 1/2, Number of Machines 2 | MAME DIP (cfg) |
 
-Détails des menus :
-- **scrossa** : il faut un **appui très bref** sur Test (≈ 40 ms). Un appui plus long sélectionne EXIT, où le curseur
-  est par défaut, et le jeu redémarre au relâchement. C'est le comportement de la ROM, la vraie borne fait pareil.
-  Service déplace le curseur, Test valide. Depuis EXIT, 12 fois Service mènent à COMMUNICATION SETTING ; faire Test.
-  Dans ce menu : 1re ligne, Test (STANDALONE → NETWORK) ; 2e ligne, Test (MASTER ↔ SLAVE) ; EXIT, Test ;
-  puis EXIT du menu principal.
-- **orunners** : Service = Push SW1, Test = Push SW2 dans les menus.
-- **vr / vformula** : bouton rouge pour choisir, vert pour entrer, bleu pour changer la valeur
-  (NO LINK → LIVE → SLAVE → MASTER). Le vert ne sort que depuis la ligne EXIT. Il faut ensuite répondre **YES**
-  à « SAVE THE CHANGE ? », sinon rien n'est gardé. Le menu de vformula est plus court que celui de vr :
-  après LINK ID viennent RACE MODE, COUNTRY, ADVERTISE, DIFFICULTY, EXIT. Compter les crans, sinon le curseur
-  repasse par le haut.
-- **f1lap** : le nouvel ID n'est pris en compte qu'après une relance du jeu.
+Menu details:
+- **scrossa**: Test needs a **very short press** (≈ 40 ms). A longer press selects EXIT, where the cursor sits by
+  default, and the game restarts on release. This is the ROM's behaviour; the real cabinet does the same.
+  Service moves the cursor, Test confirms. From EXIT, 12 presses of Service lead to COMMUNICATION SETTING; press Test.
+  In that menu: 1st line, Test (STANDALONE → NETWORK); 2nd line, Test (MASTER ↔ SLAVE); EXIT, Test;
+  then EXIT from the main menu.
+- **orunners**: in the menus, Service = Push SW1, Test = Push SW2.
+- **vr / vformula**: red button to select, green to enter, blue to change the value
+  (NO LINK → LIVE → SLAVE → MASTER). Green only leaves from the EXIT line. Then answer **YES**
+  to "SAVE THE CHANGE ?", otherwise nothing is kept. The vformula menu is shorter than vr's:
+  after LINK ID come RACE MODE, COUNTRY, ADVERTISE, DIFFICULTY, EXIT. Count the steps, or the cursor
+  wraps back to the top.
+- **f1lap**: the new ID only takes effect after the game is restarted.
 
-Lignes DIP Sega (section `<input>` du cfg de chaque borne) :
-- **pdriftl** : sur toutes les bornes `<port tag=":ybdcomm:Link_SW1" type="DIPSWITCH" mask="240" defvalue="16" value="32" />`
-  (nombre de bornes : 2 → 32, 3 → 48, 4 → 64). En plus, sur les bornes 2 à 4 :
-  `<port tag=":ybdcomm:Link_SW1" type="DIPSWITCH" mask="15" defvalue="1" value="2" />` (value = n° de borne).
-- **smgp** : sur toutes les bornes `<port tag=":mainpcb:IO1PORTD" type="DIPSWITCH" mask="56" defvalue="56" value="48" />`
-  (nombre de machines : 2 → 48, 3 → 40, 4 → 32). En plus, sur les bornes 2 à 4 :
-  `<port tag=":mainpcb:IO1PORTD" type="DIPSWITCH" mask="7" defvalue="7" value="6" />` (borne 2 → 6, 3 → 5, 4 → 4).
+Sega DIP lines (`<input>` section of each cabinet's cfg):
+- **pdriftl**: on every cabinet `<port tag=":ybdcomm:Link_SW1" type="DIPSWITCH" mask="240" defvalue="16" value="32" />`
+  (number of cabinets: 2 → 32, 3 → 48, 4 → 64). In addition, on cabinets 2 to 4:
+  `<port tag=":ybdcomm:Link_SW1" type="DIPSWITCH" mask="15" defvalue="1" value="2" />` (value = cabinet number).
+- **smgp**: on every cabinet `<port tag=":mainpcb:IO1PORTD" type="DIPSWITCH" mask="56" defvalue="56" value="48" />`
+  (number of machines: 2 → 48, 3 → 40, 4 → 32). In addition, on cabinets 2 to 4:
+  `<port tag=":mainpcb:IO1PORTD" type="DIPSWITCH" mask="7" defvalue="7" value="6" />` (cabinet 2 → 6, 3 → 5, 4 → 4).
 
-MAME n'a pas d'option de DIP en ligne de commande : ces lignes vont dans le cfg propre à chaque borne.
+MAME has no command-line option for DIPs: these lines go into each cabinet's own cfg.
 
 ---
 
-## 3. Pièges connus
+## 3. Known pitfalls
 
-- **scross ne se lie pas** : son menu COMMUNICATION SETTING est du code mort. Lancer **scrossa**
-  (« World, linkable », déjà contenu dans scross.zip fusionné) avec `scrossa.cfg`. Sans section `<input>` dans le cfg,
-  vJoy 1 n'est pas Coin 1 et le jeu reste à 0 crédit.
-- **finallap, finalap2, fourtrax, dirtfoxj** : il manque `lh5762.6n` (CRC 90db1bf6) dans les zip du NAS.
-  Le poser en fichier libre dans `MameRoms\<set>\lh5762.6n`, sans toucher au zip ; MAME le trouve à côté.
-  Son contenu est le même que celui de `04544191.6r` de finalap3.zip.
-- **smgp** : chaque joueur doit se qualifier (un tour en moins de 45 s). Un joueur qui rate la qualification
-  revient à « ENTRIES WELCOME » : c'est normal, ce n'est pas un problème de link.
-- **vr.zip** : ne jamais l'écraser (il contient epr-15111.12 et vformula fusionné).
-- **Changer de NVRAM** sur une borne sous UWF : vider d'abord le sous-dossier du writedir (voir § 1).
-- **Rave Racer à 4** : il est arrivé 2 fois sur 14 essais que deux ou trois bornes affichent la même POSITION
-  (une fois avec d'autres MAME en cours sur le PC, une fois au coude à coude). Les 6 essais suivants sont cohérents.
-  À surveiller, sans régression démontrée.
-- **Ancien exe 919EFA6F (avant g8e81ca4)** : il demandait le port 15114 sur cab2 pour acedrive, victlap,
-  winrun91 et winrungp, et ne liait ni ridgera2 ni Final Lap. Ce réglage n'est plus utile (il est sans effet s'il reste).
+- **scross does not link**: its COMMUNICATION SETTING menu is dead code. Run **scrossa**
+  ("World, linkable", already inside the merged scross.zip) with `scrossa.cfg`. Without an `<input>` section in
+  the cfg, vJoy 1 is not Coin 1 and the game stays at 0 credits.
+- **finallap, finalap2, fourtrax, dirtfoxj**: `lh5762.6n` (CRC 90db1bf6) is missing from the NAS zips.
+  Put it as a loose file in `MameRoms\<set>\lh5762.6n`, leaving the zip untouched; MAME finds it next to it.
+  Its content is the same as `04544191.6r` in finalap3.zip.
+- **smgp**: each player must qualify (a lap under 45 s). A player who fails qualifying goes back to
+  "ENTRIES WELCOME": this is normal, not a link problem.
+- **vr.zip**: never overwrite it (it holds epr-15111.12 and the merged vformula).
+- **Changing NVRAM** on a UWF cabinet: empty the writedir subfolder first (see § 1).
+- **Rave Racer with 4 cabinets**: 2 times out of 14 runs, two or three cabinets showed the same POSITION
+  (once with other MAME instances running on the PC, once in a close race). The 6 runs after that were consistent.
+  Worth watching; no regression proven.
+- **Old exe 919EFA6F (before g8e81ca4)**: it needed port 15114 on cab2 for acedrive, victlap, winrun91 and winrungp,
+  and linked neither ridgera2 nor Final Lap. That tweak is no longer needed (it has no effect if left in).
 
-## 4. Jeux sans link
+## 4. Games without link
 
-- **ridgerac** : Ridge Racer standard, pas de link dans le jeu.
-- **ridgeracf** (Full Scale) : 3 écrans sur une seule machine, ROM de textures jamais dumpées, non jouable.
-- **driveyes** (Driver's Eyes) : une seule machine à 3 écrans, les trois cartes sont reliées dans le pilote.
-  Les trois écrans fonctionnent.
-- **dirtdash** (Dirt Dash) : pas de code de link dans le jeu.
+- **ridgerac**: standard Ridge Racer, no link in the game.
+- **ridgeracf** (Full Scale): 3 screens on one machine, texture ROMs never dumped, not playable.
+- **driveyes** (Driver's Eyes): one machine with 3 screens, the three boards are wired together in the driver.
+  All three screens work.
+- **dirtdash** (Dirt Dash): no link code in the game.
 
-## 5. Vérifier qu'un link fonctionne
+## 5. Checking that a link works
 
-- **Écran d'attraction ou de sélection** :
-  - ridgera2 : « Up to 4 can race at once! » ;
-  - raverace : « PLAY LINKED GAMES… » ;
-  - Final Lap : « UP TO 2/4 CAN RACE SIMULTANEOUSLY » ;
-  - smgp : « ENTRIES WELCOME – LINK SYSTEM ».
-- **En course** :
-  - la position est donnée sur le nombre de bornes (1/2, 2/2…) ;
-  - les voitures des autres joueurs apparaissent, dans leurs couleurs ;
-  - vr et vformula affichent 1ST/2, 2ND/2.
-- Une borne seule affiche au contraire 1/1, « UP TO 1 CAN PLAY » ou « One-player VS computer cars ».
+- **Attract or selection screen**:
+  - ridgera2: "Up to 4 can race at once!";
+  - raverace: "PLAY LINKED GAMES…";
+  - Final Lap: "UP TO 2/4 CAN RACE SIMULTANEOUSLY";
+  - smgp: "ENTRIES WELCOME – LINK SYSTEM".
+- **In the race**:
+  - the position is shown out of the number of cabinets (1/2, 2/2…);
+  - the other players' cars appear, in their colours;
+  - vr and vformula show 1ST/2, 2ND/2.
+- A cabinet alone shows 1/1, "UP TO 1 CAN PLAY" or "One-player VS computer cars" instead.
 
-## 6. Avec `dev/mame3d` (rendu HD)
+## 6. With `dev/mame3d` (HD rendering)
 
-- Le link fonctionne aussi avec `-hires3d 2` ou `4` et le rendu Vulkan (`-hires3d_renderer auto`). Testé sur les
-  12 jeux à puce 3D (System 22, System 21, gticlub, midnrun, windheat), avec 0, 4 ou 15 s d'écart.
-- `-verbose` doit afficher « hires3d drawn with Vulkan on … ». Vérifié en solo pour un jeu de chaque famille.
-- `-output network` envoie au démarrage `mame_start = <jeu>` en broadcast UDP sur le port 8001.
-  BackForceFeeder et le FFB Plugin njz3 l'écoutent tous les deux (port partagé).
-- À la sortie, tous les jeux testés quittent MAME avec le code 0 : les 27 jeux en natif, les 12 jeux 3D en Vulkan.
+- Link also works with `-hires3d 2` or `4` and the Vulkan renderer (`-hires3d_renderer auto`). Tested on the
+  12 games with a 3D chip (System 22, System 21, gticlub, midnrun, windheat), with 0, 4 or 15 s offsets.
+- `-verbose` should print "hires3d drawn with Vulkan on …". Checked solo for one game of each family.
+- `-output network` broadcasts `mame_start = <game>` over UDP on port 8001 at start-up.
+  BackForceFeeder and the njz3 FFB Plugin both listen to it (shared port).
+- On exit, every tested game leaves MAME with code 0: all 27 games in native mode, the 12 3D games with Vulkan.
