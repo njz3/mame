@@ -1026,25 +1026,33 @@ ces jeux : défaut de la capture, pas de l'affichage.
     cockpit, le bas de l'habitacle, modélisé pour du 4:3, laisse voir la
     route sur les bords. Seul le DSP 1 a le programme (le site n'est pas
     trouvé sur le DSP 2).
-- **Thrill Drive 1, rétroviseur vide** (signalé par le propriétaire, en
-  cours) : le cadre du rétro (en haut au centre) reste mauve uni, avec ou
-  sans `-widescreen` (les captures du binaire d'avant le patch 16:9 sont
-  pareilles) : pas causé par le 16:9, manque de l'émulation NWK-TR.
-  - Thrill Drive utilise deux cartes vidéo (note du pilote : carte du haut
-    en MASTER/TWIN, celle du bas en SLAVE ; CN2 du haut relié au CN8 "RGB
-    IN" du bas). Dans MAME, le DSP 2 n'a jamais de programme (mémoire
-    programme à zéro, PC 0x20004), sa Voodoo ne reçoit rien ;
-    `screen_update` n'affiche qu'une carte (`m_exrgb`).
-  - Traçage du PowerPC (sysreg 7, bits EXID) : il sélectionne la carte 0
-    pour tout (programme du DSP, commandes, mémoire partagée), l'id 2
-    seulement au démarrage (6 écritures comm, ~26000 dans la vue CG),
-    jamais la carte 1. Hypothèse : en mode TWIN, la carte 1 reçoit les mêmes
-    écritures que la carte 0, son DSP sait qu'il est esclave et dessine le
-    rétro, que la carte maître incruste dans le cadre (couleur clé de la 2D).
-  - Essai en cours, NON commité (marqué TEMP) : dans konppc.cpp, avec la
-    variable d'environnement `M3D_TWIN`, les écritures comm et mémoire
-    partagée de la carte 0 sont copiées vers la carte 1 ; dans nwk-tr.cpp,
-    `M3D_SHOWB2` affiche la carte 1. Compilé, pas encore lancé. À faire :
-    voir si le DSP 2 démarre et ce que dessine la Voodoo 2, puis si c'est
-    le rétro, le composer dans le cadre et retirer les variables
-    d'environnement.
+- **Thrill Drive 1, rétroviseur vide** (voodoo_render.cpp, voodoo.cpp,
+  voodoo_vk.cpp) : le cadre du rétro (en haut au centre) restait mauve uni,
+  avec ou sans `-widescreen`. Bug de la Voodoo de MAME, pas du 16:9.
+  - Fausse piste : la 2e carte vidéo (TWIN/SLAVE). Son DSP n'a jamais de
+    programme dans MAME, mais le PowerPC ne s'adresse qu'à la carte 0
+    (l'id 2 seulement au démarrage) ; en copiant les écritures vers la
+    carte 1, elle dessine la même image que la carte 0, le DSP n'ayant pas
+    d'identité à lui (pas de lecture de drapeau ou de cavalier).
+  - Le rétro est dessiné par la carte 0 : une commande viewport de plus,
+    centre (256, 344), demi-taille (128, 32), focales +128/−128 (positive en
+    horizontal : l'image est retournée), découpage x 128-384, y 312-376
+    avec l'origine Y en bas (fbzMode bit 17) ; un fast fill de la zone en
+    0xaab4ff (le mauve), puis ~60 triangles avec un test alpha et une
+    couleur clé.
+  - Cause : le fast fill compare le rectangle de découpage aux Y avant
+    retournement (il remplit la bonne zone), les triangles aux Y après
+    retournement : avec un rectangle qui n'est pas plein écran, tous les
+    triangles du rétro (y 312-376 → lignes 7-71) étaient rejetés. Les
+    triangles sont maintenant découpés comme le fast fill, dans les trois
+    chemins (logiciel, -hires3d logiciel, Vulkan). Les écritures LFB à
+    travers le pipeline gardent l'ancienne comparaison (non vu utilisé).
+  - Vérifié au pixel avant/après en attract (70 s) : GTI Club 1 et 2, Hang
+    Pilot, Thrill Drive 2, Xtrial Racing, San Francisco Rush, California
+    Speed, Gradius 4, Teraburst identiques ; Rush 2049 et 2049 SE : seule
+    l'horloge affichée diffère ; Racing Jam 1 et 2 : la bande grise du bas
+    de l'écran disparaît, la 3D descend jusqu'en bas (même cause, plus
+    juste). Thrill Drive : rétro en natif, Vulkan ×2, logiciel ×2.
+  - Avec `-widescreen`, la caméra du rétro est élargie aussi (seule −443,
+    le tableau de bord, est laissée), pour qu'il garde ses proportions une
+    fois étiré.

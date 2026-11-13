@@ -491,8 +491,9 @@ namespace {
 //     R10 = FEXT R14 BY 0:16 (SE),  R14 = DM(I4, M1)       vertical focal length
 //     R11 = FEXT R14 BY 0:16 (SE)
 //     R15 = 0x00000004
-// the focal lengths are negative, in pixels; the projection and the clipping
-// planes of the DSP both come from them
+// the focal lengths are in pixels, negative (the horizontal one is positive
+// for the rear view mirror, which is seen flipped); the projection and the
+// clipping planes of the DSP both come from them
 constexpr uint64_t WIDESCREEN_SIGNATURE[8] = {
 		0x587e07042dddU, 0x887e2712008eU, 0x887e2212009eU, 0x587e028ca640U,
 		0x587e070ca750U, 0x887e271200aeU, 0x023e201200beU, 0x0f0f00000004U };
@@ -501,7 +502,7 @@ constexpr uint32_t WIDESCREEN_SITE = 4;
 // the 3D parts of the dashboard (the needle of the rev counter, the digits
 // of the speed) are drawn with this one, left alone: they are stretched with
 // the 2D of the dashboard (the world is drawn with -215 for a half width of
-// 256, the tangent of 50 degrees)
+// 256, the tangent of 50 degrees, and the mirror with 128 for 128)
 constexpr int WIDESCREEN_DASHBOARD = -443;
 
 } // anonymous namespace
@@ -531,7 +532,7 @@ void nwktr_state::widescreen_start()
 					if (m_widescreen_site[board] && (m_dsp[board]->pc() == m_widescreen_site[board]))
 					{
 						int const focal = int16_t(uint16_t(data));
-						if ((focal < 0) && (focal != WIDESCREEN_DASHBOARD))
+						if (focal != WIDESCREEN_DASHBOARD)
 							data = (data & ~0xffffU) | (uint32_t(std::lround(float(focal) / factor)) & 0xffffU);
 					}
 				});

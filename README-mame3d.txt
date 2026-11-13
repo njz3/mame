@@ -89,8 +89,9 @@ Display
 - Thrill Drive 1 with -widescreen: the field of view the game gives the 3D
   processor is made 4/3 wider as it is read, and the picture is shown
   stretched to 16:9, as for Thrill Drive 2. The 3D keeps its shape; the
-  dashboard (rev counter, speed) is stretched. In the cockpit view, the
-  bottom of the cockpit, made for 4:3, leaves the road visible at the edges.
+  dashboard (rev counter, speed) is stretched, the rear view mirror keeps
+  its shape. In the cockpit view, the bottom of the cockpit, made for 4:3,
+  leaves the road visible at the edges.
   Tested on thrilld only, without -hires3d and at x2.
   Example: mame thrilld -hires3d 2 -widescreen
 - Option -widescreen_2d 4:3|stretch (4:3 by default): texts, counters and
@@ -107,6 +108,10 @@ Display
 
 Since mame3d 0.289-2336-g705501b
 - Thrill Drive 1 and 2: 16:9 with -widescreen (see Display).
+- Thrill Drive 1: the rear view mirror stayed empty (light blue). Racing
+  Jam 1 and 2: a grey band at the bottom of the screen. The Voodoo clipped
+  the triangles in the wrong place when the game draws from the bottom of
+  the screen. Fixed (also with -hires3d, Vulkan or software).
 - Race On!, 500 GP, Motocross Go! (Vulkan): the picture was sometimes one
   frame late, for long stretches, depending on the run: the wait for the
   GPU returned at once and the previous frame was read back. Fixed.
