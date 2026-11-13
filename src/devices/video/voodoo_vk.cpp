@@ -1631,8 +1631,18 @@ void voodoo_vk::triangle(int buffer, bool has_aux, poly_data const &poly, voodoo
 	cmd.type = CMD_TRIANGLES;
 	cmd.buffer = s8(buffer);
 	cmd.key = key;
+	// the clip rectangle is in the coordinates of the Y origin, as for a fast
+	// fill: flipped to frame buffer rows with it
+	s32 cliptop = poly.cliptop;
+	s32 clipbottom = poly.clipbottom;
+	if (fbzmode.y_origin())
+	{
+		s32 const flipped = poly.yorigin + 1 - clipbottom;
+		clipbottom = poly.yorigin + 1 - cliptop;
+		cliptop = flipped;
+	}
 	cmd.rect = fbzmode.enable_clipping()
-			? s.clip(poly.clipleft, poly.cliptop, poly.clipright, poly.clipbottom)
+			? s.clip(poly.clipleft, cliptop, poly.clipright, clipbottom)
 			: s.clip(0, 0, s.width, s.height);
 	cmd.first = u32(s.offset_data.size());
 	cmd.count = 1;

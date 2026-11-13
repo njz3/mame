@@ -2249,8 +2249,10 @@ void voodoo_renderer::rasterizer(s32 y, const voodoo_renderer::extent_t &extent,
 	// apply clipping
 	if (fbzmode.enable_clipping())
 	{
-		// Y clipping buys us the whole scanline
-		if (scry < poly.cliptop || scry >= poly.clipbottom)
+		// Y clipping buys us the whole scanline; the clip rectangle is in the
+		// coordinates of the Y origin, as for a fast fill (Thrill Drive draws
+		// its rear view mirror into a fast-filled box with a lower left origin)
+		if (y < poly.cliptop || y >= poly.clipbottom)
 		{
 			threadstats.clip_fail += stopx - startx;
 			return;

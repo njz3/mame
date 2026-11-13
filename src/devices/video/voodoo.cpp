@@ -3402,18 +3402,19 @@ void voodoo_1_device::hires_triangle(poly_data const &poly, voodoo_renderer::ver
 	s32 right = s32(ceilf(maxx)) + 1;
 	s32 top = s32(floorf(miny)) - 1;
 	s32 bottom = s32(ceilf(maxy)) + 1;
+	if (fbzmode.enable_clipping())
+	{
+		// the clip rectangle is in the coordinates of the Y origin
+		left = std::max<s32>(left, hpoly.clipleft);
+		right = std::min<s32>(right, hpoly.clipright - 1);
+		top = std::max<s32>(top, hpoly.cliptop);
+		bottom = std::min<s32>(bottom, hpoly.clipbottom - 1);
+	}
 	if (fbzmode.y_origin())
 	{
 		s32 const flipped = hpoly.yorigin - bottom;
 		bottom = hpoly.yorigin - top;
 		top = flipped;
-	}
-	if (fbzmode.enable_clipping())
-	{
-		left = std::max<s32>(left, hpoly.clipleft);
-		right = std::min<s32>(right, hpoly.clipright - 1);
-		top = std::max<s32>(top, hpoly.cliptop);
-		bottom = std::min<s32>(bottom, hpoly.clipbottom - 1);
 	}
 	if ((left > right) || (top > bottom))
 		return;
