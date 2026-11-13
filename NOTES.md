@@ -1026,3 +1026,25 @@ ces jeux : défaut de la capture, pas de l'affichage.
     cockpit, le bas de l'habitacle, modélisé pour du 4:3, laisse voir la
     route sur les bords. Seul le DSP 1 a le programme (le site n'est pas
     trouvé sur le DSP 2).
+- **Thrill Drive 1, rétroviseur vide** (signalé par le propriétaire, en
+  cours) : le cadre du rétro (en haut au centre) reste mauve uni, avec ou
+  sans `-widescreen` (les captures du binaire d'avant le patch 16:9 sont
+  pareilles) : pas causé par le 16:9, manque de l'émulation NWK-TR.
+  - Thrill Drive utilise deux cartes vidéo (note du pilote : carte du haut
+    en MASTER/TWIN, celle du bas en SLAVE ; CN2 du haut relié au CN8 "RGB
+    IN" du bas). Dans MAME, le DSP 2 n'a jamais de programme (mémoire
+    programme à zéro, PC 0x20004), sa Voodoo ne reçoit rien ;
+    `screen_update` n'affiche qu'une carte (`m_exrgb`).
+  - Traçage du PowerPC (sysreg 7, bits EXID) : il sélectionne la carte 0
+    pour tout (programme du DSP, commandes, mémoire partagée), l'id 2
+    seulement au démarrage (6 écritures comm, ~26000 dans la vue CG),
+    jamais la carte 1. Hypothèse : en mode TWIN, la carte 1 reçoit les mêmes
+    écritures que la carte 0, son DSP sait qu'il est esclave et dessine le
+    rétro, que la carte maître incruste dans le cadre (couleur clé de la 2D).
+  - Essai en cours, NON commité (marqué TEMP) : dans konppc.cpp, avec la
+    variable d'environnement `M3D_TWIN`, les écritures comm et mémoire
+    partagée de la carte 0 sont copiées vers la carte 1 ; dans nwk-tr.cpp,
+    `M3D_SHOWB2` affiche la carte 1. Compilé, pas encore lancé. À faire :
+    voir si le DSP 2 démarre et ce que dessine la Voodoo 2, puis si c'est
+    le rétro, le composer dans le cadre et retirer les variables
+    d'environnement.
