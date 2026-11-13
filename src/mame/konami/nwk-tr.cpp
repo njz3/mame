@@ -242,7 +242,9 @@ Thrill Drive 713A13  -       713A14  -
 #include "sound/rf5c400.h"
 #include "video/voodoo_pci.h"
 
+#include "emuopts.h"
 #include "emupal.h"
+#include "hires3d.h"
 #include "screen.h"
 #include "speaker.h"
 
@@ -315,6 +317,16 @@ private:
 
 	bool m_sound_irq_enabled = false;
 	bool m_exrgb = false;
+
+	// mame3d -widescreen on Thrill Drive: the horizontal focal length the
+	// game gives the DSPs with each viewport is divided by the widening as
+	// they read it, and the screen is shown at 16:9 (an anamorphic frame)
+	void widescreen_start() ATTR_COLD;
+	void widescreen_vblank(screen_device &screen, bool state);
+	std::unique_ptr<hires3d_output> m_widescreen;
+	memory_passthrough_handler m_widescreen_tap[2];
+	uint32_t m_widescreen_site[2] = { 0, 0 };
+	int m_widescreen_wait = 0;
 
 	uint8_t sysreg_r(offs_t offset);
 	void sysreg_w(offs_t offset, uint8_t data);
@@ -467,6 +479,103 @@ void nwktr_state::soundtimer_ack_w(uint16_t data)
 }
 
 
+namespace {
+
+// the start of the viewport command of the Thrill Drive DSP program, one
+// 16-bit word read an instruction from the memory shared with the PowerPC:
+//     R13 = R13 XOR R13,  R14 = DM(I4, M1)                 centre x
+//     R8 = FEXT R14 BY 0:16 (SE),  R14 = DM(I4, M1)        centre y
+//     R9 = FEXT R14 BY 0:16 (SE),  R4 = DM(I4, M1)         half width
+//     F6 = FLOAT R4,  R5 = DM(I4, M1)                      half height
+//     F7 = FLOAT R5,  R14 = DM(I4, M1)                     <- site: horizontal focal length
+//     R10 = FEXT R14 BY 0:16 (SE),  R14 = DM(I4, M1)       vertical focal length
+//     R11 = FEXT R14 BY 0:16 (SE)
+//     R15 = 0x00000004
+// the focal lengths are negative, in pixels; the projection and the clipping
+// planes of the DSP both come from them
+constexpr uint64_t WIDESCREEN_SIGNATURE[8] = {
+		0x587e07042dddU, 0x887e2712008eU, 0x887e2212009eU, 0x587e028ca640U,
+		0x587e070ca750U, 0x887e271200aeU, 0x023e201200beU, 0x0f0f00000004U };
+constexpr uint32_t WIDESCREEN_SITE = 4;
+
+// the 3D parts of the dashboard (the needle of the rev counter, the digits
+// of the speed) are drawn with this one, left alone: they are stretched with
+// the 2D of the dashboard (the world is drawn with -215 for a half width of
+// 256, the tangent of 50 degrees)
+constexpr int WIDESCREEN_DASHBOARD = -443;
+
+} // anonymous namespace
+
+void nwktr_state::widescreen_start()
+{
+	if (!machine().options().bool_value(OPTION_WIDESCREEN) || strncmp(machine().system().name, "thrilld", 7))
+		return;
+	screen_device &screen = *subdevice<screen_device>("screen");
+	m_widescreen = std::make_unique<hires3d_output>(screen);
+	m_widescreen->allow_anamorphic(true);
+	if (!m_widescreen->anamorphic())
+	{
+		m_widescreen.reset();
+		return;
+	}
+	screen.register_vblank_callback(vblank_state_delegate(&nwktr_state::widescreen_vblank, this));
+
+	// the word the site reads: the focal length divided by the widening, for
+	// a view as many times wider (the vertical one is left alone)
+	float const factor = m_widescreen->wide_factor();
+	for (int board = 0; board < 2; board++)
+	{
+		m_widescreen_tap[board] = m_dsp[board]->space(AS_DATA).install_read_tap(0x0400000, 0x041ffff, "widescreen",
+				[this, board, factor] (offs_t offset, u32 &data, u32 mem_mask)
+				{
+					if (m_widescreen_site[board] && (m_dsp[board]->pc() == m_widescreen_site[board]))
+					{
+						int const focal = int16_t(uint16_t(data));
+						if ((focal < 0) && (focal != WIDESCREEN_DASHBOARD))
+							data = (data & ~0xffffU) | (uint32_t(std::lround(float(focal) / factor)) & 0xffffU);
+					}
+				});
+	}
+}
+
+void nwktr_state::widescreen_vblank(screen_device &screen, bool state)
+{
+	if (!state)
+		return;
+
+	// the PowerPC loads the program of the DSPs: the site is checked every
+	// frame, and looked for once a second until it is there
+	bool const look = (m_widescreen_wait-- <= 0);
+	if (look)
+		m_widescreen_wait = 60;
+	for (int board = 0; board < 2; board++)
+	{
+		address_space &program = m_dsp[board]->space(AS_PROGRAM);
+		auto const matches = [&program] (uint32_t a)
+		{
+			for (uint32_t i = 0; i < std::size(WIDESCREEN_SIGNATURE); i++)
+				if ((program.read_qword(a + i) & 0xffff'ffff'ffffU) != WIDESCREEN_SIGNATURE[i])
+					return false;
+			return true;
+		};
+		uint32_t &site = m_widescreen_site[board];
+		if (site && matches(site - WIDESCREEN_SITE))
+			continue;
+		site = 0;
+		if (!look)
+			continue;
+		for (uint32_t a = 0x20000; a <= 0x24fff - std::size(WIDESCREEN_SIGNATURE); a++)
+		{
+			if (matches(a))
+			{
+				site = a + WIDESCREEN_SITE;
+				osd_printf_verbose("nwk-tr: -widescreen, viewport command of DSP %d at %05x (field of view %.3f times wider)\n", board + 1, site, m_widescreen->wide_factor());
+				break;
+			}
+		}
+	}
+}
+
 void nwktr_state::machine_start()
 {
 	// set conservative DRC options
@@ -474,6 +583,8 @@ void nwktr_state::machine_start()
 
 	// configure fast RAM regions for DRC
 	m_maincpu->ppcdrc_add_fastram(0x00000000, 0x003fffff, false, m_work_ram);
+
+	widescreen_start();
 
 	save_item(NAME(m_sound_irq_enabled));
 	save_item(NAME(m_exrgb));

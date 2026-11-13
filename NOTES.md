@@ -993,7 +993,36 @@ ces jeux : défaut de la capture, pas de l'affichage.
   `submit_and_wait()` (les autres puces ont leurs propres fences, ou
   remettent celle-ci à zéro avant d'envoyer). Après correction : ×2, ×3, ×4,
   deux lancements, aucun décalage, ×3 identique au natif.
-- **Thrill Drive 1** (Hornet) : pas fait. Le PowerPC 403 n'a pas de FPU, la
-  projection est faite par le DSP SHARC de la carte graphique (sommets déjà
-  projetés dans sa mémoire interne) : il faudrait retrouver la caméra dans le
-  microcode du DSP.
+- **Thrill Drive 1 en 16:9** (nwk-tr.cpp, `-widescreen`) : thrilld et ses
+  versions sont sur le pilote NWK-TR (pas Hornet : seuls les jeux thrilldg*
+  y sont, marqués non fonctionnels). Le PowerPC 403 n'a pas de FPU et ne
+  garde pas de flottants de caméra : en perturbant ~6500 flottants de sa
+  RAM et ~2750 du bloc 1 du DSP, rien. C'est le DSP SHARC qui projette.
+  - Trouvé en traçant les écritures du DSP vers la Voodoo (tap Lua sur
+    0x2400000-0x27fffff : fvertexAx..Cy en 0x2480022-27, ~460 triangles par
+    image), puis en remontant l'interpréteur de commandes du DSP (chaque
+    gestionnaire lit ses mots par `DM(I4, M1)` dans la mémoire partagée
+    0x400000 et saute au suivant par la table 0x28283).
+  - Commande 3 = viewport, 6 mots de 16 bits : centre (256, 192), demi-taille
+    (256, 192), focale horizontale puis verticale en pixels, négatives. Le
+    DSP en tire la projection (demi-largeur / |focale|) et les plans de
+    clipping (focale × 16). 7 viewports par image : le monde à −215
+    (256/215 = tan 50°, comme la tangente de Thrill Drive 2), le tableau de
+    bord 3D (aiguille du compte-tours, chiffres de vitesse) à −443, et une
+    lecture à +128 au même PC sans effet visible.
+  - Le patch : un tap de lecture sur la mémoire partagée des deux DSP ; quand
+    le DSP est au PC qui lit la focale horizontale (0x20130, retrouvé par
+    une signature de 8 instructions, vérifiée à chaque image, cherchée une
+    fois par seconde tant qu'elle n'y est pas), la valeur est divisée par
+    l'élargissement (4/3), sauf −443 (le tableau de bord reste comme la 2D,
+    étiré) et les valeurs positives. Image étirée en 16:9
+    (`allow_anamorphic`), comme Thrill Drive 2.
+  - Piège : un premier essai (écrire −332 dans la RAM du PowerPC en
+    0x3eb2d4) semblait élargir la vue à l'œil, mais les captures étaient
+    identiques au pixel : toujours comparer les pixels.
+  - Vérifié sur thrilld (seule version en local) : sans `-widescreen`, image
+    identique au pixel ; avec, identique au test Lua ; en fenêtre bgfx avec
+    `-hires3d 2`, image 16:9, voitures aux bonnes proportions. En vue
+    cockpit, le bas de l'habitacle, modélisé pour du 4:3, laisse voir la
+    route sur les bords. Seul le DSP 1 a le programme (le site n'est pas
+    trouvé sur le DSP 2).

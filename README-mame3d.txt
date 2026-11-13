@@ -77,8 +77,8 @@ Display
   projection MAME does, with the Vulkan renderer (also at -hires3d 1): Sega
   Model 1, Namco System 22 / Super 22, Namco System 23, SNK HNG64, Midway
   Zeus 2. Without Vulkan, the picture stays 4:3. No effect on games that
-  project their 3D themselves (Voodoo, PlayStation), except Thrill Drive 2
-  (below).
+  project their 3D themselves (Voodoo, PlayStation), except Thrill Drive 1
+  and 2 (below).
   Example: mame ridgerac -hires3d 2 -widescreen
 - Thrill Drive 2 with -widescreen (all versions): the camera setup of the
   game is patched in memory to see 4/3 wider, and the picture, which keeps
@@ -86,6 +86,13 @@ Display
   view mirror too; texts and counters are stretched (-widescreen_2d has no
   effect). Tested without -hires3d and with Vulkan at x2 and x4.
   Example: mame thrild2 -hires3d 2 -widescreen
+- Thrill Drive 1 with -widescreen: the field of view the game gives the 3D
+  processor is made 4/3 wider as it is read, and the picture is shown
+  stretched to 16:9, as for Thrill Drive 2. The 3D keeps its shape; the
+  dashboard (rev counter, speed) is stretched. In the cockpit view, the
+  bottom of the cockpit, made for 4:3, leaves the road visible at the edges.
+  Tested on thrilld only, without -hires3d and at x2.
+  Example: mame thrilld -hires3d 2 -widescreen
 - Option -widescreen_2d 4:3|stretch (4:3 by default): texts, counters and
   sprites stay in the middle with their shape, or are stretched over the
   whole width. The Zeus 2 draws its 2D as polygons: it stays in the middle.
@@ -99,7 +106,7 @@ Display
   stretched with the rest.
 
 Since mame3d 0.289-2336-g705501b
-- Thrill Drive 2: 16:9 with -widescreen (see Display).
+- Thrill Drive 1 and 2: 16:9 with -widescreen (see Display).
 - Race On!, 500 GP, Motocross Go! (Vulkan): the picture was sometimes one
   frame late, for long stretches, depending on the run: the wait for the
   GPU returned at once and the previous frame was read back. Fixed.
