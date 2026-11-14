@@ -201,8 +201,13 @@
 #include "machine/smc91c9x.h"
 #include "video/voodoo_pci.h"
 
+#include "emuopts.h"
+#include "hires3d.h"
 #include "screen.h"
 #include "speaker.h"
+
+#include <cmath>
+#include <vector>
 
 #include "calspeed.lh"
 #include "vaportrx.lh"
@@ -343,6 +348,15 @@ private:
 	required_device<mips3_device> m_maincpu;
 	required_device<gt64010_device> m_galileo;
 	required_device<voodoo_1_pci_device> m_voodoo;
+
+	// mame3d -widescreen on San Francisco Rush: the cameras of the game are
+	// patched in memory to see wider (see widescreen_vblank), the screen is
+	// shown at 16:9 (an anamorphic frame)
+	void widescreen_start() ATTR_COLD;
+	void widescreen_vblank(screen_device &screen, bool state);
+	std::unique_ptr<hires3d_output> m_widescreen;
+	std::vector<offs_t> m_widescreen_sites;
+	int m_widescreen_wait = 0;
 	optional_device<atari_cage_seattle_device> m_cage;
 	optional_device<dcs_audio_device> m_dcs;
 	memory_share_creator<uint32_t> m_nvram;
@@ -455,6 +469,105 @@ private:
  *
  *************************************/
 
+/*************************************
+ *
+ *  mame3d -widescreen
+ *
+ *************************************/
+
+namespace {
+
+// a camera of San Francisco Rush, floats: the screen size, the field of view
+// (radians, horizontal and vertical), their half tangents and inverses, two
+// cosines, 1, about 2^24, the centre of the screen, the focal lengths in pixels
+//     +0x00 width  +0x04 height  +0x08 fov h  +0x0c fov v
+//     +0x10 tan h  +0x14 tan v   +0x18 1/tan h  +0x1c 1/tan v
+//     +0x30 centre x  +0x34 centre y  +0x38 focal h  +0x3c focal v
+// the game projects with focal h and clips and culls with tan h: both are
+// changed together for a view as many times wider
+struct widescreen_camera
+{
+	float width, height, fov_h, fov_v, tan_h, tan_v, itan_h, itan_v, cos_h, cos_v, one, big, cx, cy, focal_h, focal_v;
+};
+
+bool widescreen_is_camera(widescreen_camera const &c)
+{
+	return (c.width >= 256.0f) && (c.width <= 1024.0f) && (c.height >= c.width * 0.5f) && (c.height <= c.width)
+			&& (c.cx == c.width * 0.5f) && (c.cy == c.height * 0.5f)
+			&& (c.fov_h > 0.2f) && (c.fov_h < 2.5f) && (c.fov_v > 0.1f) && (c.fov_v <= c.fov_h)
+			&& (std::fabs(c.one - 1.0f) < 1e-3f) && (c.big > 1e7f) && (c.focal_h > 0.0f);
+}
+
+} // anonymous namespace
+
+void seattle_state::widescreen_start()
+{
+	if (!machine().options().bool_value(OPTION_WIDESCREEN) || strncmp(machine().system().name, "sfrush", 6))
+		return;
+	m_widescreen = std::make_unique<hires3d_output>(*m_screen);
+	m_widescreen->allow_anamorphic(true);
+	if (!m_widescreen->anamorphic())
+	{
+		m_widescreen.reset();
+		return;
+	}
+	m_screen->register_vblank_callback(vblank_state_delegate(&seattle_state::widescreen_vblank, this));
+}
+
+void seattle_state::widescreen_vblank(screen_device &screen, bool state)
+{
+	if (!state)
+		return;
+	address_space &space = m_maincpu->space(AS_PROGRAM);
+	auto const read = [&space] (offs_t a)
+	{
+		widescreen_camera c;
+		float *const f = &c.width;
+		for (int i = 0; i < 16; i++)
+			f[i] = std::bit_cast<float>(space.read_dword(a + i * 4));
+		return c;
+	};
+
+	// the cameras are filled when the game sets a view: the tangent is put
+	// back to the field of view by the game, then widened again here
+	float const factor = m_widescreen->wide_factor();
+	bool lost = false;
+	for (offs_t const a : m_widescreen_sites)
+	{
+		widescreen_camera const c = read(a);
+		if (!widescreen_is_camera(c))
+		{
+			lost = true;
+			continue;
+		}
+		float const tan_h = std::tan(c.fov_h * 0.5f);
+		if (std::fabs(c.tan_h - tan_h) <= tan_h * 1e-4f)
+		{
+			float const wide = tan_h * factor;
+			space.write_dword(a + 0x10, std::bit_cast<uint32_t>(wide));
+			space.write_dword(a + 0x38, std::bit_cast<uint32_t>(c.cx / wide));
+		}
+	}
+
+	// looked for once a second while there is none, and when one goes away
+	if (!lost && !m_widescreen_sites.empty())
+		return;
+	if (m_widescreen_wait-- > 0)
+		return;
+	m_widescreen_wait = 60;
+	m_widescreen_sites.clear();
+	for (offs_t a = 0; a < 0x800000; a += 4)
+	{
+		if (space.read_dword(a) != std::bit_cast<uint32_t>(512.0f) && space.read_dword(a) != std::bit_cast<uint32_t>(640.0f))
+			continue;
+		if (widescreen_is_camera(read(a)))
+		{
+			m_widescreen_sites.push_back(a);
+			osd_printf_verbose("seattle: -widescreen, camera at %06x (field of view %.3f times wider)\n", a, factor);
+		}
+	}
+}
+
 void seattle_state::machine_start()
 {
 	// set the fastest DRC options, but strict verification
@@ -484,6 +597,8 @@ void seattle_state::machine_start()
 	save_item(NAME(m_i40_data));
 	save_item(NAME(m_gear));
 	save_item(NAME(m_wheel_calibrated));
+
+	widescreen_start();
 }
 
 
