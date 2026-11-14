@@ -411,6 +411,7 @@ The golf club acts like a LED gun. PCB power input is 12V.
 
 #include <bit>
 #include <iostream>
+#include <vector>
 
 // configurable logging
 //#define LOG_WARN  (1U << 1)
@@ -729,13 +730,16 @@ private:
 
 	TIMER_DEVICE_CALLBACK_MEMBER(sound_timer_callback);
 
-	// mame3d -widescreen on Thrill Drive 2: the camera setup of the game is
-	// patched to multiply the horizontal tangent of the field of view by the
-	// widening, and the screen is shown at 16:9 (an anamorphic frame)
+	// mame3d -widescreen on Thrill Drive 2, GTI Club 2 and Xtrial Racing: the
+	// camera setup of the game is patched to multiply the horizontal tangent of the field
+	// of view by the widening, and the screen is shown at 16:9 (an
+	// anamorphic frame)
 	void widescreen_start() ATTR_COLD;
 	void widescreen_update();
 	std::unique_ptr<hires3d_output> m_widescreen;
-	uint32_t m_widescreen_site = 0;
+	enum class widescreen_game { THRILLD2, GTICLUB2, XTRIAL };
+	widescreen_game m_widescreen_game = widescreen_game::THRILLD2;
+	std::vector<uint32_t> m_widescreen_sites;
 	int m_widescreen_wait = 0;
 
 	// MPC8240 EPIC, to be device-ified
@@ -2499,13 +2503,17 @@ constexpr uint32_t ppc_fneg(int d, int b) { return (63U << 26) | (d << 21) | (b 
 constexpr uint32_t ppc_stfs(int s, int d, int a) { return (52U << 26) | (s << 21) | (a << 16) | (d & 0xffff); }
 constexpr uint32_t ppc_lfs(int s, int d, int a) { return (48U << 26) | (s << 21) | (a << 16) | (d & 0xffff); }
 constexpr uint32_t ppc_lis(int d, int i) { return (15U << 26) | (d << 21) | (i & 0xffff); }
+constexpr uint32_t ppc_fmul(int d, int a, int c) { return (63U << 26) | (d << 21) | (a << 16) | (c << 6) | (25 << 1); }
+constexpr uint32_t ppc_lfd(int s, int d, int a) { return (50U << 26) | (s << 21) | (a << 16) | (d & 0xffff); }
+constexpr uint32_t ppc_fmr(int d, int b) { return (63U << 26) | (d << 21) | (b << 11) | (72 << 1); }
 constexpr uint32_t ppc_b(uint32_t from, uint32_t to) { return (18U << 26) | ((to - from) & 0x03fffffc); }
 
-// the patch: code and constant in work RAM the game leaves empty, between
+// the patch: code and constant in work RAM the games leave empty, between
 // the exception vectors and the program (with memory added outside the work
 // RAM for them, at 0x02000000 or 0xfe100000, the game stops on its blue boot
-// screen)
+// screen); the code for each patched site, 0x40 bytes apart, then the factor
 constexpr uint32_t WIDESCREEN_CAVE = 0x00003600;
+constexpr int WIDESCREEN_CAVES = 2;
 constexpr uint32_t WIDESCREEN_FACTOR = WIDESCREEN_CAVE + 0x80;
 
 // the end of the camera setup of Thrill Drive 2, the tangent of the field
@@ -2522,11 +2530,64 @@ constexpr uint32_t WIDESCREEN_FACTOR = WIDESCREEN_CAVE + 0x80;
 constexpr uint32_t WIDESCREEN_SIGNATURE[5] = { ppc_fmuls(2, 1, 4), ppc_fneg(1, 2), ppc_fmuls(4, 0, 2), ppc_stfs(0, 0x40, 30), ppc_fneg(3, 4) };
 constexpr uint32_t WIDESCREEN_VERTICAL = ppc_stfs(8, 0x3c, 30);
 
+// the projection setup of GTI Club 2 (the camera has the fields of the one of
+// Thrill Drive 2, the frustum is set as with OpenGL):
+//     lfs   f30, 0x24(r31)    near plane
+//     lfs   f1, 0x34(r31)     tangent of the field of view
+//     lfs   f0, 0x40(r31)     viewport shape (h/w)
+//     fmuls f29, f30, f1      right = near * tangent
+//     fmuls f31, f29, f0      top = right * shape
+//     bl    <matrix mode>
+//     bl    <load identity>
+//     fmr   f2, f29           <- site: right
+//     lfs   f6, 0x28(r31)     far plane
+//     fmr   f4, f31           top
+//     ...
+//     fneg  f1, f29           left
+//     fneg  f3, f31           bottom
+//     bl    <frustum>
+constexpr uint32_t WIDESCREEN_GTICLUB2[10] = {
+		ppc_lfs(30, 0x24, 31), ppc_lfs(1, 0x34, 31), ppc_lfs(0, 0x40, 31), ppc_fmuls(29, 30, 1), ppc_fmuls(31, 29, 0),
+		0, 0, ppc_fmr(2, 29), ppc_lfs(6, 0x28, 31), ppc_fmr(4, 31) };
+constexpr int WIDESCREEN_GTICLUB2_SITE = 7;
+
+// the cameras of Xtrial Racing are set by one function (rX: the camera, its
+// frustum in doubles, called twice):
+//     bl    <matrix mode>
+//     bl    <load identity>
+//     lfd   f5, 0xa0(rX)      near plane
+//     lfd   f6, 0xa8(rX)      far plane
+//     stfd  f5, 0x38(r1)
+//     stfd  f6, 0x40(r1)
+//     lfd   f1, 0x80(rX)      <- site: left
+//     lfd   f2, 0x88(rX)      right
+//     lfd   f3, 0x90(rX)      bottom
+//     lfd   f4, 0x98(rX)      top
+//     bl    <frustum>
+template <typename Word>
+bool widescreen_is_xtrial(Word const &word)
+{
+	int const r = (word(0) >> 16) & 31;
+	return (word(-6) & 0xfc000001) == 0x48000001 && (word(-5) & 0xfc000001) == 0x48000001
+			&& word(-4) == ppc_lfd(5, 0xa0, r) && word(-3) == ppc_lfd(6, 0xa8, r) && word(-2) == 0xd8a10038 && word(-1) == 0xd8c10040
+			&& word(0) == ppc_lfd(1, 0x80, r) && word(1) == ppc_lfd(2, 0x88, r) && word(2) == ppc_lfd(3, 0x90, r) && word(3) == ppc_lfd(4, 0x98, r)
+			&& (word(4) & 0xfc000001) == 0x48000001;
+}
+
 } // anonymous namespace
 
 void viper_state::widescreen_start()
 {
-	if (!machine().options().bool_value(OPTION_WIDESCREEN) || strncmp(machine().system().name, "thrild2", 7))
+	char const *const name = machine().system().name;
+	if (!strncmp(name, "thrild2", 7))
+		m_widescreen_game = widescreen_game::THRILLD2;
+	else if (!strncmp(name, "gticlub2", 8))
+		m_widescreen_game = widescreen_game::GTICLUB2;
+	else if (!strncmp(name, "xtrial", 6))
+		m_widescreen_game = widescreen_game::XTRIAL;
+	else
+		return;
+	if (!machine().options().bool_value(OPTION_WIDESCREEN))
 		return;
 	m_widescreen = std::make_unique<hires3d_output>(*m_screen);
 	m_widescreen->allow_anamorphic(true);
@@ -2540,62 +2601,120 @@ void viper_state::widescreen_update()
 		return;
 	address_space &space = m_maincpu->space(AS_PROGRAM);
 	float const factor = m_widescreen->wide_factor();
-	auto const write_cave = [&space, factor] (uint32_t site)
+	auto const cave = [] (int i) { return WIDESCREEN_CAVE + i * 0x40; };
+	auto const write_cave = [this, &space, factor] (uint32_t site, uint32_t cave)
 	{
-		// right and top from the tangent as the game does, then the tangent
-		// and right times the widening: the view gets wider, not taller
-		uint32_t const code[] = {
-				ppc_fmuls(2, 1, 4),                             // right = tangent * near
-				ppc_fmuls(4, 0, 2),                             // top = shape * right
-				ppc_lis(11, WIDESCREEN_FACTOR >> 16),
-				ppc_lfs(9, WIDESCREEN_FACTOR & 0xffff, 11),
-				ppc_fmuls(1, 1, 9),                             // tangent * widening
-				ppc_stfs(1, 0x34, 30),
-				ppc_stfs(1, 0x38, 30),
-				ppc_fmuls(2, 2, 9),                             // right * widening
-				ppc_fneg(1, 2),
-				ppc_stfs(0, 0x40, 30),
-				ppc_fneg(3, 4),
-				ppc_b(WIDESCREEN_CAVE + 11 * 4, site + 20) };   // back to the call
-		for (size_t i = 0; i < std::size(code); i++)
-			if (space.read_dword(WIDESCREEN_CAVE + i * 4) != code[i])
-				space.write_dword(WIDESCREEN_CAVE + i * 4, code[i]);
+		std::vector<uint32_t> code;
+		switch (m_widescreen_game)
+		{
+		case widescreen_game::THRILLD2:
+			// right and top from the tangent as the game does, then the
+			// tangent and right times the widening: the view gets wider, not
+			// taller
+			code = {
+					ppc_fmuls(2, 1, 4),                         // right = tangent * near
+					ppc_fmuls(4, 0, 2),                         // top = shape * right
+					ppc_lis(11, WIDESCREEN_FACTOR >> 16),
+					ppc_lfs(9, WIDESCREEN_FACTOR & 0xffff, 11),
+					ppc_fmuls(1, 1, 9),                         // tangent * widening
+					ppc_stfs(1, 0x34, 30),
+					ppc_stfs(1, 0x38, 30),
+					ppc_fmuls(2, 2, 9),                         // right * widening
+					ppc_fneg(1, 2),
+					ppc_stfs(0, 0x40, 30),
+					ppc_fneg(3, 4),
+					ppc_b(cave + 11 * 4, site + 20) };          // back to the call
+			break;
+		case widescreen_game::GTICLUB2:
+			// right times the widening before the frustum is set: the top
+			// was taken from the right before
+			code = {
+					ppc_lis(11, WIDESCREEN_FACTOR >> 16),
+					ppc_lfs(9, WIDESCREEN_FACTOR & 0xffff, 11),
+					ppc_fmuls(29, 29, 9),                       // right * widening
+					ppc_fmr(2, 29),
+					ppc_b(cave + 4 * 4, site + 4) };            // back after the site
+			break;
+		case widescreen_game::XTRIAL:
+		{
+			// left and right of the camera times the widening, for the
+			// frustum only
+			int const r = (space.read_dword(site + 4) >> 16) & 31;
+			code = {
+					ppc_lfd(1, 0x80, r),                        // left
+					ppc_lfd(2, 0x88, r),                        // right
+					ppc_lis(11, WIDESCREEN_FACTOR >> 16),
+					ppc_lfs(9, WIDESCREEN_FACTOR & 0xffff, 11),
+					ppc_fmul(1, 1, 9),                          // left * widening
+					ppc_fmul(2, 2, 9),                          // right * widening
+					ppc_b(cave + 6 * 4, site + 8) };            // back after both
+			break;
+		}
+		}
+		for (size_t i = 0; i < code.size(); i++)
+			if (space.read_dword(cave + i * 4) != code[i])
+				space.write_dword(cave + i * 4, code[i]);
 		if (space.read_dword(WIDESCREEN_FACTOR) != std::bit_cast<uint32_t>(factor))
 			space.write_dword(WIDESCREEN_FACTOR, std::bit_cast<uint32_t>(factor));
 	};
 
 	// patched: the code is written again if the game wrote over it
-	if (m_widescreen_site && (space.read_dword(m_widescreen_site) == ppc_b(m_widescreen_site, WIDESCREEN_CAVE)))
+	bool patched = !m_widescreen_sites.empty();
+	for (int i = 0; patched && (i < int(m_widescreen_sites.size())); i++)
+		patched = space.read_dword(m_widescreen_sites[i]) == ppc_b(m_widescreen_sites[i], cave(i));
+	if (patched)
 	{
-		write_cave(m_widescreen_site);
+		for (int i = 0; i < int(m_widescreen_sites.size()); i++)
+			write_cave(m_widescreen_sites[i], cave(i));
 		return;
 	}
 
 	// the program is loaded from the card: looked for once a second until
 	// it is there, and again if it is loaded again
-	m_widescreen_site = 0;
+	m_widescreen_sites.clear();
 	if (m_widescreen_wait-- > 0)
 		return;
 	m_widescreen_wait = 60;
 	auto const word = [this] (uint32_t a) { uint64_t const w = m_workram[a >> 3]; return uint32_t((a & 4) ? w : (w >> 32)); };
-	uint32_t site = 0;
-	for (uint32_t a = 0x10; a < 0x400000; a += 4)
+	std::vector<uint32_t> sites;
+	for (uint32_t a = 0x40; (a < 0x400000) && (int(sites.size()) < WIDESCREEN_CAVES); a += 4)
 	{
-		if ((word(a) == WIDESCREEN_SIGNATURE[0]) && (word(a + 4) == WIDESCREEN_SIGNATURE[1]) && (word(a + 8) == WIDESCREEN_SIGNATURE[2])
-				&& (word(a + 12) == WIDESCREEN_SIGNATURE[3]) && (word(a + 16) == WIDESCREEN_SIGNATURE[4])
-				&& ((word(a + 20) & 0xfc000003) == 0x48000001) && (word(a - 16) == WIDESCREEN_VERTICAL))
+		bool found = false;
+		switch (m_widescreen_game)
 		{
-			site = a;
+		case widescreen_game::THRILLD2:
+			found = (word(a) == WIDESCREEN_SIGNATURE[0]) && (word(a + 4) == WIDESCREEN_SIGNATURE[1]) && (word(a + 8) == WIDESCREEN_SIGNATURE[2])
+					&& (word(a + 12) == WIDESCREEN_SIGNATURE[3]) && (word(a + 16) == WIDESCREEN_SIGNATURE[4])
+					&& ((word(a + 20) & 0xfc000003) == 0x48000001) && (word(a - 16) == WIDESCREEN_VERTICAL);
+			break;
+		case widescreen_game::GTICLUB2:
+			found = true;
+			for (int i = 0; found && (i < int(std::size(WIDESCREEN_GTICLUB2))); i++)
+			{
+				// (0 in the signature: a call)
+				uint32_t const w = word(a + (i - WIDESCREEN_GTICLUB2_SITE) * 4);
+				found = WIDESCREEN_GTICLUB2[i] ? (w == WIDESCREEN_GTICLUB2[i]) : ((w & 0xfc000001) == 0x48000001);
+			}
+			break;
+		case widescreen_game::XTRIAL:
+			found = widescreen_is_xtrial([&word, a] (int i) { return word(a + i * 4); });
 			break;
 		}
+		if (found)
+		{
+			sites.push_back(a);
+			if (m_widescreen_game != widescreen_game::XTRIAL)
+				break;
+		}
 	}
-	if (!site)
-		return;
 
-	write_cave(site);
-	space.write_dword(site, ppc_b(site, WIDESCREEN_CAVE));
-	m_widescreen_site = site;
-	osd_printf_verbose("viper: -widescreen, camera setup patched at %08x (field of view %.3f times wider)\n", site, factor);
+	for (int i = 0; i < int(sites.size()); i++)
+	{
+		write_cave(sites[i], cave(i));
+		space.write_dword(sites[i], ppc_b(sites[i], cave(i)));
+		osd_printf_verbose("viper: -widescreen, camera setup patched at %08x (field of view %.3f times wider)\n", sites[i], factor);
+	}
+	m_widescreen_sites = sites;
 }
 
 void viper_state::voodoo_pciint(int state)
