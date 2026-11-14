@@ -572,6 +572,12 @@ void namco_de_pcbstack_device::device_start()
 	save_item(NAME(m_video_enable));
 
 	m_hires = std::make_unique<hires3d_output>(*m_screen);
+
+	// mame3d -widescreen (see namcos21_3d_device::set_wide_x): each stack
+	// projects past the edges of its screen, toward the screens beside it
+	m_hires->allow_anamorphic(true);
+	if (m_hires->anamorphic())
+		m_namcos21_3d->set_wide_x(m_hires->wide_factor());
 }
 
 void namco_de_pcbstack_device::device_reset()
