@@ -781,7 +781,6 @@ void hng64_state::blit_3d(bitmap_rgb32 &bitmap, const rectangle &cliprect, int s
 	rectangle visarea = m_screen->visible_area();
 	const int ysize = visarea.bottom() - visarea.top();
 	const int size = m_poly_renderer->size();
-	const int mask = size - 1;
 	const int bufscale = m_poly_renderer->scale();
 
 	if (ysize)
@@ -805,12 +804,12 @@ void hng64_state::blit_3d(bitmap_rgb32 &bitmap, const rectangle &cliprect, int s
 			{
 				const int realy = (((y - visarea.top() * scale) * yinc) >> 16) * bufscale / scale;
 
-				const u16 *src = &m_poly_renderer->colorBuffer3d()[((realy) & mask) * size];
+				const u16 *src = &m_poly_renderer->colorBuffer3d()[m_poly_renderer->wrap(realy) * size];
 				u32 *dst = &bitmap.pix(y, cliprect.left());
 
 				for (int x = cliprect.left(); x <= cliprect.right(); x++)
 				{
-					const u16 srcpix = src[(((cliprect.left() + x) + xscroll) * bufscale / scale) & mask];
+					const u16 srcpix = src[m_poly_renderer->wrap(((cliprect.left() + x) + xscroll) * bufscale / scale)];
 					if (srcpix & 0x07ff)
 					{
 						// format in our framebuffer is llll appp pppp pppp

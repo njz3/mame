@@ -1352,8 +1352,7 @@ void hng64_state::normalize(float* x)
 
 void hng64_poly_renderer::render_texture_scanline(s32 scanline, const extent_t& extent, const hng64_poly_data& renderData, int threadid)
 {
-	const int mask = size() - 1;
-	if ((scanline > mask) | (scanline < 0))
+	if ((scanline >= size()) | (scanline < 0))
 		return;
 
 	// Pull the parameters out of the extent structure
@@ -1378,7 +1377,7 @@ void hng64_poly_renderer::render_texture_scanline(s32 scanline, const extent_t& 
 	// Step over each pixel in the horizontal span
 	for (int x = extent.startx; x < extent.stopx; x++)
 	{
-		if (z < depthBuffer[x & mask])
+		if (z < depthBuffer[wrap(x)])
 		{
 			// Multiply back through by w for everything that was interpolated perspective-correctly
 			const float sCorrect = s / w;
@@ -1439,8 +1438,8 @@ void hng64_poly_renderer::render_texture_scanline(s32 scanline, const extent_t& 
 					if (renderData.blend)
 						color |= 0x800;
 
-					colorBuffer[x & mask] = color;
-					depthBuffer[x & mask] = z;
+					colorBuffer[wrap(x)] = color;
+					depthBuffer[wrap(x)] = z;
 				}
 			}
 		}
@@ -1455,8 +1454,7 @@ void hng64_poly_renderer::render_texture_scanline(s32 scanline, const extent_t& 
 
 void hng64_poly_renderer::render_flat_scanline(s32 scanline, const extent_t& extent, const hng64_poly_data& renderData, int threadid)
 {
-	const int mask = size() - 1;
-	if ((scanline > mask) | (scanline < 0))
+	if ((scanline >= size()) | (scanline < 0))
 		return;
 
 	// Pull the parameters out of the extent structure
@@ -1470,10 +1468,10 @@ void hng64_poly_renderer::render_flat_scanline(s32 scanline, const extent_t& ext
 	// Step over each pixel in the horizontal span
 	for (int x = extent.startx; x < extent.stopx; x++)
 	{
-		if (z < depthBuffer[x & mask])
+		if (z < depthBuffer[wrap(x)])
 		{
-			colorBuffer[x & mask] = renderData.palOffset + renderData.colorIndex;
-			depthBuffer[x & mask] = z;
+			colorBuffer[wrap(x)] = renderData.palOffset + renderData.colorIndex;
+			depthBuffer[wrap(x)] = z;
 		}
 
 		z += dz;

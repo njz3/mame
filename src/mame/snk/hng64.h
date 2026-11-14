@@ -117,6 +117,10 @@ public:
 	int scale() const { return m_scale; }
 	int size() const { return 512 * m_scale; }
 
+	// a coordinate wrapped into the buffers, as the native size - 1 mask
+	// does (-hires3d 3, 5... sizes are not powers of 2)
+	int wrap(int v) const { int const n = size(); return ((n & (n - 1)) == 0) ? (v & (n - 1)) : (((v % n) + n) % n); }
+
 	// -hires3d on the GPU: the high-resolution 3D buffers and the screen
 	// mix, nullptr in software; after a failure, the high-resolution screen
 	// magnifies the native one
