@@ -60,6 +60,7 @@ class midvunit_base_state : public driver_device
 public:
 	uint16_t m_page_control = 0;
 	uint16_t m_dma_data[16]{};
+	float m_wide_x = 1.0f; // mame3d -widescreen: the quads are drawn this many times narrower
 	uint8_t m_video_changed = 0;
 
 	memory_share_creator<uint16_t> m_videoram;

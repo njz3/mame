@@ -97,6 +97,11 @@ private:
 
 		void render_poly(screen_device &screen, uint32_t *polydata);
 
+		// mame3d -widescreen: the polygons, which go past the edges of the
+		// screen, are drawn factor times narrower (their plane equations
+		// follow), the screen is shown at 16:9
+		void set_wide_x(float factor) { m_wide_x = factor; }
+
 	protected:
 		gaelco3d_state &m_state;
 
@@ -105,6 +110,7 @@ private:
 		// with m_vk they stay native and the GPU draws at m_vk_scale times
 		int m_scale;
 		int m_vk_scale = 1;
+		float m_wide_x = 1.0f;
 		std::unique_ptr<gaelco3d_vk> m_vk;
 		bitmap_rgb32 m_screenbits;
 		bitmap_ind16 m_zbuffer;

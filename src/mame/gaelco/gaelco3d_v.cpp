@@ -95,6 +95,14 @@ void gaelco3d_state::video_start()
 	m_poly = std::make_unique<gaelco3d_renderer>(*this);
 	m_hires = std::make_unique<hires3d_output>(*m_screen);
 
+	// mame3d -widescreen (see gaelco3d_renderer::set_wide_x)
+	m_hires->allow_anamorphic(true);
+	if (m_hires->anamorphic())
+	{
+		m_poly->set_wide_x(m_hires->wide_factor());
+		osd_printf_verbose("gaelco3d: -widescreen, polygons %.3f times narrower\n", m_hires->wide_factor());
+	}
+
 	m_polydata_buffer = std::make_unique<uint32_t[]>(MAX_POLYDATA);
 
 	/* save states */
@@ -142,12 +150,16 @@ void gaelco3d_state::gaelco3d_renderer::render_poly(screen_device &screen, uint3
 	float const midx = screen.width() / 2;
 	float const midy = screen.height() / 2;
 	float const z0 = tms320c3x_device::fp_to_float(polydata[0]);
+	// -widescreen: the 3D is drawn narrower, the 2D (no depth, see below)
+	// is not: it is stretched with the screen and covers it as before
+	bool const flat2d = (z0 < 0) && (tms320c3x_device::fp_to_float(polydata[3]) == 0) && (tms320c3x_device::fp_to_float(polydata[4]) == 0);
+	float const wide = flat2d ? 1.0f : m_wide_x;
 	float const voz_dy = tms320c3x_device::fp_to_float(polydata[1]) * 256.0f;
-	float const voz_dx = tms320c3x_device::fp_to_float(polydata[2]) * 256.0f;
+	float const voz_dx = tms320c3x_device::fp_to_float(polydata[2]) * 256.0f * wide;
 	float const ooz_dy = tms320c3x_device::fp_to_float(polydata[3]);
-	float const ooz_dx = tms320c3x_device::fp_to_float(polydata[4]);
+	float const ooz_dx = tms320c3x_device::fp_to_float(polydata[4]) * wide;
 	float const uoz_dy = tms320c3x_device::fp_to_float(polydata[5]) * 256.0f;
-	float const uoz_dx = tms320c3x_device::fp_to_float(polydata[6]) * 256.0f;
+	float const uoz_dx = tms320c3x_device::fp_to_float(polydata[6]) * 256.0f * wide;
 	float const voz_base = tms320c3x_device::fp_to_float(polydata[7]) * 256.0f - midx * voz_dx - midy * voz_dy;
 	float const ooz_base = tms320c3x_device::fp_to_float(polydata[8]) - midx * ooz_dx - midy * ooz_dy;
 	float const uoz_base = tms320c3x_device::fp_to_float(polydata[9]) * 256.0f - midx * uoz_dx - midy * uoz_dy;
@@ -203,9 +215,9 @@ void gaelco3d_state::gaelco3d_renderer::render_poly(screen_device &screen, uint3
 	{
 		/* extract vertex data */
 		data = polydata[13 + vertnum * 2];
-		vert[vertnum].x = (midx + (float)((int32_t)data >> 16) + 0.5f) * scale;
+		vert[vertnum].x = (midx + (float)((int32_t)data >> 16) / wide + 0.5f) * scale;
 		vert[vertnum].y = (midy + (float)((int32_t)(data << 18) >> 18) + 0.5f) * scale;
-		hvert[vertnum].x = (midx + (float)((int32_t)data >> 16) + 0.5f) * hscale;
+		hvert[vertnum].x = (midx + (float)((int32_t)data >> 16) / wide + 0.5f) * hscale;
 		hvert[vertnum].y = (midy + (float)((int32_t)(data << 18) >> 18) + 0.5f) * hscale;
 	}
 

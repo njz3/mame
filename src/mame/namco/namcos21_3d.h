@@ -31,6 +31,10 @@ public:
 	// the driver shows -hires3d frames; the others stay native
 	void set_hires_supported(bool supported) { m_hires_supported = supported; }
 
+	// mame3d -widescreen: the polygons, which go past the edges of the
+	// screen, are drawn factor times narrower, the screen is shown at 16:9
+	void set_wide_x(float factor) { m_wide_x = factor; }
+
 	int width() { return m_poly_frame_width; }
 	int height() { return m_poly_frame_height; }
 
@@ -95,6 +99,7 @@ private:
 	// GPU draws at m_hires_scale times the native size
 	std::unique_ptr<namcos21_vk> m_vk;
 	int m_hires_scale = 1;
+	float m_wide_x = 1.0f;
 	bool m_hires_supported = false;
 };
 

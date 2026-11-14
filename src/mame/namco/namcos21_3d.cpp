@@ -301,7 +301,7 @@ void namcos21_3d_device::blit_single_quad(int sx[4], int sy[4], int zcode[4], u1
 		float x[4], y[4];
 		for (int i = 0; i < 4; i++)
 		{
-			x[i] = (m_poly_frame_width / 2 + sx[i]) * m_hires_scale;
+			x[i] = (m_poly_frame_width / 2 + sx[i] / m_wide_x) * m_hires_scale;
 			y[i] = (m_poly_frame_height / 2 + sy[i]) * m_hires_scale;
 		}
 		m_vk->quad(x, y, color, zsort);
@@ -312,7 +312,7 @@ void namcos21_3d_device::blit_single_quad(int sx[4], int sy[4], int zcode[4], u1
 
 	for (int i = 0; i < 4; i++)
 	{
-		v[i].x = (m_poly_frame_width / 2 + sx[i]) * m_scale;
+		v[i].x = (m_poly_frame_width / 2 + sx[i] / m_wide_x) * m_scale;
 		v[i].y = (m_poly_frame_height / 2 + sy[i]) * m_scale;
 		v[i].z = zcode[i];
 	}

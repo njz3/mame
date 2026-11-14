@@ -68,6 +68,15 @@ void midvunit_base_state::video_start()
 	m_hires = std::make_unique<hires3d_output>(*m_screen);
 	m_hires_scale = m_hires->scale();
 
+	// mame3d -widescreen: the games send their 3D past the edges of the
+	// screen (their 2D is quads too: it is drawn narrower as well)
+	m_hires->allow_anamorphic(true);
+	if (m_hires->anamorphic())
+	{
+		m_wide_x = m_hires->wide_factor();
+		osd_printf_verbose("midvunit: -widescreen, quads %.3f times narrower\n", m_wide_x);
+	}
+
 	// -hires3d: on the GPU unless -hires3d_renderer is software
 	if ((m_hires_scale > 1) && (strcmp(machine().options().value(OPTION_HIRES3D_RENDERER), "software") != 0))
 	{
@@ -332,6 +341,11 @@ void midvunit_renderer::process_dma_queue()
 	vert[3].x = (float)(int16_t)m_state.m_dma_data[8] + 0.5f;
 	vert[3].y = (float)(int16_t)m_state.m_dma_data[9] + 0.5f;
 
+	// mame3d -widescreen: narrower around the middle of the 512 pixel wide
+	// screen, which is shown at 16:9 (the 3D goes past its edges)
+	if (m_state.m_wide_x != 1.0f)
+		for (vertex_t &v : vert)
+			v.x = 256.0f + (v.x - 256.0f) / m_state.m_wide_x;
 	// make the vertices inclusive of right/bottom points
 	make_vertices_inclusive(vert);
 

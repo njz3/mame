@@ -414,6 +414,14 @@ void namcos21_state::video_start()
 {
 	m_hires = std::make_unique<hires3d_output>(*m_screen);
 
+	// mame3d -widescreen (see namcos21_3d_device::set_wide_x)
+	m_hires->allow_anamorphic(true);
+	if (m_hires->anamorphic())
+	{
+		m_namcos21_3d->set_wide_x(m_hires->wide_factor());
+		osd_printf_verbose("namcos21: -widescreen, polygons %.3f times narrower\n", m_hires->wide_factor());
+	}
+
 	m_gpu_videoram = make_unique_clear<u8[]>(0x80000);
 	save_pointer(NAME(m_gpu_videoram), 0x80000);
 
