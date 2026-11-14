@@ -303,7 +303,14 @@ void vrc5074_device::map_cpu_space()
 			winStart = regConfig & 0xffe00000;
 			if (winSize > 0) {
 				m_cpu_space->install_ram(winStart, winStart + winSize - 1, m_sdram[index].data());
-				m_cpu->add_fastram(winStart, winStart + winSize - 1, false, m_sdram[index].data());
+				if ((m_fastram_hole_start <= m_fastram_hole_end) && (m_fastram_hole_start > winStart) && (m_fastram_hole_end < winStart + winSize - 1))
+				{
+					// the hole is left to the memory system
+					m_cpu->add_fastram(winStart, m_fastram_hole_start - 1, false, m_sdram[index].data());
+					m_cpu->add_fastram(m_fastram_hole_end + 1, winStart + winSize - 1, false, reinterpret_cast<uint8_t *>(m_sdram[index].data()) + (m_fastram_hole_end + 1 - winStart));
+				}
+				else
+					m_cpu->add_fastram(winStart, winStart + winSize - 1, false, m_sdram[index].data());
 			}
 			LOGMASKED(LOG_NILE | LOG_MAP, "map_cpu_space ram_size=%08X ram_base=%08X\n", winSize, winStart);
 		}

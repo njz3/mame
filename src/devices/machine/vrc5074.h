@@ -33,6 +33,10 @@ public:
 	template <typename T> void set_cpu_tag(T &&tag) { m_cpu.set_tag(std::forward<T>(tag)); }
 	void set_sdram_size(int index, int size) { m_sdram_size[index] = size; }
 
+	// keep a range of the SDRAM out of the fast RAM of the MIPS recompiler, so
+	// that memory taps there see its accesses (mame3d -widescreen)
+	void set_fastram_hole(offs_t start, offs_t end) { m_fastram_hole_start = start; m_fastram_hole_end = end; }
+
 	void set_map(int id, const address_map_constructor &map, device_t *device);
 
 	virtual void config_map(address_map &map) override ATTR_COLD;
@@ -82,6 +86,8 @@ private:
 
 	required_device<mips3_device> m_cpu;
 	int m_sdram_size[2];
+	offs_t m_fastram_hole_start = 1;
+	offs_t m_fastram_hole_end = 0;
 
 	address_space_config m_mem_config, m_io_config;
 

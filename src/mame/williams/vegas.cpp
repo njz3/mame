@@ -398,14 +398,17 @@ protected:
 private:
 	static constexpr unsigned SYSTEM_CLOCK = 100'000'000;
 
-	// mame3d -widescreen on San Francisco Rush 2049 and Road Burners: the
-	// cameras of the game are patched in memory to see wider (see
+	// mame3d -widescreen on San Francisco Rush 2049, Road Burners and CART
+	// Fury: the cameras of the game are patched in memory to see wider (see
 	// widescreen_vblank), the screen is shown at 16:9 (an anamorphic frame)
 	void widescreen_start() ATTR_COLD;
 	void widescreen_vblank(screen_device &screen, bool state);
+	void widescreen_cartfury();
 	std::unique_ptr<hires3d_output> m_widescreen;
 	std::vector<offs_t> m_widescreen_sites;
 	int m_widescreen_wait = 0;
+	bool m_widescreen_cartfury = false;
+	memory_passthrough_handler m_widescreen_tap;
 
 	required_device<mips3_device> m_maincpu;
 	required_device<vrc5074_device> m_nile;
@@ -531,7 +534,8 @@ bool widescreen_is_camera(widescreen_camera const &c)
 void vegas_state::widescreen_start()
 {
 	char const *const name = machine().system().name;
-	if (!machine().options().bool_value(OPTION_WIDESCREEN) || (strncmp(name, "sf2049", 6) && strncmp(name, "roadburn", 8)))
+	m_widescreen_cartfury = !strcmp(name, "cartfury");
+	if (!machine().options().bool_value(OPTION_WIDESCREEN) || (strncmp(name, "sf2049", 6) && strncmp(name, "roadburn", 8) && !m_widescreen_cartfury))
 		return;
 	screen_device &screen = *subdevice<screen_device>("screen");
 	m_widescreen = std::make_unique<hires3d_output>(screen);
@@ -542,12 +546,48 @@ void vegas_state::widescreen_start()
 		return;
 	}
 	screen.register_vblank_callback(vblank_state_delegate(&vegas_state::widescreen_vblank, this));
+
+	// CART Fury writes its view matrix in the RAM page 0x619000 every frame,
+	// just before it draws: that page is kept out of the fast RAM of the
+	// recompiler so that a tap sees these writes
+	if (m_widescreen_cartfury)
+		m_nile->set_fastram_hole(0x00619000, 0x00619fff);
+}
+
+// CART Fury projects with a view matrix whose rows X and Y are the rotation
+// of the camera times its focal length, at 0x619478, 0x619550, 0x6196e4 for
+// the X row (the code at 0x8015d398, 0x8015d3a8 and 0x8015d3e4, and two
+// other camera functions, write it; the projection is at 0x80151630): the X
+// row is divided by the wide factor as it is written. The game draws the 3D
+// then 4/3 wider into its 512 pixels and clips against them.
+void vegas_state::widescreen_cartfury()
+{
+	// (re)installed once a second: the BIOS maps the RAM again at boot
+	if (m_widescreen_wait-- > 0)
+		return;
+	m_widescreen_wait = 60;
+	m_widescreen_tap.remove();
+	address_space &space = m_maincpu->space(AS_PROGRAM);
+	if ((space.read_dword(0x0015d398) != 0xe4289478) || (space.read_dword(0x0015d3a8) != 0xe42496e4) || (space.read_dword(0x0015d3e4) != 0xe4269550))
+		return;
+	float const factor = m_widescreen->wide_factor();
+	m_widescreen_tap = space.install_write_tap(0x00619478, 0x006196e7, "widescreen",
+			[factor] (offs_t offset, uint32_t &data, uint32_t mem_mask)
+			{
+				if ((mem_mask == 0xffffffff) && ((offset == 0x00619478) || (offset == 0x00619550) || (offset == 0x006196e4)))
+					data = std::bit_cast<uint32_t>(std::bit_cast<float>(data) / factor);
+			});
 }
 
 void vegas_state::widescreen_vblank(screen_device &screen, bool state)
 {
 	if (!state)
 		return;
+	if (m_widescreen_cartfury)
+	{
+		widescreen_cartfury();
+		return;
+	}
 	address_space &space = m_maincpu->space(AS_PROGRAM);
 	auto const read = [&space] (offs_t a)
 	{
