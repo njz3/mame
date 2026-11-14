@@ -1359,7 +1359,7 @@ précédents). Restent Cart Fury, Side by Side et Hang Pilot.
   `dcram.lua`, `dcmon.lua`, `dspc.lua`, `jcdasm2.lua`, `pcitap.lua`,
   `pcival.lua`, `cfmat.lua`, `cfwide.lua`, `snap.lua`.
 
-### Suite du 2026-11-15 : 2D en 16:9, vérifications et System 21
+### Suite du 2026-11-14 (fin de nuit) : 2D en 16:9, vérifications et System 21
 
 - **Vérification en jeu de la 2D Konami** (`sig/kplay.lua` : pièces, Start
   toutes les 2 s dans les menus, accélérateur au maximum, bouton Test) :
