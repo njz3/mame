@@ -130,6 +130,7 @@ public:
 
 	// public interfaces
 	void berr_w(uint32_t data);
+	void set_gte_wide(float factor) { m_gte.set_wide(factor); } // mame3d -widescreen
 	uint32_t berr_r();
 
 	uint32_t exp_base();

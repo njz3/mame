@@ -48,6 +48,7 @@ psxgpu_device::psxgpu_device(const machine_config &mconfig, device_type type, co
 
 void psxgpu_device::set_cpu(psxcpu_device* cpu)
 {
+	m_cpu = cpu;
 	cpu->gpu_read().set(*this, FUNC(psxgpu_device::read));
 	cpu->gpu_write().set(*this, FUNC(psxgpu_device::write));
 	cpu->subdevice<psxdma_device>("dma")->install_read_handler(2, psxdma_device::read_delegate(&psxgpu_device::dma_read, this));
@@ -69,6 +70,16 @@ void psxgpu_device::device_start()
 			osd_printf_verbose("psxgpu: hires3d drawn with Vulkan on %s\n", m_vk->device_name());
 		else
 			osd_printf_warning("psxgpu: Vulkan not available (%s), no high resolution\n", error);
+	}
+
+	// -widescreen: the GTE of the CPU projects a wider view into the frame,
+	// which is shown at 16:9 (the games project their 3D with it; what they
+	// draw in 2D is stretched)
+	m_hires->allow_anamorphic(m_cpu != nullptr);
+	if (m_hires->anamorphic())
+	{
+		m_cpu->set_gte_wide(m_hires->wide_factor());
+		osd_printf_verbose("psxgpu: -widescreen, GTE projection %.3f times wider\n", m_hires->wide_factor());
 	}
 
 	for( int n_colour = 0; n_colour < 0x10000; n_colour++ )

@@ -282,6 +282,7 @@ private:
 	uint16_t *p_p_vram[ 1024 ];
 
 	std::unique_ptr<hires3d_output> m_hires;   // -hires3d, on the GPU
+	psxcpu_device *m_cpu = nullptr;            // -widescreen: its GTE projects wider
 	std::unique_ptr<psxgpu_vk> m_vk;
 	bool m_vk_reported = false;
 

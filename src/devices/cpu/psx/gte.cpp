@@ -389,6 +389,11 @@ uint32_t gte::Lm_E( uint32_t result )
 	return result;
 }
 
+int64_t gte::wide_x( int64_t a ) const
+{
+	return m_wide ? ( a * m_wide ) / 65536 : a;
+}
+
 int64_t gte::F( int64_t a )
 {
 	m_mac0 = a;
@@ -497,7 +502,7 @@ int gte::docop2( uint32_t pc, int gteop )
 		h_over_sz3 = Lm_E( gte_divide( H, SZ3 ) );
 		SXY0 = SXY1;
 		SXY1 = SXY2;
-		SX2 = Lm_G1( F( (int64_t) OFX + ( (int64_t) IR1 * h_over_sz3 ) ) >> 16 );
+		SX2 = Lm_G1( F( (int64_t) OFX + wide_x( (int64_t) IR1 * h_over_sz3 ) ) >> 16 );
 		SY2 = Lm_G2( F( (int64_t) OFY + ( (int64_t) IR2 * h_over_sz3 ) ) >> 16 );
 		MAC0 = F( (int64_t) DQB + ( (int64_t) DQA * h_over_sz3 ) );
 		IR0 = Lm_H( m_mac0, 1 );
@@ -850,7 +855,7 @@ int gte::docop2( uint32_t pc, int gteop )
 			h_over_sz3 = Lm_E( gte_divide( H, SZ3 ) );
 			SXY0 = SXY1;
 			SXY1 = SXY2;
-			SX2 = Lm_G1( F( (int64_t) OFX + ( (int64_t) IR1 * h_over_sz3 ) ) >> 16 );
+			SX2 = Lm_G1( F( (int64_t) OFX + wide_x( (int64_t) IR1 * h_over_sz3 ) ) >> 16 );
 			SY2 = Lm_G2( F( (int64_t) OFY + ( (int64_t) IR2 * h_over_sz3 ) ) >> 16 );
 		}
 

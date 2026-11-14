@@ -36,7 +36,14 @@ public:
 	void setcp2cr( uint32_t pc, int reg, uint32_t value );
 	int docop2( uint32_t pc, int gteop );
 
+	// mame3d -widescreen: the projected X is divided by factor around the
+	// screen offset (a wider view in the same frame, shown at 16:9)
+	void set_wide( float factor ) { m_wide = ( factor > 1.0f ) ? int32_t( 65536.0f / factor + 0.5f ) : 0; }
+
 protected:
+	int64_t wide_x( int64_t a ) const;
+	int32_t m_wide = 0;
+
 	class int44
 	{
 	public:
