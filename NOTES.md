@@ -1358,3 +1358,26 @@ précédents). Restent Cart Fury, Side by Side et Hang Pilot.
 - Outils (scratchpad `sig/`) : `play.lua` (pièce, départ, accélérateur),
   `dcram.lua`, `dcmon.lua`, `dspc.lua`, `jcdasm2.lua`, `pcitap.lua`,
   `pcival.lua`, `cfmat.lua`, `cfwide.lua`, `snap.lua`.
+
+### Suite du 2026-11-15 : 2D en 16:9, vérifications et System 21
+
+- **Vérification en jeu de la 2D Konami** (`sig/kplay.lua` : pièces, Start
+  toutes les 2 s dans les menus, accélérateur au maximum, bouton Test) :
+  Thrill Drive 1 fait une vraie course, le HUD (temps, position, compteur)
+  garde sa forme ; GTI Club reste en démo, mais ses textes (SHORTCUT, TAG
+  RACE, CRASH, CREDIT) sont rétrécis ; Racing Jam part dans son menu de
+  test (erreur de sauvegarde) : le texte du menu est rétréci, la course
+  n'est pas vue (même pilote que Thrill Drive 1).
+- **Winning Run** (namcos21.cpp) : en course (priorité 2), la couche 2D
+  au-dessus de la 3D est rétrécie : `bitmap_draw` (natif et logiciel HD,
+  par `hires3d_output::narrow_column`) et le shader de mélange Vulkan
+  (`mix.frag`, 4 constantes de plus : milieu, facteur, colonnes, par
+  `narrow_params` ; `tri.vert` recompilé pour la nouvelle taille). Le
+  titre (priorité 5) et le mode test (0) gardent la couche entière. Le
+  cockpit est en 3D. Vérifié en natif, logiciel ×2 et Vulkan ×2 ; sans
+  `-widescreen`, identique au pixel.
+- **Driver's Eyes** (namcos21_de.cpp) : les sprites de priorité 15
+  (au-dessus de la 3D) sont rétrécis, mais presque toute la 2D (menus,
+  vitesse) est en priorité 14, sous la 3D, avec les décors : elle reste
+  étirée, pas de changement visible. Sans `-widescreen`, identique au
+  pixel.
