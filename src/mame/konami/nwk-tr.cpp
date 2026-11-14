@@ -248,6 +248,10 @@ Thrill Drive 713A13  -       713A14  -
 #include "screen.h"
 #include "speaker.h"
 
+#include <algorithm>
+#include <iterator>
+#include <vector>
+
 namespace {
 
 class nwktr_state : public driver_device
@@ -318,7 +322,7 @@ private:
 	bool m_sound_irq_enabled = false;
 	bool m_exrgb = false;
 
-	// mame3d -widescreen on Thrill Drive: the horizontal focal length the
+	// mame3d -widescreen on Thrill Drive and Racing Jam: the horizontal focal length the
 	// game gives the DSPs with each viewport is divided by the widening as
 	// they read it, and the screen is shown at 16:9 (an anamorphic frame)
 	void widescreen_start() ATTR_COLD;
@@ -481,7 +485,7 @@ void nwktr_state::soundtimer_ack_w(uint16_t data)
 
 namespace {
 
-// the start of the viewport command of the Thrill Drive DSP program, one
+// the start of the viewport command of the Thrill Drive and Racing Jam DSP programs, one
 // 16-bit word read an instruction from the memory shared with the PowerPC:
 //     R13 = R13 XOR R13,  R14 = DM(I4, M1)                 centre x
 //     R8 = FEXT R14 BY 0:16 (SE),  R14 = DM(I4, M1)        centre y
@@ -500,16 +504,21 @@ constexpr uint64_t WIDESCREEN_SIGNATURE[8] = {
 constexpr uint32_t WIDESCREEN_SITE = 4;
 
 // the 3D parts of the dashboard (the needle of the rev counter, the digits
-// of the speed) are drawn with this one, left alone: they are stretched with
-// the 2D of the dashboard (the world is drawn with -215 for a half width of
-// 256, the tangent of 50 degrees, and the mirror with 128 for 128)
-constexpr int WIDESCREEN_DASHBOARD = -443;
+// of the speed) are drawn with these, left alone: they are stretched with
+// the 2D of the dashboard. Thrill Drive draws the world with -215 for a half
+// width of 256 (the tangent of 50 degrees) and the mirror with 128 for 128;
+// Racing Jam the world with -247 (-233, -211, -210 in Racing Jam 2) and the
+// mirror with 79 (85)
+constexpr int WIDESCREEN_DASHBOARD_THRILLD[] = { -443 };
+constexpr int WIDESCREEN_DASHBOARD_RACINGJ[] = { -154, -110, -332 };
 
 } // anonymous namespace
 
 void nwktr_state::widescreen_start()
 {
-	if (!machine().options().bool_value(OPTION_WIDESCREEN) || strncmp(machine().system().name, "thrilld", 7))
+	char const *const name = machine().system().name;
+	bool const thrilld = !strncmp(name, "thrilld", 7);
+	if (!machine().options().bool_value(OPTION_WIDESCREEN) || (!thrilld && strncmp(name, "racingj", 7)))
 		return;
 	screen_device &screen = *subdevice<screen_device>("screen");
 	m_widescreen = std::make_unique<hires3d_output>(screen);
@@ -524,15 +533,20 @@ void nwktr_state::widescreen_start()
 	// the word the site reads: the focal length divided by the widening, for
 	// a view as many times wider (the vertical one is left alone)
 	float const factor = m_widescreen->wide_factor();
+	std::vector<int> keep;
+	if (thrilld)
+		keep.assign(std::begin(WIDESCREEN_DASHBOARD_THRILLD), std::end(WIDESCREEN_DASHBOARD_THRILLD));
+	else
+		keep.assign(std::begin(WIDESCREEN_DASHBOARD_RACINGJ), std::end(WIDESCREEN_DASHBOARD_RACINGJ));
 	for (int board = 0; board < 2; board++)
 	{
 		m_widescreen_tap[board] = m_dsp[board]->space(AS_DATA).install_read_tap(0x0400000, 0x041ffff, "widescreen",
-				[this, board, factor] (offs_t offset, u32 &data, u32 mem_mask)
+				[this, board, factor, keep] (offs_t offset, u32 &data, u32 mem_mask)
 				{
 					if (m_widescreen_site[board] && (m_dsp[board]->pc() == m_widescreen_site[board]))
 					{
 						int const focal = int16_t(uint16_t(data));
-						if (focal != WIDESCREEN_DASHBOARD)
+						if (focal && (std::find(keep.begin(), keep.end(), focal) == keep.end()))
 							data = (data & ~0xffffU) | (uint32_t(std::lround(float(focal) / factor)) & 0xffffU);
 					}
 				});
