@@ -105,6 +105,7 @@ private:
 	bitmap_ind16 m_hires_ind;
 	bitmap_ind16 m_below;
 	bitmap_ind16 m_bottom;      // on the GPU: the native screen under the 3D
+	bitmap_ind16 m_top_2d;      // anamorphic -widescreen: the top sprites before they are narrowed
 
 	u16 video_enable_r();
 	void video_enable_w(offs_t offset, u16 data, u16 mem_mask = ~0);
@@ -349,6 +350,15 @@ u32 namco_de_pcbstack_device::screen_update(screen_device &screen, bitmap_ind16 
 		copybitmap(m_bottom, bitmap, 0, 0, 0, 0, cliprect);
 		bitmap.fill(0xffff, cliprect);
 		m_c355spr->draw(screen, bitmap, cliprect, 15);
+		if (m_hires->narrow_2d())
+		{
+			// anamorphic -widescreen: the top sprites narrowed (natively)
+			if ((m_top_2d.width() != bitmap.width()) || (m_top_2d.height() != bitmap.height()))
+				m_top_2d.allocate(bitmap.width(), bitmap.height());
+			copybitmap(m_top_2d, bitmap, 0, 0, 0, 0, cliprect);
+			bitmap.fill(0xffff, cliprect);
+			m_hires->narrow(m_top_2d, bitmap, cliprect, 0xffff);
+		}
 
 		bitmap_rgb32 *frame = nullptr;
 		if (vk->mix_sprites(m_bottom, bitmap, m_palette->palette()->entry_list_adjusted(), m_palette->entries(), cliprect, screen.visible_area(), frame))
@@ -379,6 +389,23 @@ u32 namco_de_pcbstack_device::screen_update(screen_device &screen, bitmap_ind16 
 	}
 
 	m_namcos21_3d->copy_visible_poly_framebuffer(bitmap, cliprect);
+	if (m_hires->narrow_2d())
+	{
+		// anamorphic -widescreen: the top sprites drawn apart, then narrowed
+		// so that they keep their shape once stretched to 16:9
+		if ((m_top_2d.width() != bitmap.width()) || (m_top_2d.height() != bitmap.height()))
+			m_top_2d.allocate(bitmap.width(), bitmap.height());
+		m_top_2d.fill(0xffff, cliprect);
+		m_c355spr->draw(screen, m_top_2d, cliprect, 15);
+		m_hires->narrow(m_top_2d, bitmap, cliprect, 0xffff);
+		if (hires)
+		{
+			m_hires->upscale_2d(m_top_2d, m_hires_ind, cliprect, 0xffff);
+			m_hires->indexed_to_frame(m_hires_ind, hclip, *m_palette);
+			m_hires->frame_done(cliprect);
+		}
+		return 0;
+	}
 	if (hires)
 	{
 		if ((m_below.width() != bitmap.width()) || (m_below.height() != bitmap.height()))

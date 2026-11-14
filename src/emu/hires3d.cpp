@@ -298,6 +298,33 @@ void hires3d_output::upscale(const bitmap_ind16 &source, bitmap_ind16 &dest, con
 }
 
 
+bool hires3d_output::narrow_params(float &middle, float &factor, int &first, int &last) const
+{
+	rectangle const &visible = m_screen.visible_area();
+	first = (m_narrow_first >= 0) ? m_narrow_first : visible.left();
+	last = (m_narrow_last >= 0) ? m_narrow_last : visible.right();
+	middle = (first + last + 1) * 0.5f;
+	factor = m_wide_factor;
+	return narrow_2d();
+}
+
+
+int hires3d_output::narrow_column(int x, int scale) const
+{
+	float middle, factor;
+	int first, last;
+	narrow_params(middle, factor, first, last);
+	int from = x / scale;
+	if ((from >= first) && (from <= last))
+	{
+		from = int(std::floor(middle + ((x + 0.5f) / scale - middle) * factor));
+		if ((from < first) || (from > last))
+			return -1;
+	}
+	return from;
+}
+
+
 template <typename T, typename Opaque>
 void hires3d_output::narrow_pixels(const T &source, T &dest, const rectangle &cliprect, int scale, Opaque &&opaque) const
 {
@@ -305,11 +332,6 @@ void hires3d_output::narrow_pixels(const T &source, T &dest, const rectangle &cl
 	// column at the same distance from the middle, wide_factor() times
 	// further, so the 2D keeps the sharpness of the magnification; the
 	// columns outside the narrowed area stay in place
-	rectangle const &visible = m_screen.visible_area();
-	int const first = (m_narrow_first >= 0) ? m_narrow_first : visible.left();
-	int const last = (m_narrow_last >= 0) ? m_narrow_last : visible.right();
-	float const middle = (first + last + 1) * 0.5f;
-	float const factor = m_wide_factor;
 	int const left = cliprect.left() * scale;
 	int const right = (cliprect.right() + 1) * scale;
 	for (int y = cliprect.top(); y <= cliprect.bottom(); y++)
@@ -317,13 +339,9 @@ void hires3d_output::narrow_pixels(const T &source, T &dest, const rectangle &cl
 		auto const *const src = &source.pix(y);
 		for (int x = left; x < right; x++)
 		{
-			int from = x / scale;
-			if ((from >= first) && (from <= last))
-			{
-				from = int(std::floor(middle + ((x + 0.5f) / scale - middle) * factor));
-				if ((from < first) || (from > last))
-					continue;
-			}
+			int const from = narrow_column(x, scale);
+			if (from < 0)
+				continue;
 			auto const pixel = src[from];
 			if (opaque(pixel))
 				for (int sub = 0; sub < scale; sub++)

@@ -26,4 +26,8 @@ layout(push_constant) uniform push_t
 	int native_left;    // native pixel of the first native value
 	int native_top;
 	int native_width;
+	float narrow_middle; // Winning Run, anamorphic -widescreen: the 2D layer
+	float narrow_factor; // narrowed (hires3d_output::narrow_params), 0: off
+	int narrow_first;
+	int narrow_last;
 } pc;

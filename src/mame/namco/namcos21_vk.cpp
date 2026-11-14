@@ -69,6 +69,8 @@ struct push_constants
 	s32 pens, pens_width, pens_height;
 	s32 left, top;
 	s32 native_left, native_top, native_width;
+	float narrow_middle, narrow_factor;
+	s32 narrow_first, narrow_last;
 };
 
 struct command
@@ -1031,6 +1033,10 @@ bool namcos21_vk::mix_layer(u8 const *layer, layer_mix const &mix, rgb_t const *
 	push.layer_base = mix.base;
 	push.pri = mix.pri;
 	push.fill = mix.fill;
+	push.narrow_middle = mix.narrow_middle;
+	push.narrow_factor = mix.narrow_factor;
+	push.narrow_first = mix.narrow_first;
+	push.narrow_last = mix.narrow_last;
 	push.palette = s.add_palette(palette, colors);
 	push.colors = colors;
 	return s.mix(push, cliprect.top(), cliprect.bottom(), visible, frame);

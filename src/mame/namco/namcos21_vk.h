@@ -37,6 +37,11 @@ public:
 		u32 base;
 		u32 pri;
 		u32 fill;
+		// anamorphic -widescreen: hires3d_output::narrow_params (factor 0: off)
+		float narrow_middle = 0.0f;
+		float narrow_factor = 0.0f;
+		int narrow_first = 0;
+		int narrow_last = 0;
 	};
 
 	// width and height: the native frame buffer

@@ -84,10 +84,10 @@ Display
   picture, which keeps its size, is shown stretched to 16:9 (anamorphic).
   The 3D keeps its shape; texts, counters and sprites are stretched
   (-widescreen_2d has no effect), except on Side by Side 1 and 2, GTI
-  Club, Midnight Run, Winding Heat, Racing Jam 1 and 2 and Thrill Drive 1:
-  there the 2D layer drawn over the 3D keeps its shape in the middle of
-  the picture (-widescreen_2d stretch stretches it). Without -hires3d, in
-  software and with Vulkan.
+  Club, Midnight Run, Winding Heat, Racing Jam 1 and 2, Thrill Drive 1 and
+  Winning Run: there the 2D layer drawn over the 3D keeps its shape in the
+  middle of the picture (-widescreen_2d stretch stretches it). Without
+  -hires3d, in software and with Vulkan.
     Thrill Drive 2, Thrill Drive 1, Racing Jam 1 and 2, GTI Club, Midnight
     Run, Winding Heat, GTI Club 2, Xtrial Racing, San Francisco Rush, Rush
     2049, Road Burners, California Speed, Side by Side 1 and 2, CART Fury:
@@ -131,8 +131,8 @@ Since mame3d 0.289-2336-g705501b
   Run, Driver's Eyes, Radikal Bikers, Speed Up, Cruis'n USA, Cruis'n World,
   Off Road Challenge, Side by Side 1 and 2 and CART Fury (see Display).
 - -widescreen: the 2D over the 3D keeps its shape on Side by Side 1 and 2,
-  GTI Club, Midnight Run, Winding Heat, Racing Jam 1 and 2 and Thrill
-  Drive 1 (see Display).
+  GTI Club, Midnight Run, Winding Heat, Racing Jam 1 and 2, Thrill Drive 1
+  and Winning Run (see Display).
 - HNG64 in software at -hires3d 3, 5...: repeated bands in the 3D. Fixed.
 - Thrill Drive 1: the rear view mirror stayed empty (light blue). Racing
   Jam 1 and 2: a grey band at the bottom of the screen. The Voodoo clipped

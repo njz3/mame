@@ -394,7 +394,7 @@ private:
 
 	u32 screen_update(screen_device &screen, bitmap_ind16 &bitmap, const rectangle &cliprect);
 
-	void bitmap_draw(bitmap_ind16 &bitmap, const rectangle &cliprect, int scale = 1);
+	void bitmap_draw(bitmap_ind16 &bitmap, const rectangle &cliprect, int scale = 1, bool narrow = false);
 
 	// -hires3d: the frame is mixed in an indexed bitmap at a multiple of the
 	// native resolution, then converted through the palette
@@ -505,7 +505,7 @@ void namcos21_state::gpu_enable_w(u8 data)
 
 // cliprect is native; with scale > 1 the destination is the high-resolution
 // bitmap and every pixel reads the source pixel it magnifies
-void namcos21_state::bitmap_draw(bitmap_ind16 &bitmap, const rectangle &cliprect, int scale)
+void namcos21_state::bitmap_draw(bitmap_ind16 &bitmap, const rectangle &cliprect, int scale, bool narrow)
 {
 	// show GPU registers & related
 #if 0
@@ -526,7 +526,11 @@ void namcos21_state::bitmap_draw(bitmap_ind16 &bitmap, const rectangle &cliprect
 		u16 *const dest = &bitmap.pix(dy);
 		for (int sx = cliprect.left() * scale; sx < (cliprect.right() + 1) * scale; sx++)
 		{
-			int const pen = source[(sx / scale + xscroll) & 0x1ff];
+			// anamorphic -widescreen: the layer over the 3D narrowed
+			int const column = narrow ? m_hires->narrow_column(sx, scale) : (sx / scale);
+			if (column < 0)
+				continue;
+			int const pen = source[(column + xscroll) & 0x1ff];
 			switch (pen)
 			{
 			case 0xff:
@@ -571,7 +575,10 @@ u32 namcos21_state::screen_update(screen_device &screen, bitmap_ind16 &bitmap, c
 	{
 		// on the GPU: the 2D layer mixed with the 3D there, the frame shown
 		// from the read-back memory
-		namcos21_vk::layer_mix const mix = { m_gpu_register[1] - cliprect.top(), m_gpu_register[0] & 0xff, u32(0x1000 | (m_gpu_color << 8 & 0xf00)), pri, u32((m_gpu_color << 8 & 0xf00) | 0xff) };
+		namcos21_vk::layer_mix mix = { m_gpu_register[1] - cliprect.top(), m_gpu_register[0] & 0xff, u32(0x1000 | (m_gpu_color << 8 & 0xf00)), pri, u32((m_gpu_color << 8 & 0xf00) | 0xff) };
+		// anamorphic -widescreen: in a race, the layer over the 3D narrowed
+		if (!m_hires->narrow_params(mix.narrow_middle, mix.narrow_factor, mix.narrow_first, mix.narrow_last) || (pri == 5) || (pri == 0))
+			mix.narrow_factor = 0.0f;
 		bitmap_rgb32 *frame = nullptr;
 		if (m_namcos21_3d->vulkan()->mix_layer(m_gpu_videoram.get(), mix, m_palette->palette()->entry_list_adjusted(), m_palette->entries(), cliprect, screen.visible_area(), frame))
 		{
@@ -609,7 +616,7 @@ u32 namcos21_state::screen_update(screen_device &screen, bitmap_ind16 &bitmap, c
 			case 2:
 			default:
 				m_namcos21_3d->copy_visible_poly_framebuffer(m_hires_ind, hclip, scale);
-				bitmap_draw(m_hires_ind, cliprect, scale);
+				bitmap_draw(m_hires_ind, cliprect, scale, m_hires->narrow_2d());
 				break;
 		}
 		m_hires->indexed_to_frame(m_hires_ind, hclip, *m_palette);
@@ -630,7 +637,7 @@ u32 namcos21_state::screen_update(screen_device &screen, bitmap_ind16 &bitmap, c
 		case 2: // gameplay
 		default:
 			m_namcos21_3d->copy_visible_poly_framebuffer(bitmap, cliprect);
-			bitmap_draw(bitmap,cliprect);
+			bitmap_draw(bitmap, cliprect, 1, m_hires->narrow_2d());
 			break;
 	}
 

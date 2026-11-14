@@ -132,6 +132,14 @@ public:
 	// the 2D is narrowed: black masks over the edges of the picture
 	void set_narrow_area(int first, int last) { m_narrow_first = first; m_narrow_last = last; }
 
+	// the native column that high-resolution column x (scale columns per
+	// native column) shows once the 2D is narrowed, -1 for none; and the
+	// parameters of that mapping for a GPU mix (false when the 2D is not
+	// narrowed): from = floor(middle + ((x + 0.5) / scale - middle) * factor)
+	// for the native columns first..last, the others unchanged
+	int narrow_column(int x, int scale) const;
+	bool narrow_params(float &middle, float &factor, int &first, int &last) const;
+
 	// for the renderer: the factor the shape of the screens is multiplied by
 	// (the widescreen frames are wider than the screen)
 	static float view_widening();

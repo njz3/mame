@@ -23,9 +23,15 @@ uint pen_3d(int x, int y)
 	return ((pc.pens == 0) ? texelFetch(pens0, ivec2(x, y), 0).r : texelFetch(pens1, ivec2(x, y), 0).r) & 0xffffu;
 }
 
-// namcos21_state::bitmap_draw for one pixel
-uint draw_layer(uint dest, int sx, int sy)
+// namcos21_state::bitmap_draw for one pixel (x: high-resolution column)
+uint draw_layer(uint dest, int x, int sx, int sy)
 {
+	if ((pc.narrow_factor > 0.0) && (sx >= pc.narrow_first) && (sx <= pc.narrow_last))
+	{
+		sx = int(floor(pc.narrow_middle + ((float(x) + 0.5) / float(pc.scale) - pc.narrow_middle) * pc.narrow_factor));
+		if ((sx < pc.narrow_first) || (sx > pc.narrow_last))
+			return dest;
+	}
 	uint offset = uint(((pc.yscroll + sy) & 0x3ff) * 0x200 + ((sx + pc.xscroll) & 0x1ff));
 	uint pen = (layer[offset >> 2] >> ((offset & 3u) * 8u)) & 0xffu;
 	uint base = pc.layer_base;
@@ -50,21 +56,21 @@ void main()
 		dest = pc.fill;
 		if (pc.pri == 5u)
 		{
-			dest = draw_layer(dest, sx, sy);
+			dest = draw_layer(dest, x, sx, sy);
 			uint pen = pen_3d(x, y);
 			if (pen != 0u)
 				dest = pen;
 		}
 		else if (pc.pri == 0u)
 		{
-			dest = draw_layer(dest, sx, sy);
+			dest = draw_layer(dest, x, sx, sy);
 		}
 		else
 		{
 			uint pen = pen_3d(x, y);
 			if (pen != 0u)
 				dest = pen;
-			dest = draw_layer(dest, sx, sy);
+			dest = draw_layer(dest, x, sx, sy);
 		}
 	}
 	else
