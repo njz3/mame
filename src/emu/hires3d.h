@@ -121,6 +121,13 @@ public:
 	// the visible area
 	void narrow(const bitmap_ind16 &source, bitmap_ind16 &dest, const rectangle &cliprect, u16 transparent_pen) const;
 
+	// same for RGB bitmaps, pixels with a zero alpha being transparent
+	void narrow(const bitmap_rgb32 &source, bitmap_rgb32 &dest, const rectangle &cliprect) const;
+
+	// draw the 2D over the 3D with draw(), into bitmap or, when narrow_2d()
+	// is set, into temp (cleared to a zero alpha) then narrowed into bitmap
+	void draw_2d(bitmap_rgb32 &bitmap, const rectangle &cliprect, bitmap_rgb32 &temp, const std::function<void (bitmap_rgb32 &)> &draw) const;
+
 	// columns left of first and right of last (native) stay in place when
 	// the 2D is narrowed: black masks over the edges of the picture
 	void set_narrow_area(int first, int last) { m_narrow_first = first; m_narrow_last = last; }
@@ -172,6 +179,7 @@ public:
 	// upscale() with transparent_pen for the 2D drawn over the 3D, narrowed
 	// as narrow() does when narrow_2d() is set
 	void upscale_2d(const bitmap_ind16 &source, bitmap_ind16 &dest, const rectangle &cliprect, u16 transparent_pen) const;
+	void upscale_2d(const bitmap_rgb32 &source, bitmap_rgb32 &dest, const rectangle &cliprect) const;
 
 	// magnify into the frame bitmap the pixels of after that differ from
 	// before (both native), such as the 2D layers drawn over the 3D
@@ -232,6 +240,8 @@ private:
 	bool m_wide_bg = false;                 // -widescreen_bg
 	int m_narrow_first = -1;                // columns narrowed by narrow(), visible area when negative
 	int m_narrow_last = -1;
+
+	template <typename T, typename Opaque> void narrow_pixels(const T &source, T &dest, const rectangle &cliprect, int scale, Opaque &&opaque) const;
 	float m_wide_factor = 1.0f;             // 16:9 over the shape of the screen
 	std::unique_ptr<vk3d_renderer> m_vulkan;
 	bool m_vulkan_tried = false;

@@ -361,6 +361,7 @@ protected:
 	// -hires3d: the K001005 renders at a multiple of the native resolution
 	std::unique_ptr<hires3d_output> m_hires;
 	bitmap_rgb32 m_back; // native back layer composed on the GPU
+	bitmap_rgb32 m_front_2d; // anamorphic -widescreen: the front layer before it is narrowed
 
 #if DEBUG_GTI
 	uint8_t m_tick = 0;
@@ -882,7 +883,7 @@ uint32_t gticlub_state::screen_update(screen_device &screen, bitmap_rgb32 &bitma
 			m_back.allocate(bitmap.width(), bitmap.height());
 		m_k001604[0]->draw_back_layer(screen, m_back, cliprect);
 		bitmap.fill(0, cliprect);
-		m_k001604[0]->draw_front_layer(screen, bitmap, cliprect);
+		m_hires->draw_2d(bitmap, cliprect, m_front_2d, [&] (bitmap_rgb32 &dest) { m_k001604[0]->draw_front_layer(screen, dest, cliprect); });
 		bitmap_rgb32 *const frame = m_k001005->compose_hires(m_konppc[0].output_3d_enabled(), m_back, bitmap, cliprect, m_hires->scale());
 		if (frame)
 		{
@@ -902,7 +903,7 @@ uint32_t gticlub_state::screen_update(screen_device &screen, bitmap_rgb32 &bitma
 			m_k001005->draw(hires, m_hires->scaled(cliprect), m_hires->scale());
 		bitmap.fill(0, cliprect);
 		m_k001604[0]->draw_front_layer(screen, bitmap, cliprect);
-		m_hires->upscale(bitmap, hires, cliprect, true);
+		m_hires->upscale_2d(bitmap, hires, cliprect);
 		m_hires->frame_done(cliprect);
 		return 0;
 	}
@@ -914,7 +915,7 @@ uint32_t gticlub_state::screen_update(screen_device &screen, bitmap_rgb32 &bitma
 		m_k001005->draw(bitmap, cliprect);
 	}
 
-	m_k001604[0]->draw_front_layer(screen, bitmap, cliprect);
+	m_hires->draw_2d(bitmap, cliprect, m_front_2d, [&] (bitmap_rgb32 &dest) { m_k001604[0]->draw_front_layer(screen, dest, cliprect); });
 
 #if DEBUG_GTI // TODO: won't compile since k001006 has been devicified and its palette is private
 	m_tick++;

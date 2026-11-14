@@ -298,48 +298,13 @@ void hires3d_output::upscale(const bitmap_ind16 &source, bitmap_ind16 &dest, con
 }
 
 
-void hires3d_output::narrow(const bitmap_ind16 &source, bitmap_ind16 &dest, const rectangle &cliprect, u16 transparent_pen) const
+template <typename T, typename Opaque>
+void hires3d_output::narrow_pixels(const T &source, T &dest, const rectangle &cliprect, int scale, Opaque &&opaque) const
 {
-	// destination column x shows the source column at the same distance
-	// from the middle, wide_factor() times further; the columns outside the
-	// narrowed area stay in place
-	rectangle const &visible = m_screen.visible_area();
-	int const first = (m_narrow_first >= 0) ? m_narrow_first : visible.left();
-	int const last = (m_narrow_last >= 0) ? m_narrow_last : visible.right();
-	float const middle = (first + last + 1) * 0.5f;
-	float const factor = m_wide_factor;
-	for (int y = cliprect.top(); y <= cliprect.bottom(); y++)
-	{
-		u16 const *const src = &source.pix(y);
-		u16 *const dst = &dest.pix(y);
-		for (int x = cliprect.left(); x <= cliprect.right(); x++)
-		{
-			int from = x;
-			if ((x >= first) && (x <= last))
-			{
-				from = int(std::floor(middle + (x + 0.5f - middle) * factor));
-				if ((from < first) || (from > last))
-					continue;
-			}
-			u16 const pixel = src[from];
-			if (pixel != transparent_pen)
-				dst[x] = pixel;
-		}
-	}
-}
-
-
-void hires3d_output::upscale_2d(const bitmap_ind16 &source, bitmap_ind16 &dest, const rectangle &cliprect, u16 transparent_pen) const
-{
-	if (!narrow_2d())
-	{
-		upscale(source, dest, cliprect, transparent_pen);
-		return;
-	}
-
-	// each high-resolution column takes the native column it falls on once
-	// narrowed, so the 2D keeps the sharpness of the magnification
-	int const scale = m_scale;
+	// destination column x (scale per native column) shows the native
+	// column at the same distance from the middle, wide_factor() times
+	// further, so the 2D keeps the sharpness of the magnification; the
+	// columns outside the narrowed area stay in place
 	rectangle const &visible = m_screen.visible_area();
 	int const first = (m_narrow_first >= 0) ? m_narrow_first : visible.left();
 	int const last = (m_narrow_last >= 0) ? m_narrow_last : visible.right();
@@ -349,7 +314,7 @@ void hires3d_output::upscale_2d(const bitmap_ind16 &source, bitmap_ind16 &dest, 
 	int const right = (cliprect.right() + 1) * scale;
 	for (int y = cliprect.top(); y <= cliprect.bottom(); y++)
 	{
-		u16 const *const src = &source.pix(y);
+		auto const *const src = &source.pix(y);
 		for (int x = left; x < right; x++)
 		{
 			int from = x / scale;
@@ -359,12 +324,57 @@ void hires3d_output::upscale_2d(const bitmap_ind16 &source, bitmap_ind16 &dest, 
 				if ((from < first) || (from > last))
 					continue;
 			}
-			u16 const pixel = src[from];
-			if (pixel != transparent_pen)
+			auto const pixel = src[from];
+			if (opaque(pixel))
 				for (int sub = 0; sub < scale; sub++)
 					dest.pix(y * scale + sub, x) = pixel;
 		}
 	}
+}
+
+
+void hires3d_output::narrow(const bitmap_ind16 &source, bitmap_ind16 &dest, const rectangle &cliprect, u16 transparent_pen) const
+{
+	narrow_pixels(source, dest, cliprect, 1, [transparent_pen] (u16 pixel) { return pixel != transparent_pen; });
+}
+
+
+void hires3d_output::narrow(const bitmap_rgb32 &source, bitmap_rgb32 &dest, const rectangle &cliprect) const
+{
+	narrow_pixels(source, dest, cliprect, 1, [] (u32 pixel) { return (pixel & 0xff000000) != 0; });
+}
+
+
+void hires3d_output::draw_2d(bitmap_rgb32 &bitmap, const rectangle &cliprect, bitmap_rgb32 &temp, const std::function<void (bitmap_rgb32 &)> &draw) const
+{
+	if (!narrow_2d())
+	{
+		draw(bitmap);
+		return;
+	}
+	if ((temp.width() != bitmap.width()) || (temp.height() != bitmap.height()))
+		temp.allocate(bitmap.width(), bitmap.height());
+	temp.fill(0, cliprect);
+	draw(temp);
+	narrow(temp, bitmap, cliprect);
+}
+
+
+void hires3d_output::upscale_2d(const bitmap_ind16 &source, bitmap_ind16 &dest, const rectangle &cliprect, u16 transparent_pen) const
+{
+	if (narrow_2d())
+		narrow_pixels(source, dest, cliprect, m_scale, [transparent_pen] (u16 pixel) { return pixel != transparent_pen; });
+	else
+		upscale(source, dest, cliprect, transparent_pen);
+}
+
+
+void hires3d_output::upscale_2d(const bitmap_rgb32 &source, bitmap_rgb32 &dest, const rectangle &cliprect) const
+{
+	if (narrow_2d())
+		narrow_pixels(source, dest, cliprect, m_scale, [] (u32 pixel) { return (pixel & 0xff000000) != 0; });
+	else
+		upscale(source, dest, cliprect, true);
 }
 
 

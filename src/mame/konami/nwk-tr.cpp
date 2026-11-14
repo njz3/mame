@@ -307,6 +307,7 @@ private:
 	required_device_array<voodoo_pci_device, 2> m_voodoo;
 	required_device_array<k033906_device, 2> m_k033906;
 	bitmap_rgb32 m_below; // -hires3d: the frame before the 2D layer
+	bitmap_rgb32 m_front_2d; // anamorphic -widescreen: the 2D layer before it is narrowed
 	required_device_array<palette_device, 2> m_palette;
 	optional_shared_ptr_array<uint32_t, 2> m_sharc_dataram;
 	required_device<konppc_jvs_host_device> m_jvs_host;
@@ -364,7 +365,8 @@ uint32_t nwktr_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap,
 			m_below.allocate(bitmap.width(), bitmap.height());
 		copybitmap(m_below, bitmap, 0, 0, 0, 0, cliprect);
 	}
-	m_k001604[0]->draw_front_layer(screen, bitmap, cliprect); // K001604 on slave board doesn't seem to output anything. Bug or intended?
+	// K001604 on slave board doesn't seem to output anything. Bug or intended?
+	m_widescreen->draw_2d(bitmap, cliprect, m_front_2d, [&] (bitmap_rgb32 &dest) { m_k001604[0]->draw_front_layer(screen, dest, cliprect); });
 	if (hires)
 		hires->magnify_changes(m_below, bitmap, cliprect);
 

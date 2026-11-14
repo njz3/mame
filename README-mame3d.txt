@@ -83,9 +83,10 @@ Display
   given a wider field of view, or its polygons are drawn narrower, and the
   picture, which keeps its size, is shown stretched to 16:9 (anamorphic).
   The 3D keeps its shape; texts, counters and sprites are stretched
-  (-widescreen_2d has no effect), except on Side by Side 1 and 2: there
-  they keep their shape in the middle of the picture (-widescreen_2d
-  stretch stretches them). Without -hires3d, in software and with
+  (-widescreen_2d has no effect), except on Side by Side 1 and 2, GTI
+  Club, Midnight Run, Winding Heat, Racing Jam 1 and 2 and Thrill Drive 1:
+  there the 2D layer drawn over the 3D keeps its shape in the middle of
+  the picture (-widescreen_2d stretch stretches it). Without -hires3d, in software and with
   Vulkan.
     Thrill Drive 2, Thrill Drive 1, Racing Jam 1 and 2, GTI Club, Midnight
     Run, Winding Heat, GTI Club 2, Xtrial Racing, San Francisco Rush, Rush

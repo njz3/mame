@@ -265,6 +265,7 @@ protected:
 	// -hires3d: the K001005 renders at a multiple of the native resolution
 	std::unique_ptr<hires3d_output> m_hires;
 	bitmap_rgb32 m_back; // native back layer composed on the GPU
+	bitmap_rgb32 m_front_2d; // anamorphic -widescreen: the front layer before it is narrowed
 
 	// with -hires3d on the GPU: show the native layers and the 3D composed
 	// there; false to draw the frame in software
@@ -336,7 +337,7 @@ bool zr107_state::compose_hires(screen_device &screen, bitmap_rgb32 &bitmap, con
 		m_back.allocate(bitmap.width(), bitmap.height());
 	back(m_back);
 	bitmap.fill(0, cliprect);
-	front(bitmap);
+	m_hires->draw_2d(bitmap, cliprect, m_front_2d, front);
 	bitmap_rgb32 *const frame = m_k001005->compose_hires(with_3d, m_back, bitmap, cliprect, m_hires->scale());
 	if (!frame)
 		return false;
@@ -362,7 +363,7 @@ uint32_t jetwave_state::screen_update(screen_device &screen, bitmap_rgb32 &bitma
 		m_k001005->draw(hires, m_hires->scaled(cliprect), m_hires->scale());
 		bitmap.fill(0, cliprect);
 		m_k001604->draw_front_layer(screen, bitmap, cliprect);
-		m_hires->upscale(bitmap, hires, cliprect, true);
+		m_hires->upscale_2d(bitmap, hires, cliprect);
 		m_hires->frame_done(cliprect);
 		return 0;
 	}
@@ -371,7 +372,7 @@ uint32_t jetwave_state::screen_update(screen_device &screen, bitmap_rgb32 &bitma
 
 	m_k001604->draw_back_layer(screen, bitmap, cliprect);
 	m_k001005->draw(bitmap, cliprect);
-	m_k001604->draw_front_layer(screen, bitmap, cliprect);
+	m_hires->draw_2d(bitmap, cliprect, m_front_2d, [&] (bitmap_rgb32 &dest) { m_k001604->draw_front_layer(screen, dest, cliprect); });
 
 	return 0;
 }
@@ -414,7 +415,7 @@ uint32_t midnrun_state::screen_update(screen_device &screen, bitmap_rgb32 &bitma
 			m_k001005->draw(hires, m_hires->scaled(cliprect), m_hires->scale());
 		bitmap.fill(0, cliprect);
 		m_k056832->tilemap_draw_dj(screen, bitmap, cliprect, 0, 0, 0);
-		m_hires->upscale(bitmap, hires, cliprect, true);
+		m_hires->upscale_2d(bitmap, hires, cliprect);
 		m_hires->frame_done(cliprect);
 		return 0;
 	}
@@ -428,7 +429,7 @@ uint32_t midnrun_state::screen_update(screen_device &screen, bitmap_rgb32 &bitma
 		m_k001005->draw(bitmap, cliprect);
 	}
 
-	m_k056832->tilemap_draw_dj(screen, bitmap, cliprect, 0, 0, 0);
+	m_hires->draw_2d(bitmap, cliprect, m_front_2d, [&] (bitmap_rgb32 &dest) { m_k056832->tilemap_draw_dj(screen, dest, cliprect, 0, 0, 0); });
 
 	return 0;
 }
