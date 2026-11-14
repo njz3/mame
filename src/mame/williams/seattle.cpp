@@ -349,14 +349,19 @@ private:
 	required_device<gt64010_device> m_galileo;
 	required_device<voodoo_1_pci_device> m_voodoo;
 
-	// mame3d -widescreen on San Francisco Rush: the cameras of the game are
-	// patched in memory to see wider (see widescreen_vblank), the screen is
-	// shown at 16:9 (an anamorphic frame)
+	// mame3d -widescreen on San Francisco Rush and California Speed: the
+	// cameras of the game are patched in memory to see wider (see
+	// widescreen_vblank), the screen is shown at 16:9 (an anamorphic frame)
 	void widescreen_start() ATTR_COLD;
 	void widescreen_vblank(screen_device &screen, bool state);
+	void widescreen_projection_w(offs_t offset, uint32_t &data, uint32_t mem_mask);
 	std::unique_ptr<hires3d_output> m_widescreen;
 	std::vector<offs_t> m_widescreen_sites;
 	int m_widescreen_wait = 0;
+	bool m_widescreen_calspeed = false;
+	offs_t m_widescreen_projection = 0;
+	int m_widescreen_misses = 0;
+	memory_passthrough_handler m_widescreen_tap;
 	optional_device<atari_cage_seattle_device> m_cage;
 	optional_device<dcs_audio_device> m_dcs;
 	memory_share_creator<uint32_t> m_nvram;
@@ -498,11 +503,38 @@ bool widescreen_is_camera(widescreen_camera const &c)
 			&& (std::fabs(c.one - 1.0f) < 1e-3f) && (c.big > 1e7f) && (c.focal_h > 0.0f);
 }
 
+// the projection of California Speed, floats computed by the game each frame
+// from the half tangent of its horizontal field of view (by the function at
+// 0x80024a10 in calspeed, the projection at 0x6dd538):
+//     +0x00 tan h  +0x04 tan v (tan h * height / width)
+//     +0x08 1 / (tan h^2 + 1)  +0x0c 1 / (tan v^2 + 1)
+//     +0x18 focal h (width / 2 / tan h)  +0x1c focal v (height / 2 / tan v)
+//     +0x20 centre x  +0x24 centre y
+// square pixels: both focal lengths are the same, until widened here
+struct widescreen_projection
+{
+	float tan_h, tan_v, c2_h, c2_v, near_z, far_bits, focal_h, focal_v, cx, cy;
+};
+
+bool widescreen_is_projection(widescreen_projection const &p)
+{
+	if (!(p.tan_h > 0.1f) || !(p.tan_h < 5.0f) || !(p.tan_v > 0.05f) || !(p.tan_v <= p.tan_h) || !(p.focal_v > 0.0f) || !(p.focal_h > 0.0f))
+		return false;
+	float const width = 2.0f * p.focal_h * p.tan_h;
+	float const height = 2.0f * p.focal_v * p.tan_v;
+	return (std::fabs(p.c2_h - 1.0f / (p.tan_h * p.tan_h + 1.0f)) < 1e-4f) && (std::fabs(p.c2_v - 1.0f / (p.tan_v * p.tan_v + 1.0f)) < 1e-4f)
+			&& (width >= 256.0f) && (width <= 1024.0f) && (height >= 192.0f) && (height <= 768.0f)
+			&& (p.cx > 0.0f) && (p.cx < 1024.0f) && (p.cy > 0.0f) && (p.cy < 768.0f);
+}
+
 } // anonymous namespace
 
 void seattle_state::widescreen_start()
 {
-	if (!machine().options().bool_value(OPTION_WIDESCREEN) || strncmp(machine().system().name, "sfrush", 6))
+	if (!machine().options().bool_value(OPTION_WIDESCREEN))
+		return;
+	m_widescreen_calspeed = !strncmp(machine().system().name, "calspeed", 8);
+	if (strncmp(machine().system().name, "sfrush", 6) && !m_widescreen_calspeed)
 		return;
 	m_widescreen = std::make_unique<hires3d_output>(*m_screen);
 	m_widescreen->allow_anamorphic(true);
@@ -514,11 +546,81 @@ void seattle_state::widescreen_start()
 	m_screen->register_vblank_callback(vblank_state_delegate(&seattle_state::widescreen_vblank, this));
 }
 
+void seattle_state::widescreen_projection_w(offs_t offset, uint32_t &data, uint32_t mem_mask)
+{
+	// the game writes its projection: the tangent is widened, the focal
+	// length shortened, 1 / (tan^2 + 1) follows the tangent
+	if (mem_mask != 0xffffffff)
+		return;
+	float const factor = m_widescreen->wide_factor();
+	float const value = std::bit_cast<float>(data);
+	switch (offset - m_widescreen_projection)
+	{
+	case 0x00:
+		data = std::bit_cast<uint32_t>(value * factor);
+		break;
+	case 0x08:
+		if (value > 0.0f)
+			data = std::bit_cast<uint32_t>(1.0f / ((1.0f / value - 1.0f) * factor * factor + 1.0f));
+		break;
+	case 0x18:
+		data = std::bit_cast<uint32_t>(value / factor);
+		break;
+	}
+}
+
 void seattle_state::widescreen_vblank(screen_device &screen, bool state)
 {
 	if (!state)
 		return;
 	address_space &space = m_maincpu->space(AS_PROGRAM);
+	if (m_widescreen_calspeed)
+	{
+		// California Speed: a write tap on its projection, put back when it
+		// goes away (looked for once a second)
+		auto const read = [&space] (offs_t a)
+		{
+			widescreen_projection p;
+			float *const f = &p.tan_h;
+			for (int i = 0; i < 10; i++)
+				f[i] = std::bit_cast<float>(space.read_dword(a + i * 4));
+			return p;
+		};
+		// (a frame written halfway is not taken for a lost projection)
+		if (m_widescreen_projection)
+		{
+			if (widescreen_is_projection(read(m_widescreen_projection)))
+			{
+				m_widescreen_misses = 0;
+				return;
+			}
+			if (++m_widescreen_misses < 3)
+				return;
+			m_widescreen_tap.remove();
+			m_widescreen_projection = 0;
+		}
+		if (m_widescreen_wait-- > 0)
+			return;
+		m_widescreen_wait = 60;
+		for (offs_t a = 0; a < 0x800000; a += 4)
+		{
+			// (the tangent and 1 / (tan^2 + 1) first: most words are not)
+			float const tan_h = std::bit_cast<float>(space.read_dword(a));
+			if (!(tan_h > 0.1f) || !(tan_h < 5.0f) || (std::fabs(std::bit_cast<float>(space.read_dword(a + 8)) - 1.0f / (tan_h * tan_h + 1.0f)) >= 1e-4f))
+				continue;
+			if (widescreen_is_projection(read(a)))
+			{
+				m_widescreen_projection = a;
+				m_widescreen_misses = 0;
+				m_widescreen_tap = space.install_write_tap(a, a + 0x1f, "widescreen",
+						[this] (offs_t offset, uint32_t &data, uint32_t mem_mask) { widescreen_projection_w(offset, data, mem_mask); });
+				osd_printf_verbose("seattle: -widescreen, projection at %06x (field of view %.3f times wider)\n", a, m_widescreen->wide_factor());
+				break;
+			}
+		}
+		return;
+	}
+
 	auto const read = [&space] (offs_t a)
 	{
 		widescreen_camera c;
