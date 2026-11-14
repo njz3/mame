@@ -291,8 +291,14 @@
 #include "machine/vrc5074.h"
 #include "video/voodoo_pci.h"
 
+#include "emuopts.h"
+#include "hires3d.h"
 #include "screen.h"
 #include "speaker.h"
+
+#include <cmath>
+#include <cstring>
+#include <vector>
 
 #include "sf2049.lh"
 
@@ -392,6 +398,15 @@ protected:
 private:
 	static constexpr unsigned SYSTEM_CLOCK = 100'000'000;
 
+	// mame3d -widescreen on San Francisco Rush 2049 and Road Burners: the
+	// cameras of the game are patched in memory to see wider (see
+	// widescreen_vblank), the screen is shown at 16:9 (an anamorphic frame)
+	void widescreen_start() ATTR_COLD;
+	void widescreen_vblank(screen_device &screen, bool state);
+	std::unique_ptr<hires3d_output> m_widescreen;
+	std::vector<offs_t> m_widescreen_sites;
+	int m_widescreen_wait = 0;
+
 	required_device<mips3_device> m_maincpu;
 	required_device<vrc5074_device> m_nile;
 	required_device<m48t37_device> m_timekeeper;
@@ -480,6 +495,122 @@ private:
 
 /*************************************
  *
+ *  mame3d -widescreen
+ *
+ *************************************/
+
+namespace {
+
+// a camera of San Francisco Rush 2049 and Road Burners (the fields of the
+// cameras of San Francisco Rush, in another order), floats: the focal lengths
+// in pixels, the centre of the screen, 1, the screen size, the field of view
+// (radians, horizontal and vertical), their half tangents and inverses, two
+// cosines
+//     +0x00 focal h  +0x04 focal v  +0x08 centre x  +0x0c centre y
+//     +0x14 width  +0x18 height  +0x1c fov h  +0x20 fov v
+//     +0x24 tan h  +0x28 tan v  +0x2c 1/tan h  +0x30 1/tan v  +0x34 cos h
+// set by the game for each view (the 4 cameras of the game at 0x132e530 in
+// sf2049, 0xe4 bytes apart; the first one is the view of the race); it
+// projects with focal h and clips with tan h: both are changed together for
+// a view as many times wider
+struct widescreen_camera
+{
+	float focal_h, focal_v, cx, cy, one, width, height, fov_h, fov_v, tan_h, tan_v, itan_h, itan_v, cos_h, cos_v;
+};
+
+bool widescreen_is_camera(widescreen_camera const &c)
+{
+	return (c.width >= 256.0f) && (c.width <= 1024.0f) && (c.height >= c.width * 0.5f) && (c.height <= c.width)
+			&& (c.cx == c.width * 0.5f) && (c.cy == c.height * 0.5f)
+			&& (c.fov_h > 0.2f) && (c.fov_h < 2.5f) && (c.fov_v > 0.1f) && (c.fov_v <= c.fov_h)
+			&& (std::fabs(c.one - 1.0f) < 1e-3f) && (c.tan_h > 0.0f) && (c.focal_h > 0.0f);
+}
+
+} // anonymous namespace
+
+void vegas_state::widescreen_start()
+{
+	char const *const name = machine().system().name;
+	if (!machine().options().bool_value(OPTION_WIDESCREEN) || (strncmp(name, "sf2049", 6) && strncmp(name, "roadburn", 8)))
+		return;
+	screen_device &screen = *subdevice<screen_device>("screen");
+	m_widescreen = std::make_unique<hires3d_output>(screen);
+	m_widescreen->allow_anamorphic(true);
+	if (!m_widescreen->anamorphic())
+	{
+		m_widescreen.reset();
+		return;
+	}
+	screen.register_vblank_callback(vblank_state_delegate(&vegas_state::widescreen_vblank, this));
+}
+
+void vegas_state::widescreen_vblank(screen_device &screen, bool state)
+{
+	if (!state)
+		return;
+	address_space &space = m_maincpu->space(AS_PROGRAM);
+	auto const read = [&space] (offs_t a)
+	{
+		widescreen_camera c;
+		float *const f = &c.focal_h;
+		for (int i = 0; i < 15; i++)
+			f[i] = std::bit_cast<float>(space.read_dword(a + i * 4));
+		return c;
+	};
+
+	// the cameras are filled when the game sets a view: the tangent is put
+	// back to the field of view by the game, then widened again here
+	float const factor = m_widescreen->wide_factor();
+	bool lost = false;
+	for (offs_t const a : m_widescreen_sites)
+	{
+		widescreen_camera const c = read(a);
+		if (!widescreen_is_camera(c))
+		{
+			lost = true;
+			continue;
+		}
+		float const tan_h = std::tan(c.fov_h * 0.5f);
+		if (std::fabs(c.tan_h - tan_h) <= tan_h * 1e-4f)
+		{
+			float const wide = tan_h * factor;
+			space.write_dword(a + 0x00, std::bit_cast<uint32_t>(c.cx / wide));
+			space.write_dword(a + 0x24, std::bit_cast<uint32_t>(wide));
+			space.write_dword(a + 0x2c, std::bit_cast<uint32_t>(1.0f / wide));
+			space.write_dword(a + 0x34, std::bit_cast<uint32_t>(1.0f / std::sqrt(wide * wide + 1.0f)));
+		}
+	}
+
+	// looked for once a second while there is none, and when one goes away
+	if (!lost && !m_widescreen_sites.empty())
+		return;
+	if (m_widescreen_wait-- > 0)
+		return;
+	m_widescreen_wait = 60;
+	m_widescreen_sites.clear();
+	// (in the RAM only, read directly)
+	for (offs_t chunk = 0; chunk < 0x2000000; chunk += 0x100000)
+	{
+		auto const *const ram = reinterpret_cast<uint32_t const *>(space.get_read_ptr(chunk));
+		if (!ram || (space.get_read_ptr(chunk + 0xffffc) != reinterpret_cast<uint8_t const *>(ram) + 0xffffc))
+			continue;
+		for (offs_t i = 0; i < 0x100000 / 4 - 15; i++)
+		{
+			if ((ram[i + 5] != std::bit_cast<uint32_t>(512.0f)) && (ram[i + 5] != std::bit_cast<uint32_t>(640.0f)))
+				continue;
+			offs_t const a = chunk + i * 4;
+			if (widescreen_is_camera(read(a)))
+			{
+				m_widescreen_sites.push_back(a);
+				osd_printf_verbose("vegas: -widescreen, camera at %07x (field of view %.3f times wider)\n", a, factor);
+			}
+		}
+	}
+}
+
+
+/*************************************
+ *
  *  Machine init
  *
  *************************************/
@@ -522,6 +653,8 @@ void vegas_state::machine_start()
 	}
 
 	m_cmos_unlocked = 0;
+
+	widescreen_start();
 }
 
 
