@@ -1210,13 +1210,7 @@ précédents). Restent Cart Fury, Side by Side et Hang Pilot.
     demi-écran, matrices de perspective) ; le code ne charge presque jamais
     256,0 ou 192,0 en constante. Piste : tracer les écritures de sommets vers
     la Voodoo 3 (build sans fastram) et remonter au code de projection.
-  - Side by Side (Taito JC) : la projection passe par l'unité de calcul
-    émulée (`dsp_math_projection_x_r` : X × 247 / Z ; 0x7014 = 247, 0x7013
-    = 199). Diviser 247 resserre la 3D mais le découpage reste à |X| ≤ Z dans
-    le code du DSP : bandes noires. Il faut multiplier par 3/4 la ligne X des
-    matrices de vue, envoyées par le 68040 dans la liste de commandes que le
-    DSP recopie en bloc (PC 0x40eb) ; format non décodé. Le 1,24 (= 248/200)
-    du 68040 en 0x0803d928 n'a pas d'effet.
+  - Side by Side (Taito JC) : fait le soir même, voir la section suivante.
   - Hang Pilot : le mot 0x00034f7b (3,31 en 16.16) lu par les deux DSP en
     0x400005-8 n'est pas la focale (le changer casse la 3D).
 - Pièges et outils (scratchpad) :
@@ -1241,3 +1235,47 @@ précédents). Restent Cart Fury, Side by Side et Hang Pilot.
     (PowerPC), `sig/calw.lua` (prototype du tap de California Speed),
     `sig/focal.lua`, `sig/pmat.lua`, `sig/sbtap.lua` (unité de calcul Taito
     JC), `sig/hptap.lua`, `reg2.sh` (régression contre `mame_clip2.exe`).
+
+### Suite du 2026-11-14 (soir) : 16:9 de Side by Side
+
+- **Side by Side 1 et 2** (taitojc_v.cpp) : avec `-widescreen`, le mot que
+  le 68040 envoie au DSP en 0x0314 est divisé par 4/3 (tap d'écriture sur
+  l'espace data du DSP). Démarche :
+  - Le DSP recopie chaque matrice de vue (13 mots) de la liste de commandes
+    vers sa RAM interne en 0x0326 (PC 0x42ae) : un mot d'état puis 3 lignes
+    de 4 mots (3 termes en 2.14, 16384 = 1, et la translation). La ligne 0
+    (0x0327) est le X de l'écran, la ligne 1 le Y (essais ligne par ligne).
+  - Réduire la ligne 0 de 3/4 au moment de la copie élargit bien la vue,
+    mais déforme et troue les murs proches : ce n'est pas la seule mise à
+    l'échelle du X. Le nombre d'objets traités par le DSP ne change pas.
+  - Le 68040 a une fonction de champ de vision (0x080787ae, ~25 appels :
+    angle en dixièmes de degré, rapport d'aspect, 1, distance). Elle envoie
+    au DSP 0x0314 = 4096 / aspect et 0x0315 = 4096 × tan(angle / 2)
+    (commande 0xc002 en 0x080779d0), et garde pour elle 1 / (tan × aspect)
+    en 0x8038040 et 1 / tan en 0x8038044.
+  - Le DSP multiplie ses données par 0x0314 et 0x0315 (0x4434 dans Side by
+    Side, 0x43ca dans Side by Side 2) avant le découpage et le tri des
+    objets. 0x0314 × 3/4 : image resserrée de 0,74 à 0,76 en largeur, 1,00
+    en hauteur, sans trous. 0x8038040 ou 0x8038044 × 3/4 : aucun effet
+    visible ; 0x0315 × 4/3 : resserre aussi la hauteur.
+  - Side by Side écrit 0x0314 à chaque changement de scène (3303 = 4096 /
+    1,24), Side by Side 2 une image sur deux (3200 = 4096 / 1,28).
+- Vérifié : 7 captures de 2400 à 6300 sur Side by Side, 6 sur Side by Side 2,
+  en natif ; Side by Side aussi en Vulkan ×2 (même image, léger décalage
+  dans le temps). Sans `-widescreen`, identique au pixel à l'exe d'avant sur
+  les deux jeux. Avec `-widescreen`, la démo de Side by Side 2 dérive un
+  peu (le DSP n'a plus le même travail, donc pas le même temps).
+- Reste :
+  - Sur une capture de Side by Side 2 (cerisiers), un petit morceau de
+    bordure de route manque près du rail. Élargir aussi le tri du 68040
+    (0x8038040) ne change rien à l'image ; cause non trouvée.
+  - Textes et compteurs 2D étirés, comme sur les autres jeux anamorphiques.
+  - Dangerous Curves (même carte) n'est pas traité ni essayé : sa démo
+    n'atteint pas la 3D en 90 s (noté plus haut).
+- Outils (scratchpad `sig/`) : `jcdasm.lua` (désassemblage du DSP),
+  `sbwide.lua` (mise à l'échelle d'une ligne de matrice), `sbread.lua`
+  (accès à la RAM interne du DSP par PC), `sbcount.lua` (matrices, sommets,
+  FIFO par image), `sbpc.lua` (écritures du 68040 vers le DSP),
+  `sbfov.lua` (facteurs sur 0x0314/0x0315 et 0x8038040/44), `orth.py`
+  (matrices de rotation dans un vidage de RAM), `hscale.py` (échelle
+  horizontale et verticale entre deux captures).

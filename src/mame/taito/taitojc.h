@@ -100,6 +100,8 @@ protected:
 	bool m_has_dsp_hack = false;
 	offs_t m_status_poll_pc = 0;
 
+	memory_passthrough_handler m_widescreen_tap;   // -widescreen: horizontal scale sent to the DSP
+
 	void coin_control_w(uint8_t data);
 
 	uint8_t mcu_comm_r(offs_t offset);

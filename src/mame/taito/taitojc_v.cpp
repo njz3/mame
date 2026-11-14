@@ -15,6 +15,9 @@
 
 #include "endianness.h"
 
+#include <cmath>
+#include <string_view>
+
 
 static const gfx_layout char_layout =
 {
@@ -264,6 +267,28 @@ void taitojc_state::video_start()
 	m_tilemap->set_transparent_pen(0);
 
 	m_hires = std::make_unique<hires3d_output>(*m_screen);
+
+	// -widescreen on Side by Side: the 3D is drawn 16:9 into the 4:3 frame
+	// and shown stretched (anamorphic). When a scene sets its field of view,
+	// the 68040 sends the DSP the horizontal scale of the view matrices
+	// (4096 / aspect ratio, DSP data 0x0314); the DSP applies it before its
+	// clipping and culling, so dividing it by the wide factor makes the game
+	// itself draw and clip the wider view. The projection (math unit viewport
+	// 247) and the 68040 are left alone.
+	if (std::string_view(machine().system().name).starts_with("sidebs"))
+	{
+		m_hires->allow_anamorphic(true);
+		if (m_hires->anamorphic())
+		{
+			float const factor = m_hires->wide_factor();
+			m_widescreen_tap = m_dsp->space(AS_DATA).install_write_tap(
+					0x0314, 0x0314, "widescreen",
+					[factor] (offs_t offset, u16 &data, u16 mem_mask)
+					{
+						data = u16(s16(std::lround(s16(data) / factor)));
+					});
+		}
+	}
 
 	/* create the char set (gfx will then be updated dynamically from RAM) */
 	m_gfxdecode->set_gfx(0, std::make_unique<gfx_element>(m_palette, char_layout, (uint8_t *)&m_char_ram[0], 0, m_palette->entries() / 16, 0));

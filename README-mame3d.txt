@@ -87,8 +87,9 @@ Display
   Vulkan.
     Thrill Drive 2, Thrill Drive 1, Racing Jam 1 and 2, GTI Club, Midnight
     Run, Winding Heat, GTI Club 2, Xtrial Racing, San Francisco Rush, Rush
-    2049, Road Burners, California Speed: the camera of the game is made 4/3
-    wider (in memory, in its code, or as its 3D processor reads it).
+    2049, Road Burners, California Speed, Side by Side 1 and 2: the camera
+    of the game is made 4/3 wider (in memory, in its code, or as its 3D
+    processor reads it).
     PlayStation games (Pocket Racer...): the projection of the GTE, the 3D
     unit of the CPU, is made 4/3 narrower.
     Winning Run and Driver's Eyes (System 21), Radikal Bikers and Speed Up
@@ -100,7 +101,7 @@ Display
     the edges, and a screen the game covers with a 4:3 picture (menus,
     transitions, game over of the V-Unit games and Radikal Bikers) shows
     the 3D behind it on the sides.
-  Not yet: Cart Fury, Hang Pilot (Voodoo), Side by Side (Taito JC).
+  Not yet: Cart Fury, Hang Pilot (Voodoo), Dangerous Curves (Taito JC).
   Example: mame midnrun -hires3d 2 -widescreen
 - Thrill Drive 2 (all versions): the rear view mirror keeps its shape.
   Thrill Drive 1 and Racing Jam: the 3D parts of the dashboard (rev
