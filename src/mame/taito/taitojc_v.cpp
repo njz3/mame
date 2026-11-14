@@ -280,6 +280,8 @@ void taitojc_state::video_start()
 		m_hires->allow_anamorphic(true);
 		if (m_hires->anamorphic())
 		{
+			// the games mask columns 0-16 and 496-511 in black over the 3D
+			m_hires->set_narrow_area(17, 495);
 			float const factor = m_hires->wide_factor();
 			m_widescreen_tap = m_dsp->space(AS_DATA).install_write_tap(
 					0x0314, 0x0314, "widescreen",
@@ -333,6 +335,17 @@ uint32_t taitojc_state::screen_update(screen_device &screen, bitmap_ind16 &bitma
 
 		if (vk)
 		{
+			// anamorphic -widescreen: texts and counters narrowed here, at
+			// the native resolution the GPU mix takes
+			if (m_hires->narrow_2d())
+			{
+				if ((m_top_2d.width() != bitmap.width()) || (m_top_2d.height() != bitmap.height()))
+					m_top_2d.allocate(bitmap.width(), bitmap.height());
+				copybitmap(m_top_2d, bitmap, 0, 0, 0, 0, cliprect);
+				bitmap.fill(EMPTY, cliprect);
+				m_hires->narrow(m_top_2d, bitmap, cliprect, EMPTY);
+			}
+
 			// mixed with the 3D on the GPU, the frame shown from the
 			// read-back memory
 			bitmap_rgb32 *frame = nullptr;
@@ -354,7 +367,7 @@ uint32_t taitojc_state::screen_update(screen_device &screen, bitmap_ind16 &bitma
 		}
 		else
 		{
-			m_hires->upscale(bitmap, m_hires_ind, cliprect, EMPTY);
+			m_hires->upscale_2d(bitmap, m_hires_ind, cliprect, EMPTY);
 			m_hires->indexed_to_frame(m_hires_ind, hclip, *m_palette);
 			m_hires->frame_done(cliprect);
 		}
@@ -370,14 +383,29 @@ uint32_t taitojc_state::screen_update(screen_device &screen, bitmap_ind16 &bitma
 	// 3D layer
 	m_tc0780fpa->draw(bitmap, cliprect);
 
+	// anamorphic -widescreen: the layers over the 3D drawn apart, then
+	// narrowed so that they keep their shape once stretched to 16:9
+	bitmap_ind16 *top = &bitmap;
+	constexpr uint16_t EMPTY = 0xffff;
+	if (m_hires->narrow_2d())
+	{
+		if ((m_top_2d.width() != bitmap.width()) || (m_top_2d.height() != bitmap.height()))
+			m_top_2d.allocate(bitmap.width(), bitmap.height());
+		m_top_2d.fill(EMPTY, cliprect);
+		top = &m_top_2d;
+	}
+
 	// high priority objects
-	draw_object_bank(bitmap, cliprect, 0, 1);
-	draw_object_bank(bitmap, cliprect, 1, 1);
-	draw_object_bank(bitmap, cliprect, 2, 1);
+	draw_object_bank(*top, cliprect, 0, 1);
+	draw_object_bank(*top, cliprect, 1, 1);
+	draw_object_bank(*top, cliprect, 2, 1);
 
 	// text layer
 	if (BIT(m_objlist[0xfc4/4], 16))
-		m_tilemap->draw(screen, bitmap, cliprect, 0, 0);
+		m_tilemap->draw(screen, *top, cliprect, 0, 0);
+
+	if (top != &bitmap)
+		m_hires->narrow(m_top_2d, bitmap, cliprect, EMPTY);
 
 	return 0;
 }

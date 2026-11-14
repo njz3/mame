@@ -298,6 +298,76 @@ void hires3d_output::upscale(const bitmap_ind16 &source, bitmap_ind16 &dest, con
 }
 
 
+void hires3d_output::narrow(const bitmap_ind16 &source, bitmap_ind16 &dest, const rectangle &cliprect, u16 transparent_pen) const
+{
+	// destination column x shows the source column at the same distance
+	// from the middle, wide_factor() times further; the columns outside the
+	// narrowed area stay in place
+	rectangle const &visible = m_screen.visible_area();
+	int const first = (m_narrow_first >= 0) ? m_narrow_first : visible.left();
+	int const last = (m_narrow_last >= 0) ? m_narrow_last : visible.right();
+	float const middle = (first + last + 1) * 0.5f;
+	float const factor = m_wide_factor;
+	for (int y = cliprect.top(); y <= cliprect.bottom(); y++)
+	{
+		u16 const *const src = &source.pix(y);
+		u16 *const dst = &dest.pix(y);
+		for (int x = cliprect.left(); x <= cliprect.right(); x++)
+		{
+			int from = x;
+			if ((x >= first) && (x <= last))
+			{
+				from = int(std::floor(middle + (x + 0.5f - middle) * factor));
+				if ((from < first) || (from > last))
+					continue;
+			}
+			u16 const pixel = src[from];
+			if (pixel != transparent_pen)
+				dst[x] = pixel;
+		}
+	}
+}
+
+
+void hires3d_output::upscale_2d(const bitmap_ind16 &source, bitmap_ind16 &dest, const rectangle &cliprect, u16 transparent_pen) const
+{
+	if (!narrow_2d())
+	{
+		upscale(source, dest, cliprect, transparent_pen);
+		return;
+	}
+
+	// each high-resolution column takes the native column it falls on once
+	// narrowed, so the 2D keeps the sharpness of the magnification
+	int const scale = m_scale;
+	rectangle const &visible = m_screen.visible_area();
+	int const first = (m_narrow_first >= 0) ? m_narrow_first : visible.left();
+	int const last = (m_narrow_last >= 0) ? m_narrow_last : visible.right();
+	float const middle = (first + last + 1) * 0.5f;
+	float const factor = m_wide_factor;
+	int const left = cliprect.left() * scale;
+	int const right = (cliprect.right() + 1) * scale;
+	for (int y = cliprect.top(); y <= cliprect.bottom(); y++)
+	{
+		u16 const *const src = &source.pix(y);
+		for (int x = left; x < right; x++)
+		{
+			int from = x / scale;
+			if ((from >= first) && (from <= last))
+			{
+				from = int(std::floor(middle + ((x + 0.5f) / scale - middle) * factor));
+				if ((from < first) || (from > last))
+					continue;
+			}
+			u16 const pixel = src[from];
+			if (pixel != transparent_pen)
+				for (int sub = 0; sub < scale; sub++)
+					dest.pix(y * scale + sub, x) = pixel;
+		}
+	}
+}
+
+
 void hires3d_output::indexed_to_frame(const bitmap_ind16 &source, const rectangle &hclip, device_palette_interface &palette)
 {
 	// an indexed screen gets its colours when it is displayed: the pens of

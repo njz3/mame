@@ -68,6 +68,7 @@ protected:
 	std::unique_ptr<hires3d_output> m_hires;
 	bitmap_ind16 m_hires_ind;
 	bitmap_ind16 m_hires_bottom;    // on the GPU: the layers under the 3D
+	bitmap_ind16 m_top_2d;          // anamorphic -widescreen: the layers over the 3D, narrowed
 
 	required_region_ptr<uint16_t> m_dspgfx;
 

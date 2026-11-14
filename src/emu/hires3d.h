@@ -110,6 +110,21 @@ public:
 	bool anamorphic() const { return m_wide_option && m_anamorphic_allowed && (m_wide_factor > 1.0f); }
 	float wide_factor() const { return m_wide_factor; }
 
+	// anamorphic -widescreen: the 2D a driver draws over the 3D keeps its
+	// shape when it is narrowed by wide_factor() around the middle of the
+	// screen (texts and counters then sit in the middle 4:3 of the 16:9
+	// picture); -widescreen_2d stretch leaves it over the whole width
+	bool narrow_2d() const { return anamorphic() && !m_stretch_2d; }
+
+	// copy the pixels of source other than transparent_pen into dest (both
+	// native, same size), narrowed by wide_factor() around the middle of
+	// the visible area
+	void narrow(const bitmap_ind16 &source, bitmap_ind16 &dest, const rectangle &cliprect, u16 transparent_pen) const;
+
+	// columns left of first and right of last (native) stay in place when
+	// the 2D is narrowed: black masks over the edges of the picture
+	void set_narrow_area(int first, int last) { m_narrow_first = first; m_narrow_last = last; }
+
 	// for the renderer: the factor the shape of the screens is multiplied by
 	// (the widescreen frames are wider than the screen)
 	static float view_widening();
@@ -153,6 +168,10 @@ public:
 	// same for indexed bitmaps; pixels equal to transparent_pen are skipped
 	// when it is not negative
 	void upscale(const bitmap_ind16 &source, bitmap_ind16 &dest, const rectangle &cliprect, int transparent_pen = -1) const;
+
+	// upscale() with transparent_pen for the 2D drawn over the 3D, narrowed
+	// as narrow() does when narrow_2d() is set
+	void upscale_2d(const bitmap_ind16 &source, bitmap_ind16 &dest, const rectangle &cliprect, u16 transparent_pen) const;
 
 	// magnify into the frame bitmap the pixels of after that differ from
 	// before (both native), such as the 2D layers drawn over the 3D
@@ -211,6 +230,8 @@ private:
 	bool m_anamorphic_allowed = false;      // the game is patched for it
 	bool m_stretch_2d = false;              // -widescreen_2d stretch
 	bool m_wide_bg = false;                 // -widescreen_bg
+	int m_narrow_first = -1;                // columns narrowed by narrow(), visible area when negative
+	int m_narrow_last = -1;
 	float m_wide_factor = 1.0f;             // 16:9 over the shape of the screen
 	std::unique_ptr<vk3d_renderer> m_vulkan;
 	bool m_vulkan_tried = false;
