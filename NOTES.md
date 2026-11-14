@@ -1143,3 +1143,101 @@ ces jeux : défaut de la capture, pas de l'affichage.
     (couples au rapport 4:3), `sig/pert.lua` (un flottant à la fois depuis
     une sauvegarde : 0,3 à 0,5 s par candidat, trop lent pour toute la RAM),
     `pkrun.sh` (EEPROM copiée à chaque lancement : sinon la démo change).
+
+### Suite du 2026-11-14 (après-midi) : 16:9 des jeux restants
+
+Six jeux de plus en 16:9 avec `-widescreen` (anamorphique, comme les
+précédents). Restent Cart Fury, Side by Side et Hang Pilot.
+
+- **Driver's Eyes** (namcos21_de.cpp) : chaque pile projette au-delà de son
+  écran, vers les écrans voisins (59 % des sommets hors de l'écran 4:3) :
+  même resserrement que Winning Run, sur les trois écrans. Fait pour un seul
+  écran (le centre) ; côte à côte, les bords des écrans se recouvrent (le
+  titre « DRIVER'S EYES » montre des lettres en double aux jonctions).
+  Dans MAME, les écrans de côté n'ont pas la course en démo (déjà noté dans
+  le pilote).
+- **California Speed** (seattle.cpp) : la projection est recalculée à chaque
+  image par la fonction 0x80024a10 (`set_projection(tan h, ...)`), écrite
+  en 0x6dd538 : tan h, tan v = tan h × h / w, 1/(tan h² + 1),
+  1/(tan v² + 1), deux valeurs passées telles quelles, focale h = w / 2 /
+  tan h, focale v, centre x, centre y. Un patch à la vblank est écrasé avant
+  usage : un tap d'écriture (Seattle n'a pas de fastram, les écritures du
+  recompilateur MIPS passent par les handlers) multiplie la tangente,
+  divise la focale et recalcule 1/(tan² + 1) quand le jeu les écrit. La
+  structure est retrouvée par sa forme (les deux relations 1/(tan² + 1),
+  largeur = 2 × focale × tan entre 256 et 1024) ; les deux focales sont
+  égales tant qu'elle n'est pas patchée (pixels carrés).
+- **Rush 2049, 2049 SE, Road Burners** (vegas.cpp) : 4 caméras, mêmes champs
+  que celles de Rush 1 dans un autre ordre (focales, centre, 1, taille,
+  angles, tangentes, inverses, cosinus), 0xe4 octets d'écart : 0x132e530
+  (sf2049), 0x11aab50 (sf2049se), 0xbfabd0 (roadburn). La caméra 0 (90° en
+  horizontal) est celle de la course ; les caméras 1 à 3 (45°) ne sont
+  écrites qu'au démarrage. Mes premiers essais ne patchaient que celles-là
+  (rien ne changeait) : il faut tracer qui lit et écrit avant de conclure.
+  Patch à la vblank comme Rush 1 (tangente, inverse, cosinus, focale ;
+  l'angle reste et sert de repère « pas encore patchée ») ; tangente et
+  focale suffisaient. Recherche directe dans la RAM (`get_read_ptr` par
+  blocs de 1 Mo ; le contrôle de continuité doit comparer une adresse
+  alignée, 0xffffc, sinon tous les blocs étaient écartés).
+- **GTI Club 2** (viper.cpp) : la caméra a les champs de celle de Thrill
+  Drive 2 (tangente en +0x34 et +0x38, verticale +0x3c, forme h/w +0x40,
+  base 0x7f63d0), mais le jeu recalcule les tangentes à chaque image (pas la
+  forme) : un patch de données ne tient pas. La projection passe par une
+  bibliothèque façon OpenGL (`glMatrixMode(0x1701)`, `glLoadIdentity`,
+  `glFrustum(-r, r, -t, t, near, far)` en 0x39f5c) appelée en 0x3fdcc avec
+  r = near × tan, t = r × forme. Patch : `fmr f2, f29` (0x3fe20) devient un
+  saut vers la cave 0x3600 qui multiplie r par 4/3 après le calcul de t.
+  Les structures en 0x2700 de la note précédente sont la copie de ce
+  frustum (l, r, b, t, near, far) et la matrice 2n/(r-l) en 0x26dc :
+  écrites par la bibliothèque, d'où l'absence d'effet.
+- **Xtrial Racing** (viper.cpp) : même bibliothèque (glFrustum en 0x3a148),
+  mais les caméras sont des objets avec leur frustum en doubles (+0x80 à
+  +0xa8) appliqués par une fonction générique (2 exemplaires : 0x760e4 et
+  0x7e5c4). Le premier appelant trouvé (0x45e48, tan × aspect) ne servait
+  pas en course : image identique au pixel. Patch des deux appels :
+  gauche et droite × 4/3 avant `glFrustum`, une cave de 0x40 octets par
+  site.
+- Vérifié : Vulkan ×2 et natif sur California Speed, GTI Club 2, Xtrial,
+  Rush 2049 ; Road Burners et 2049 SE en natif. Sans `-widescreen`,
+  identique au pixel à l'exe d'avant (Driver's Eyes, California Speed,
+  Rush 1, GTI Club 2, Thrill Drive 2, Hang Pilot ; Xtrial : 3×3 pixels
+  diffèrent, comme entre deux lancements de l'ancien exe). Thrill Drive 2
+  avec `-widescreen` : identique à l'exe d'avant (code de viper remanié pour
+  plusieurs sites).
+- **Pas faits** :
+  - Cart Fury (Vegas, Voodoo 3) : aucune caméra en flottants trouvée (paires
+    de tailles d'écran, couples au rapport 4:3, focale × tangente =
+    demi-écran, matrices de perspective) ; le code ne charge presque jamais
+    256,0 ou 192,0 en constante. Piste : tracer les écritures de sommets vers
+    la Voodoo 3 (build sans fastram) et remonter au code de projection.
+  - Side by Side (Taito JC) : la projection passe par l'unité de calcul
+    émulée (`dsp_math_projection_x_r` : X × 247 / Z ; 0x7014 = 247, 0x7013
+    = 199). Diviser 247 resserre la 3D mais le découpage reste à |X| ≤ Z dans
+    le code du DSP : bandes noires. Il faut multiplier par 3/4 la ligne X des
+    matrices de vue, envoyées par le 68040 dans la liste de commandes que le
+    DSP recopie en bloc (PC 0x40eb) ; format non décodé. Le 1,24 (= 248/200)
+    du 68040 en 0x0803d928 n'a pas d'effet.
+  - Hang Pilot : le mot 0x00034f7b (3,31 en 16.16) lu par les deux DSP en
+    0x400005-8 n'est pas la focale (le changer casse la 3D).
+- Pièges et outils (scratchpad) :
+  - Vegas (vrc5074) donne la RAM au recompilateur MIPS en fastram : les taps
+    Lua n'y voient rien. Build de test avec `add_fastram` coupé (variable
+    d'environnement, non commité). La RAM est installée par le BIOS après la
+    première image : un tap posé avant est effacé (le poser vers l'image
+    600). Avec `-debug -debugger none`, le PC lu depuis Lua est juste.
+  - Rush 2049, Road Burners, Cart Fury : la démo change d'un lancement à
+    l'autre (horloge du jeu prise sur l'heure du PC). Comparer dans un même
+    lancement : `sig/pkt.lua` capture, applique le patch quelques images,
+    recapture et restaure (`PM_ONCE=1` : une seule écriture, pour voir si le
+    jeu réécrit la valeur).
+  - Deux lancements du même jeu à CHD en même temps : « DIFF CHD ERROR ».
+    Deux jeux à CHD différents : possible.
+  - Dans les heredocs Python passés par l'outil Bash, `\n` devient un vrai
+    saut de ligne : écrire `chr(92) + 'n'`.
+  - Scripts : `sig/cscan.lua` (paires taille ou centre d'écran en
+    flottants), `sig/vfind.lua` (valeurs données), `sig/mtap.lua` (lectures
+    et écritures d'une plage par PC, avec `-debug`), `sig/codedump.lua` +
+    `sfdis.py` (désassemblage MIPS), `sig/ramdump.lua` + `ppcd.py`
+    (PowerPC), `sig/calw.lua` (prototype du tap de California Speed),
+    `sig/focal.lua`, `sig/pmat.lua`, `sig/sbtap.lua` (unité de calcul Taito
+    JC), `sig/hptap.lua`, `reg2.sh` (régression contre `mame_clip2.exe`).

@@ -86,20 +86,21 @@ Display
   (-widescreen_2d has no effect). Without -hires3d, in software and with
   Vulkan.
     Thrill Drive 2, Thrill Drive 1, Racing Jam 1 and 2, GTI Club, Midnight
-    Run, Winding Heat, San Francisco Rush: the camera of the game is made
-    4/3 wider (in memory, or as its 3D processor reads it).
+    Run, Winding Heat, GTI Club 2, Xtrial Racing, San Francisco Rush, Rush
+    2049, Road Burners, California Speed: the camera of the game is made 4/3
+    wider (in memory, in its code, or as its 3D processor reads it).
     PlayStation games (Pocket Racer...): the projection of the GTE, the 3D
     unit of the CPU, is made 4/3 narrower.
-    Winning Run (System 21), Radikal Bikers and Speed Up (Gaelco 3D),
-    Cruis'n USA, Cruis'n World and Off Road Challenge (V-Unit): these games
-    send their 3D past the edges of the screen; it is drawn 4/3 narrower.
+    Winning Run and Driver's Eyes (System 21), Radikal Bikers and Speed Up
+    (Gaelco 3D), Cruis'n USA, Cruis'n World and Off Road Challenge
+    (V-Unit): these games send their 3D past the edges of the screen; it is
+    drawn 4/3 narrower. Driver's Eyes: each of the three screens gets it,
+    for a single (centre) screen; side by side, their edges overlap.
     What the game did not send (objects outside the 4:3 view) is missing at
     the edges, and a screen the game covers with a 4:3 picture (menus,
     transitions, game over of the V-Unit games and Radikal Bikers) shows
     the 3D behind it on the sides.
-  Not yet: California Speed, Rush 2049, Road Burners, Cart Fury, Xtrial
-  Racing, GTI Club 2, Hang Pilot (Voodoo), Side by Side (Taito JC), Driver's
-  Eyes (three screens).
+  Not yet: Cart Fury, Hang Pilot (Voodoo), Side by Side (Taito JC).
   Example: mame midnrun -hires3d 2 -widescreen
 - Thrill Drive 2 (all versions): the rear view mirror keeps its shape.
   Thrill Drive 1 and Racing Jam: the 3D parts of the dashboard (rev
@@ -121,9 +122,10 @@ Display
 Since mame3d 0.289-2336-g705501b
 - Thrill Drive 1 and 2: 16:9 with -widescreen (see Display).
 - 16:9 with -widescreen also on Racing Jam 1 and 2, GTI Club, Midnight
-  Run, Winding Heat, San Francisco Rush, the PlayStation games, Winning
-  Run, Radikal Bikers, Speed Up, Cruis'n USA, Cruis'n World and Off Road
-  Challenge (see Display).
+  Run, Winding Heat, GTI Club 2, Xtrial Racing, San Francisco Rush, Rush
+  2049, Road Burners, California Speed, the PlayStation games, Winning
+  Run, Driver's Eyes, Radikal Bikers, Speed Up, Cruis'n USA, Cruis'n World
+  and Off Road Challenge (see Display).
 - HNG64 in software at -hires3d 3, 5...: repeated bands in the 3D. Fixed.
 - Thrill Drive 1: the rear view mirror stayed empty (light blue). Racing
   Jam 1 and 2: a grey band at the bottom of the screen. The Voodoo clipped
