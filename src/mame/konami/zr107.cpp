@@ -577,6 +577,15 @@ void zr107_state::machine_start()
 
 	m_hires = std::make_unique<hires3d_output>(*m_screen);
 
+	// mame3d -widescreen: the DSP is given a wider field of view, the screen
+	// is shown at 16:9 (see konppc_device::widescreen_start)
+	m_hires->allow_anamorphic(true);
+	if (m_hires->anamorphic())
+	{
+		m_konppc->widescreen_start(m_hires->wide_factor());
+		osd_printf_verbose("zr107: -widescreen, field of view %.3f times wider\n", m_hires->wide_factor());
+	}
+
 	save_item(NAME(m_ccu_vcth));
 	save_item(NAME(m_ccu_vctl));
 	save_item(NAME(m_sound_ctrl));

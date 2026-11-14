@@ -35,6 +35,14 @@ public:
 
 	bool output_3d_enabled();
 
+	// mame3d -widescreen, for the DSP programs that take in their command
+	// list the clipping slopes (0x49), the viewport (0x46) and the focal
+	// lengths (0x47) (GTI Club, Midnight Run, Winding Heat): the horizontal
+	// slope is multiplied and the horizontal focal length divided by factor
+	// as the DSPs read them, for a view as many times wider in the same
+	// screen; the driver shows it at 16:9
+	void widescreen_start(float factor) ATTR_COLD;
+
 	// read/write
 	uint32_t cgboard_dsp_comm_r_ppc(offs_t offset, uint32_t mem_mask = ~0);
 	void cgboard_dsp_comm_w_ppc(offs_t offset, uint32_t data, uint32_t mem_mask = ~0);
@@ -89,6 +97,12 @@ private:
 	int32_t m_nwk_fifo_write_ptr[MAX_CG_BOARDS];
 
 	std::unique_ptr<uint32_t[]> m_nwk_ram[MAX_CG_BOARDS];
+
+	struct widescreen_word { offs_t address = 0; uint16_t value = 0; bool pending = false; };
+	float m_wide_factor = 1.0f;
+	memory_passthrough_handler m_wide_tap[MAX_CG_BOARDS];
+	widescreen_word m_wide_word[MAX_CG_BOARDS][4];
+	void widescreen_read(int board, offs_t address, uint32_t &data);
 
 	uint32_t dsp_comm_sharc_r(int board, int offset);
 	void dsp_comm_sharc_w(int board, int offset, uint32_t data);

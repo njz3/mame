@@ -5,6 +5,8 @@
 #include "emu.h"
 #include "konppc.h"
 
+#include <cmath>
+
 #define LOG_COMM   (1 << 1)
 #define LOG_SHARED (1 << 2)
 
@@ -280,6 +282,59 @@ void konppc_device::dsp_comm_sharc_w(int board, int offset, uint32_t data)
 	LOGCOMM("%s:dsp_comm_sharc_w: %08X = %08X\n", machine().describe_context().c_str(), offset, data);
 
 	m_dsp_comm_sharc[board][offset] = data;
+}
+
+/*****************************************************************************/
+
+// mame3d -widescreen
+
+void konppc_device::widescreen_start(float factor)
+{
+	m_wide_factor = factor;
+	for (int board = 0; board < MAX_CG_BOARDS; board++)
+	{
+		if (m_dsp[board].found())
+		{
+			// before the DSP recompiler compiles code reading this memory
+			m_wide_tap[board] = m_dsp[board]->space(AS_DATA).install_read_tap(0x400000, 0x41ffff, "widescreen",
+					[this, board] (offs_t offset, uint32_t &data, uint32_t mem_mask) { widescreen_read(board, offset, data); });
+		}
+	}
+}
+
+void konppc_device::widescreen_read(int board, offs_t address, uint32_t &data)
+{
+	// a word changed when the command was seen
+	for (widescreen_word &w : m_wide_word[board])
+	{
+		if (w.pending && (w.address == address))
+		{
+			w.pending = false;
+			data = (data & ~0xffffU) | w.value;
+			return;
+		}
+	}
+
+	// the command list is 16-bit words; the commands, with their arguments:
+	//   0x49 slope x (32-bit, 2.14, half width / focal length), slope y
+	//   0x46 centre x, centre y, half width, half height
+	//   0x47 focal length x (32-bit, 16.16, negative), focal length y
+	if (((data & 0xffff) != 0x49) || (address > 0x41ffff - 14))
+		return;
+	auto const word = [this, board] (offs_t a) { return dsp_shared_ram_r_sharc(board, a - 0x400000) & 0xffff; };
+	if ((word(address + 5) != 0x46) || (word(address + 10) != 0x47))
+		return;
+	auto const dword = [&word] (offs_t a) { return int32_t((word(a) << 16) | word(a + 1)); };
+	int32_t const slope = dword(address + 1);
+	int32_t const focal = dword(address + 11);
+	if ((slope <= 0) || (focal == 0))
+		return;
+	uint32_t const wide_slope = uint32_t(std::lround(double(slope) * m_wide_factor));
+	uint32_t const wide_focal = uint32_t(std::lround(double(focal) / m_wide_factor));
+	offs_t const addresses[4] = { address + 1, address + 2, address + 11, address + 12 };
+	uint16_t const values[4] = { uint16_t(wide_slope >> 16), uint16_t(wide_slope), uint16_t(wide_focal >> 16), uint16_t(wide_focal) };
+	for (int i = 0; i < 4; i++)
+		m_wide_word[board][i] = widescreen_word{ addresses[i], values[i], true };
 }
 
 uint32_t konppc_device::dsp_shared_ram_r_sharc(int board, int offset)

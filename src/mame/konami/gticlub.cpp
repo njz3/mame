@@ -862,6 +862,15 @@ void gticlub_base_state::machine_reset()
 void gticlub_state::video_start()
 {
 	m_hires = std::make_unique<hires3d_output>(*subdevice<screen_device>("screen"));
+
+	// mame3d -widescreen: the DSP is given a wider field of view, the screen
+	// is shown at 16:9 (see konppc_device::widescreen_start)
+	m_hires->allow_anamorphic(true);
+	if (m_hires->anamorphic())
+	{
+		m_konppc->widescreen_start(m_hires->wide_factor());
+		osd_printf_verbose("gticlub: -widescreen, field of view %.3f times wider\n", m_hires->wide_factor());
+	}
 }
 
 uint32_t gticlub_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect)
