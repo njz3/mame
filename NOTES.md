@@ -1056,3 +1056,90 @@ ces jeux : défaut de la capture, pas de l'affichage.
   - Avec `-widescreen`, la caméra du rétro est élargie aussi (seule −443,
     le tableau de bord, est laissée), pour qu'il garde ses proportions une
     fois étiré.
+
+### Suite du 2026-11-14 : 16:9 des jeux qui projettent eux-mêmes, défauts connus
+
+- **Écritures LFB de la Voodoo** : rien à corriger. L'appel du pipeline
+  passe déjà le Y brut (`pixel_pipeline(..., x, y, ...)`), comme le fast
+  fill et maintenant les triangles.
+- **500gp, écran noir sous charge** : non reproduit, 6 instances en Vulkan
+  ×2 puis 8 en ×3 (130 s, démo), aucune image noire, aucun repli, images
+  finales identiques. Sans doute la fence laissée signalée (7e1b998871a,
+  Race On!) : sous charge, la relecture prenait une image pas dessinée.
+- **HNG64 en logiciel ×3, ×5** (hng64.h, hng64_3d.ipp, hng64_v.cpp) : les
+  masques `taille - 1` des rastériseurs et de `blit_3d` deviennent
+  `wrap()`, le même masque aux puissances de 2, un modulo sinon. Roads Edge
+  en course ×3 : logiciel = Vulkan (0,03 d'écart moyen, 26 avant).
+- **Race On!, menu en 16:9** : le fond est un mur de dalles en 3D posé par
+  le jeu sur la largeur 4:3 ; on voit au-delà en 16:9. Contenu du jeu, pas
+  corrigé.
+- **Blits 2D de la Banshee** : Rush 2049, 2049 SE et Cart Fury ne font
+  aucun blit écran à écran (200 s de démo et de course, compteur
+  temporaire). Seuls Thrill Drive 2 et Xtrial Racing (Voodoo 3) en font :
+  le rétroviseur copié ligne à ligne du tampon vers la mémoire des
+  textures ; une texture reste native sur le vrai matériel, et le
+  rastériseur natif est relancé quand un blit lit un tampon. Rien à faire.
+  Les autres commandes 2D (sauf hôte vers écran, déjà agrandi en blocs)
+  arrêtent MAME (`fatalerror`) : aucun jeu ne les utilise.
+- **16:9 « anamorphique »** sur les jeux qui projettent leur 3D eux-mêmes :
+  l'image garde sa taille, la vue est 4/3 plus large, l'écran est montré
+  en 16:9 (`hires3d_output::allow_anamorphic`). Sans `-widescreen`, 16 jeux
+  vérifiés identiques au pixel à l'exe d'avant (70 s de démo, natif, et
+  Vulkan ×2 pour 4 d'entre eux).
+  - Méthode : un compteur temporaire de la position X des sommets dit si le
+    jeu envoie de la géométrie hors de l'écran 4:3. Découpé au bord : K001005
+    (±256 exactement sur 19 millions de sommets), Voodoo (Rush, California
+    Speed, Rush 2049, Road Burners, Cart Fury, GTI Club 2, Hang Pilot,
+    Xtrial : < 0,5 %), Taito JC (Side by Side : 0). Au-delà : System 21
+    (Winning Run 18 %, Driver's Eyes 59 %), Gaelco 3D (3 à 11 %), V-Unit
+    (Cruis'n USA 7 %, World 11 %, Off Road Challenge 5 %).
+  - **Racing Jam 1 et 2** (nwk-tr.cpp) : même commande viewport que Thrill
+    Drive 1 (signature trouvée en 0x20129 et 0x2012c). Focales : monde −247
+    (−233, −211, −210 dans Racing Jam 2), rétro +79 (+85) ; −154, −110 et
+    −332 dessinent le tableau de bord (compte-tours, chiffres) et sont
+    laissées, comme −443 sur TD1.
+  - **GTI Club, Midnight Run, Winding Heat** (konppc.cpp, gticlub.cpp,
+    zr107.cpp) : le DSP tourne en recompilateur ; un tap Lua posé après la
+    compilation ne voit rien, et le PC lu depuis Lua est faux. Les taps
+    doivent être posés avant la première exécution (machine_start ou
+    video_start). Le DSP lit sa liste de commandes en mots de 16 bits dans
+    la mémoire partagée : `0x49` pentes de découpage (32 bits, 2.14,
+    demi-largeur / focale : 20337 et 15252), `0x46` viewport (centre 0,0,
+    demi-taille 256×192), `0x47` focales (32 bits, 16.16, −206,24). La
+    focale seule resserre l'image mais garde le découpage 4:3 (bandes
+    noires) ; la demi-largeur du viewport n'y fait rien ; la pente x de
+    0x49 multipliée par 4/3 avec la focale x divisée donne toute la
+    largeur. Le tap de konppc reconnaît la suite 0x49…0x46…0x47 et change
+    les 4 mots au moment où le DSP les lit. Vu en démo et en course, natif
+    et Vulkan ×2 ; ~5 % de sommets en plus (la vue plus large).
+  - **PlayStation** (gte.cpp, psx.cpp) : le X projeté par RTPS/RTPT est
+    multiplié par 3/4 autour de OFX (comme le hack de DuckStation). Pocket
+    Racer en course : vue plus large, voiture à sa forme, 2D étirée. Kart
+    Duel n'a pas démarré de course avec le script (titre seulement).
+  - **San Francisco Rush** (seattle.cpp) : caméras en RAM (structure
+    trouvée par les couples de flottants au rapport 4:3) : taille 512×384,
+    angles 60° et 46,8°, tangentes 0,57735 et 0,43301, inverses, cosinus,
+    1, ~2^24, centre 256,192, focales 443,41. La focale x seule resserre
+    avec des bandes noires, la tangente x seule ne change rien ; les deux
+    ensemble donnent la vue large. 4 caméras trouvées par leur forme et
+    patchées à chaque image quand le jeu remet la tangente de l'angle.
+  - **Winning Run, Gaelco 3D, V-Unit** (namcos21_3d, gaelco3d_v,
+    midvunit_v) : les polygones sont dessinés 4/3 plus étroits autour du
+    centre (Gaelco : les gradients x des équations de plan multipliés
+    d'autant ; ses polygones 2D sans profondeur ne sont pas resserrés).
+    Ce que le jeu n'envoie pas manque aux bords, et les écrans que le jeu
+    couvre d'une image 4:3 (menus et transitions du V-Unit, game over de
+    Radikal Bikers, textes rangés hors de l'écran de Speed Up) montrent la
+    3D sur les côtés.
+  - **Pas faits** : California Speed, Rush 2049, Road Burners, Cart Fury
+    (pas de structure de caméra trouvée par la forme), Xtrial Racing et
+    GTI Club 2 (Viper : pas la fonction caméra de TD2 ; les structures de
+    viewport en 0x2700 n'ont aucun effet), Hang Pilot (commande 3 comme
+    TD1, autre code), Side by Side (DSP TMS320C51), Driver's Eyes (trois
+    écrans).
+  - Outils (scratchpad) : `sig/sigscan.lua` (signature du code DSP),
+    `sig/seq.lua` (flux de commandes lu par le DSP), `sig/f47.lua`,
+    `sig/pkm.lua` (multiplier des flottants à chaque image), `sig/ratio.lua`
+    (couples au rapport 4:3), `sig/pert.lua` (un flottant à la fois depuis
+    une sauvegarde : 0,3 à 0,5 s par candidat, trop lent pour toute la RAM),
+    `pkrun.sh` (EEPROM copiée à chaque lancement : sinon la démo change).

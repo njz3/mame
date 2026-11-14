@@ -76,24 +76,36 @@ Display
   of view, and the screen is shown in 16:9. Only for the chips whose 3D
   projection MAME does, with the Vulkan renderer (also at -hires3d 1): Sega
   Model 1, Namco System 22 / Super 22, Namco System 23, SNK HNG64, Midway
-  Zeus 2. Without Vulkan, the picture stays 4:3. No effect on games that
-  project their 3D themselves (Voodoo, PlayStation), except Thrill Drive 1
-  and 2 (below).
+  Zeus 2. Without Vulkan, the picture stays 4:3. The games that project
+  their 3D themselves get a wider view another way (below).
   Example: mame ridgerac -hires3d 2 -widescreen
-- Thrill Drive 2 with -widescreen (all versions): the camera setup of the
-  game is patched in memory to see 4/3 wider, and the picture, which keeps
-  its size, is shown stretched to 16:9. The 3D keeps its shape, the rear
-  view mirror too; texts and counters are stretched (-widescreen_2d has no
-  effect). Tested without -hires3d and with Vulkan at x2 and x4.
-  Example: mame thrild2 -hires3d 2 -widescreen
-- Thrill Drive 1 with -widescreen: the field of view the game gives the 3D
-  processor is made 4/3 wider as it is read, and the picture is shown
-  stretched to 16:9, as for Thrill Drive 2. The 3D keeps its shape; the
-  dashboard (rev counter, speed) is stretched, the rear view mirror keeps
-  its shape. In the cockpit view, the bottom of the cockpit, made for 4:3,
-  leaves the road visible at the edges.
-  Tested on thrilld only, without -hires3d and at x2.
-  Example: mame thrilld -hires3d 2 -widescreen
+- -widescreen on the games that project their 3D themselves: the game is
+  given a wider field of view, or its polygons are drawn narrower, and the
+  picture, which keeps its size, is shown stretched to 16:9 (anamorphic).
+  The 3D keeps its shape; texts, counters and sprites are stretched
+  (-widescreen_2d has no effect). Without -hires3d, in software and with
+  Vulkan.
+    Thrill Drive 2, Thrill Drive 1, Racing Jam 1 and 2, GTI Club, Midnight
+    Run, Winding Heat, San Francisco Rush: the camera of the game is made
+    4/3 wider (in memory, or as its 3D processor reads it).
+    PlayStation games (Pocket Racer...): the projection of the GTE, the 3D
+    unit of the CPU, is made 4/3 narrower.
+    Winning Run (System 21), Radikal Bikers and Speed Up (Gaelco 3D),
+    Cruis'n USA, Cruis'n World and Off Road Challenge (V-Unit): these games
+    send their 3D past the edges of the screen; it is drawn 4/3 narrower.
+    What the game did not send (objects outside the 4:3 view) is missing at
+    the edges, and a screen the game covers with a 4:3 picture (menus,
+    transitions, game over of the V-Unit games and Radikal Bikers) shows
+    the 3D behind it on the sides.
+  Not yet: California Speed, Rush 2049, Road Burners, Cart Fury, Xtrial
+  Racing, GTI Club 2, Hang Pilot (Voodoo), Side by Side (Taito JC), Driver's
+  Eyes (three screens).
+  Example: mame midnrun -hires3d 2 -widescreen
+- Thrill Drive 2 (all versions): the rear view mirror keeps its shape.
+  Thrill Drive 1 and Racing Jam: the 3D parts of the dashboard (rev
+  counter, speed) are stretched, the rear view mirror keeps its shape. In
+  the cockpit view of Thrill Drive 1, the bottom of the cockpit, made for
+  4:3, leaves the road visible at the edges.
 - Option -widescreen_2d 4:3|stretch (4:3 by default): texts, counters and
   sprites stay in the middle with their shape, or are stretched over the
   whole width. The Zeus 2 draws its 2D as polygons: it stays in the middle.
@@ -108,6 +120,11 @@ Display
 
 Since mame3d 0.289-2336-g705501b
 - Thrill Drive 1 and 2: 16:9 with -widescreen (see Display).
+- 16:9 with -widescreen also on Racing Jam 1 and 2, GTI Club, Midnight
+  Run, Winding Heat, San Francisco Rush, the PlayStation games, Winning
+  Run, Radikal Bikers, Speed Up, Cruis'n USA, Cruis'n World and Off Road
+  Challenge (see Display).
+- HNG64 in software at -hires3d 3, 5...: repeated bands in the 3D. Fixed.
 - Thrill Drive 1: the rear view mirror stayed empty (light blue). Racing
   Jam 1 and 2: a grey band at the bottom of the screen. The Voodoo clipped
   the triangles in the wrong place when the game draws from the bottom of
