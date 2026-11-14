@@ -1205,11 +1205,7 @@ précédents). Restent Cart Fury, Side by Side et Hang Pilot.
   avec `-widescreen` : identique à l'exe d'avant (code de viper remanié pour
   plusieurs sites).
 - **Pas faits** :
-  - Cart Fury (Vegas, Voodoo 3) : aucune caméra en flottants trouvée (paires
-    de tailles d'écran, couples au rapport 4:3, focale × tangente =
-    demi-écran, matrices de perspective) ; le code ne charge presque jamais
-    256,0 ou 192,0 en constante. Piste : tracer les écritures de sommets vers
-    la Voodoo 3 (build sans fastram) et remonter au code de projection.
+  - Cart Fury (Vegas, Voodoo 3) : fait la nuit suivante, voir plus bas.
   - Side by Side (Taito JC) : fait le soir même, voir la section suivante.
   - Hang Pilot : le mot 0x00034f7b (3,31 en 16.16) lu par les deux DSP en
     0x400005-8 n'est pas la focale (le changer casse la 3D).
@@ -1279,3 +1275,86 @@ précédents). Restent Cart Fury, Side by Side et Hang Pilot.
   `sbfov.lua` (facteurs sur 0x0314/0x0315 et 0x8038040/44), `orth.py`
   (matrices de rotation dans un vidage de RAM), `hscale.py` (échelle
   horizontale et verticale entre deux captures).
+
+### Suite du 2026-11-14 (nuit) : Cart Fury, 2D en 16:9, Dangerous Curves
+
+- **Cart Fury** (vegas.cpp, vrc5074) : fait.
+  - Les sommets partent vers la Voodoo 3 par le CMDFIFO (mémoire PCI
+    0x12e70000-0x12e8ffff, `sig/pcitap.lua` et `sig/pcival.lua` sur
+    l'espace `memory_space` de `:pci:00.0`), déjà projetés : X, Y en
+    pixels, 1/W, S/W, T/W.
+  - Envoi des triangles en 0x80189f8c (sommets projetés en +0x10 X,
+    +0x14 Y, +0x18 1/W) ; projection en 0x80151630 : 1/W = 1 / z,
+    X = cx + x × 1/W, Y = cy + y × 1/W, codes de sortie sur [0, 512] ×
+    [0, 384], six copies déroulées. La matrice de vue est en globales :
+    ligne X 0x80619478, 0x80619550, 0x806196e4 ; Y 0x8061954c, 0x806196e0,
+    0x806197ac ; Z 0x806196dc, 0x806197a8, 0x80619844 (non mise à
+    l'échelle) ; X et Y = rotation de la caméra × focale [0x805cc720]
+    (environ 550). Écrite par trois fonctions de caméra (0x8015c36c,
+    0x8015c918, 0x8015d388) juste avant le dessin : la patcher à la vblank
+    ne sert à rien.
+  - Correctif : avec `-widescreen`, la page 0x00619000 est exclue de la
+    fastram du recompilateur MIPS (`vrc5074_device::set_fastram_hole`,
+    la fastram est coupée en deux autour du trou ; 3 entrées au plus,
+    ROM comprise) et un tap d'écriture divise les trois termes de la
+    ligne X par 4/3. Le code qui l'écrit est vérifié avant (3 mots en
+    0x0015d398, 0x0015d3a8, 0x0015d3e4 ; une seule version du jeu).
+  - Vérifié : 6 captures de 2400 à 5400 en natif (vue plus large, voitures
+    aux bonnes proportions, écran de présentation de l'équipe aussi) et 3
+    en Vulkan ×2. La démo change à chaque lancement : pas de comparaison au
+    pixel ; sans `-widescreen` le trou n'est pas posé, rien ne change.
+  - La 2D (bandeaux, crédits) est dessinée par la Voodoo : étirée.
+- **2D en 16:9** (point 6) : `hires3d_output::narrow_2d()`, `narrow()`,
+  `upscale_2d()`, `draw_2d()` et `set_narrow_area()`. Avec `-widescreen`
+  sur un jeu anamorphique, la couche 2D du dessus est rétrécie de 3/4
+  autour du milieu (elle reprend sa forme une fois étirée) ;
+  `-widescreen_2d stretch` garde l'ancien comportement.
+  - Fait : Side by Side 1 et 2 (objets prioritaires et couche texte ; les
+    caches noirs des colonnes 0-16 et 496-511 restent aux bords), GTI Club,
+    Midnight Run, Winding Heat, Racing Jam 1 et 2, Thrill Drive 1 (couche
+    avant K001604 ou K056832). Natif, logiciel HD (rétréci pendant
+    l'agrandissement, sans perte), Vulkan (rétréci en natif avant le
+    mélange : une colonne sur quatre tombe, le texte est un peu moins
+    net).
+  - Vérifié : Side by Side en natif, logiciel ×2 et Vulkan ×2 ; sans
+    `-widescreen`, identique au pixel. Konami : textes de démarrage et
+    CREDIT recentrés ; Midnight Run en course ; GTI Club et Racing Jam
+    n'ont pas atteint la course dans ces essais (nvram).
+  - Pas faisable simplement : jeux Voodoo (Rush, Rush 2049, California
+    Speed, Road Burners, Cart Fury, Thrill Drive 2, GTI Club 2, Xtrial) :
+    la 2D est faite de triangles de la Voodoo, mêlés à la 3D ; Winning Run
+    (mélange 2D/3D dans le shader Vulkan, à modifier aussi) ; PlayStation
+    (sprites du GPU dans le même tampon) ; V-Unit, Gaelco 3D, Driver's
+    Eyes non regardés.
+- **Dangerous Curves** (point 4) : toujours pas de 3D.
+  - Au démarrage, le DSP teste s'il y a de la RAM en données 0x1400
+    (écrit 0x1234 et relit, en 0x7f0a) et choisit BMAR = 0x0800 si oui,
+    0x4000 sinon ; il écrit le résultat en 0x7800/0x7801 pour le 68040.
+    Dans MAME, rien en 0x1400 : le 68040 envoie alors une commande que la
+    table du DSP (0x2025, en SARAM du C51) ne connaît pas, et le DSP
+    tourne dans son piège (`b 2065`).
+  - En simulant de la RAM en 0x0c00-0x2bff (taps Lua, `sig/dcram.lua`), le
+    jeu passe ses menus et lance une vraie course (compte à rebours,
+    chrono, tableau de bord), mais sans 3D : le DSP attend ses commandes
+    en 0x7ff0 (code relogé en 0x0800) et le 68040 ne lui en envoie pas.
+  - TMS320C50 (9K SARAM aux mêmes adresses en programme et données) puis
+    TMS320C53 essayés à la place du C51 : le DSP plante en 8 s (le code
+    est fait pour la SARAM du C51 en programme 0x2000). Annulé.
+  - Piste : de la RAM externe en données 0x0c00-0x5fff sur la carte de
+    Dangerous Curves, puis comprendre pourquoi le 68040 n'envoie rien.
+- **Trou de Side by Side 2** (point 5) : non corrigé.
+  - En 16:9, la bande de bordure de route le long du rail gauche manque par
+    endroits (scène des cerisiers, plusieurs images de suite).
+  - Le 68040 envoie autant d'objets en 4:3 qu'en 16:9 ; ses valeurs de
+    champ de vision (0x8038040, 0x8038044, réglées par 0x080787ae, ~25
+    appels) n'y changent rien, dans un sens ou dans l'autre.
+  - Dans le DSP, l'échelle 0x0314 s'applique aux sommets des polygones
+    après leur transformation (boucle en 0x03c5 de Side by Side 2), avant
+    leurs codes de sortie (0x0754 : |X| comparé à Z) : cohérent. Le test de
+    boîte englobante (0x0505, 8 coins, codes avant l'échelle, donc en
+    4:3) ne sert qu'à une dizaine d'objets toutes les 4 images.
+  - Cause non trouvée ; il faudrait suivre un des morceaux manquants dans
+    le DSP.
+- Outils (scratchpad `sig/`) : `play.lua` (pièce, départ, accélérateur),
+  `dcram.lua`, `dcmon.lua`, `dspc.lua`, `jcdasm2.lua`, `pcitap.lua`,
+  `pcival.lua`, `cfmat.lua`, `cfwide.lua`, `snap.lua`.
