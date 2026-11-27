@@ -175,6 +175,11 @@ Since mame3d 0.289-2666-g3704727
   build (access violation in the netlist solver). The netlist library
   decoded MSVC member function pointers itself and called its handlers
   with a bad object; it now uses plain member function pointers. Fixed.
+- FFBPlugin folder: FFB Arcade Plugin 2.1.0.30 (commit d2cb6af), the one
+  on the cabinets: force feedback for Dangerous Curves (its wheel motor
+  turns the other way than Side by Side's) and Aqua Jet (air spring
+  played as a wheel vibration); Side by Side and Dangerous Curves no
+  longer pull the wheel at start-up.
 
 Since mame3d 0.289-2664-g7c5dda3
 - The driver warning screen ("This machine has known problems...",
@@ -411,9 +416,9 @@ Known issues
   FFBPlugin folder, which holds a fixed version.
 
 FFBPlugin folder (FFB Arcade Plugin, njz3 fork)
-Same content as FFBArcadePlugin-2.1.0.26-g257d710-njz3-windows-x64.7z
-(github.com/njz3/FFBArcadePlugin, branch dev/mame-racer, commit 257d710).
-- dinput8.dll: FFB Arcade Plugin 2.1.0.26 (njz3 fork), Release x64:
+Same content as FFBArcadePlugin-2.1.0.30-gd2cb6af-njz3-windows-x64.7z
+(github.com/njz3/FFBArcadePlugin, branch dev/mame-racer, commit d2cb6af).
+- dinput8.dll: FFB Arcade Plugin 2.1.0.30 (njz3 fork), Release x64:
     - Endprodukt's MAME racing games ported onto the refactored plugin;
     - fix of the nameFFB pointer to a freed string (crash when quitting
       MAME, memory leak);
@@ -426,7 +431,7 @@ Same content as FFBArcadePlugin-2.1.0.26-g257d710-njz3-windows-x64.7z
     - finds the wheel or vJoy again when its DeviceGUID was saved with
       another SDL2 version (SDL 2.32.8 puts a CRC in bytes 2-3 of the
       GUID, so older ini files no longer matched);
-    - its version (2.1.0.26-g257d710) is in the file properties and on the
+    - its version (2.1.0.30-gd2cb6af) is in the file properties and on the
       first line of FFBlog.txt, with the SDL version.
   Only depends on SDL2.dll and Windows DLLs.
 - FFBPluginGUI.exe + MetroFramework*.dll: the configuration program. It
