@@ -25,6 +25,7 @@ class namco_c139_device : public device_t
 public:
 	// construction/destruction
 	namco_c139_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock = 0);
+	virtual ~namco_c139_device();
 
 	auto irq_cb() { return m_irq_cb.bind(); }
 

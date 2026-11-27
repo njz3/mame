@@ -638,6 +638,9 @@ void namco_c139_device::regs_map(address_map &map)
 //  namco_c139_device - constructor
 //-------------------------------------------------
 
+// out of line: context is only complete here (GCC needs it for unique_ptr's deleter)
+namco_c139_device::~namco_c139_device() = default;
+
 namco_c139_device::namco_c139_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock)
 	: device_t(mconfig, NAMCO_C139, tag, owner, clock),
 	m_irq_cb(*this)

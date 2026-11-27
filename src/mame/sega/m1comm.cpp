@@ -526,6 +526,9 @@ const tiny_rom_entry *sega_m1comm_device::device_rom_region() const
 //  sega_m1comm_device - constructor
 //-------------------------------------------------
 
+// out of line: context is only complete here (GCC needs it for unique_ptr's deleter)
+sega_m1comm_device::~sega_m1comm_device() = default;
+
 sega_m1comm_device::sega_m1comm_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock) :
 	device_t(mconfig, SEGA_MODEL1_COMM, tag, owner, clock),
 	m_cpu(*this, Z80_TAG),
