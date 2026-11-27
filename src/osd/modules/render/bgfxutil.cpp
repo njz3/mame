@@ -13,6 +13,8 @@
 #include "emucore.h"
 #include "render.h"
 
+#include <algorithm>
+
 
 const bgfx::Memory* bgfx_util::mame_texture_data_to_bgfx_texture_data(bgfx::TextureFormat::Enum &dst_format, uint32_t src_format, int rowpixels, int width_margin, int height, const rgb_t *palette, void *base, uint16_t &out_pitch, int &width_div_factor, int &width_mul_factor)
 {
@@ -58,9 +60,23 @@ const bgfx::Memory* bgfx_util::mame_texture_data_to_bgfx_texture_data(bgfx::Text
 
 			if (width_margin)
 			{
-				adjusted_base -= width_margin * 4;
+				// njz3: the columns left of the margin are not shown and may not be
+				// readable (a -hires3d frame left in GPU read-back memory starts at
+				// the margin): copy each row from the margin, black before it
+				bgfx::Memory const *const mem = bgfx::alloc(info.storageSize);
+				uint8_t const *const src = (uint8_t const *)base;
+				size_t const margin = size_t(width_margin) * 4;
+				size_t const pitch = size_t(rowpixels) * 4;
+				for (int y = 0; y < height; y++)
+				{
+					uint8_t *const dst = mem->data + y * pitch;
+					std::fill_n(dst, margin, uint8_t(0));
+					std::copy_n(src + y * pitch, pitch - margin, dst + margin);
+				}
+				data = mem;
 			}
-			data = bgfx::copy(adjusted_base, info.storageSize);
+			else
+				data = bgfx::copy(adjusted_base, info.storageSize);
 			break;
 	}
 

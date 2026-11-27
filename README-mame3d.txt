@@ -175,6 +175,12 @@ Since mame3d 0.289-2666-g3704727
   build (access violation in the netlist solver). The netlist library
   decoded MSVC member function pointers itself and called its handlers
   with a bad object; it now uses plain member function pointers. Fixed.
+- -video bgfx with -hires3d: California Speed (and at times Road Burners)
+  crashed on its first frame at -hires3d 3. The bgfx upload copied the
+  frame from column 0 of each row, before the start of a frame left in
+  GPU read-back memory when the visible area does not start at column 0.
+  It now copies each row from the first visible column. Fixed for every
+  chip drawn on the GPU.
 - FFBPlugin folder: FFB Arcade Plugin 2.1.0.30 (commit d2cb6af), the one
   on the cabinets: force feedback for Dangerous Curves (its wheel motor
   turns the other way than Side by Side's) and Aqua Jet (air spring
