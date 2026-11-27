@@ -45,6 +45,9 @@ hard_disk_file::hard_disk_file(chd_file *_chd)
 	/* parse the metadata */
 	if (sscanf(metadata.c_str(), HARD_DISK_METADATA_FORMAT, &hdinfo.cylinders, &hdinfo.heads, &hdinfo.sectors, &hdinfo.sectorbytes) != 4)
 		throw nullptr;
+
+	// njz3: keep decompressed hunks, games read the same areas again and again
+	chd->set_hunk_cache(size_t(256) << 20);
 }
 
 hard_disk_file::hard_disk_file(util::random_read_write &corefile, uint32_t skipoffs)

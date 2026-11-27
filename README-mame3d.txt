@@ -169,6 +169,17 @@ Display
   a background that does not extend past the 4:3 screen (HNG64 menus) is
   stretched with the rest.
 
+Since mame3d 0.289-2669-g840e091
+- Road Burners ran at about 90% of full speed on a cabinet. It reads the
+  same areas of its hard disk over and over (each 4 KB block about ten
+  times in two minutes of demo), and MAME decompressed the CHD block every
+  time: about 18% of the host time. Hard disk CHDs now keep up to 256 MB
+  of decompressed blocks in memory, so a block read again is copied, not
+  decompressed again (12.7 s of decompression per 120 emulated seconds
+  down to 3 s). The other hard disk games (California Speed, Rush, Rush
+  2049, Thrill Drive 2, GTI Club 2...) read mostly new blocks and are
+  unchanged.
+
 Since mame3d 0.289-2666-g3704727
 - Games with netlist sound or video (Rally-X, New Rally-X, 280-ZZZAP,
   Speed Freak, Monaco GP, Pong...) crashed at start-up with this MSVC

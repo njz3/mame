@@ -22,6 +22,8 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <unordered_map>
+#include <vector>
 
 
 /***************************************************************************
@@ -342,6 +344,7 @@ public:
 	std::error_condition codec_process_hunk(uint32_t hunknum);
 	std::error_condition read_hunk(uint32_t hunknum, void *buffer);
 	std::error_condition write_hunk(uint32_t hunknum, const void *buffer);
+	void set_hunk_cache(size_t bytes); // njz3: keep up to this many bytes of decompressed hunks (0: none)
 	std::error_condition read_units(uint64_t unitnum, void *buffer, uint32_t count = 1);
 	std::error_condition write_units(uint64_t unitnum, const void *buffer, uint32_t count = 1);
 	std::error_condition read_bytes(uint64_t offset, void *buffer, uint32_t bytes);
@@ -380,6 +383,10 @@ private:
 	util::sha1_t be_read_sha1(const uint8_t *base) const noexcept;
 	void be_write_sha1(uint8_t *base, util::sha1_t value) noexcept;
 	std::error_condition file_read(uint64_t offset, void *dest, uint32_t length) const noexcept;
+	std::error_condition read_hunk_uncached(uint32_t hunknum, void *buffer);
+	void hunk_cache_insert(uint32_t hunknum, const void *buffer);
+	void hunk_cache_forget(uint32_t hunknum);
+	void hunk_cache_clear();
 	std::error_condition file_write(uint64_t offset, const void *source, uint32_t length) noexcept;
 	uint64_t file_append(const void *source, uint32_t length, uint32_t alignment = 0);
 
@@ -438,6 +445,14 @@ private:
 	// caching
 	std::vector<uint8_t>    m_cache;            // single-hunk cache for partial reads/writes
 	uint32_t                m_cachehunk;        // which hunk is in the cache?
+
+	// njz3: decompressed hunks kept by set_hunk_cache, CLOCK replacement
+	static constexpr uint32_t HUNK_CACHE_CHUNK = 1024; // slots allocated together
+	std::vector<std::unique_ptr<uint8_t []>> m_hunk_cache_chunks; // slot data, allocated as slots fill
+	std::vector<uint32_t>   m_hunk_cache_hunk;  // hunk held by each slot, ~0 if free
+	std::vector<uint8_t>    m_hunk_cache_used;  // reference bit of each slot
+	std::unordered_map<uint32_t, uint32_t> m_hunk_cache_slot; // hunk -> slot
+	uint32_t                m_hunk_cache_hand = 0; // next slot the CLOCK looks at
 };
 
 

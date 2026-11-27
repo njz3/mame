@@ -994,6 +994,7 @@ void chd_file::close()
 	// reset caching
 	m_cache.clear();
 	m_cachehunk = ~0;
+	hunk_cache_clear();
 }
 
 std::error_condition chd_file::codec_process_hunk(uint32_t hunknum)
@@ -1118,7 +1119,95 @@ std::error_condition chd_file::codec_process_hunk(uint32_t hunknum)
  * @return  An error condition.
  */
 
+//-------------------------------------------------
+//  set_hunk_cache - njz3: keep up to this many
+//  bytes of decompressed hunks, so hunks read
+//  again are not decompressed again (hard disks
+//  read the same areas over and over: roadburn
+//  decompressed each hunk ten times, 18% of the
+//  host time)
+//-------------------------------------------------
+
+void chd_file::set_hunk_cache(size_t bytes)
+{
+	hunk_cache_clear();
+	if (!m_hunkbytes)
+		return;
+	size_t const slots = std::min<size_t>(bytes / m_hunkbytes, m_hunkcount);
+	m_hunk_cache_hunk.assign(slots, ~uint32_t(0));
+	m_hunk_cache_used.assign(slots, 0);
+	m_hunk_cache_chunks.resize((slots + HUNK_CACHE_CHUNK - 1) / HUNK_CACHE_CHUNK);
+	m_hunk_cache_slot.reserve(slots);
+}
+
+void chd_file::hunk_cache_clear()
+{
+	m_hunk_cache_chunks.clear();
+	m_hunk_cache_hunk.clear();
+	m_hunk_cache_used.clear();
+	m_hunk_cache_slot.clear();
+	m_hunk_cache_hand = 0;
+}
+
+void chd_file::hunk_cache_insert(uint32_t hunknum, const void *buffer)
+{
+	// CLOCK: take the next slot that is free or was not used since the hand last passed
+	uint32_t const slots = m_hunk_cache_hunk.size();
+	uint32_t slot;
+	for (;;)
+	{
+		slot = m_hunk_cache_hand;
+		m_hunk_cache_hand = (slot + 1 == slots) ? 0 : (slot + 1);
+		if (m_hunk_cache_hunk[slot] == ~uint32_t(0))
+			break;
+		if (!m_hunk_cache_used[slot])
+		{
+			m_hunk_cache_slot.erase(m_hunk_cache_hunk[slot]);
+			break;
+		}
+		m_hunk_cache_used[slot] = 0;
+	}
+	auto &chunk = m_hunk_cache_chunks[slot / HUNK_CACHE_CHUNK];
+	if (!chunk)
+		chunk = std::make_unique<uint8_t []>(size_t(HUNK_CACHE_CHUNK) * m_hunkbytes);
+	memcpy(&chunk[size_t(slot % HUNK_CACHE_CHUNK) * m_hunkbytes], buffer, m_hunkbytes);
+	m_hunk_cache_hunk[slot] = hunknum;
+	m_hunk_cache_used[slot] = 1;
+	m_hunk_cache_slot.emplace(hunknum, slot);
+}
+
+void chd_file::hunk_cache_forget(uint32_t hunknum)
+{
+	auto const found = m_hunk_cache_slot.find(hunknum);
+	if (found != m_hunk_cache_slot.end())
+	{
+		m_hunk_cache_hunk[found->second] = ~uint32_t(0);
+		m_hunk_cache_used[found->second] = 0;
+		m_hunk_cache_slot.erase(found);
+	}
+}
+
 std::error_condition chd_file::read_hunk(uint32_t hunknum, void *buffer)
+{
+	if (m_hunk_cache_hunk.empty() || !m_file || (hunknum >= m_hunkcount))
+		return read_hunk_uncached(hunknum, buffer);
+
+	auto const found = m_hunk_cache_slot.find(hunknum);
+	if (found != m_hunk_cache_slot.end())
+	{
+		uint32_t const slot = found->second;
+		memcpy(buffer, &m_hunk_cache_chunks[slot / HUNK_CACHE_CHUNK][size_t(slot % HUNK_CACHE_CHUNK) * m_hunkbytes], m_hunkbytes);
+		m_hunk_cache_used[slot] = 1;
+		return std::error_condition();
+	}
+
+	std::error_condition const err = read_hunk_uncached(hunknum, buffer);
+	if (!err)
+		hunk_cache_insert(hunknum, buffer);
+	return err;
+}
+
+std::error_condition chd_file::read_hunk_uncached(uint32_t hunknum, void *buffer)
 {
 	// punt if no file
 	if (UNEXPECTED(!m_file))
@@ -1286,6 +1375,9 @@ std::error_condition chd_file::read_hunk(uint32_t hunknum, void *buffer)
 
 std::error_condition chd_file::write_hunk(uint32_t hunknum, const void *buffer)
 {
+	// njz3: the cached copy of this hunk is no longer valid
+	hunk_cache_forget(hunknum);
+
 	// punt if no file
 	if (UNEXPECTED(!m_file))
 		return std::error_condition(error::NOT_OPEN);

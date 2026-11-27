@@ -1456,3 +1456,38 @@ known).
   in a d3d window). Restored, with a comment; thrild2, raceon and vr reach
   frame 60 at once. After each upstream merge, check
   `grep "bool show_warnings" src/frontend/mame/ui/ui.cpp`.
+
+### Continued, 2026-11-27: netlist crash, bgfx crash, Road Burners speed
+
+- Netlist games (rallyx, nrallyx, 280zzzap, speedfrk, monacogp, pong)
+  crashed at reset in `nld_solver::fb_step` with MSVC: plib's INTERNAL_MSC
+  member function pointer decoding gave a bad object. `PPMF_FORCE_TYPE 0`
+  for MSVC in `src/lib/netlist/plib/ppmf.h` (e54b9875650).
+- calspeed (and at times roadburn) crashed with `-video bgfx -hires3d 3`:
+  `bgfx_util::mame_texture_data_to_bgfx_texture_data` subtracted the width
+  margin and copied rowpixels x height in one block, i.e. from column 0,
+  while our direct frames (bitmaps over the Vulkan read-back memory, every
+  `*_vk.cpp`) start at the first visible column: it read 276 pixels before
+  the buffer. Now copied row by row from the margin (840e091f80f). d3d
+  copies row by row and never crashed.
+- roadburn at 90.7% on Racecab2 (others 97-100%). Findings:
+  - No idle loop worth a hotspot: the vblank wait polls the Voodoo status
+    (`800BB704` -> `800BB6E4`, bit 6) only about 165 times a frame, about
+    4% of the emulated time (each read eats 1000 cycles).
+  - The MIPS DRC options (strict verify, extra instruction check, none)
+    make no measurable difference.
+  - The Vulkan Voodoo restarts the native rasterizer once, at start-up.
+  - Stack samples (cdb) of the main thread: about 14% ADSP-2115 (DCS2),
+    15% PCI accesses to the Voodoo, and the CHD: `chd_file::read_hunk`
+    and LZMA decoding. Counted inside MAME: 250,000 hunk decompressions
+    for 26,000 distinct hunks in 120 emulated seconds, 12.7 s of host
+    time (about 18%). calspeed and sf2049 read mostly new hunks.
+  - Fix: `chd_file::set_hunk_cache` (CLOCK cache of decompressed hunks,
+    slots allocated 1024 at a time), set to 256 MB by `hard_disk_file`.
+    roadburn: 47,700 decompressions instead of 234,000, 3 s instead of
+    12.7 s. Checked by decompressing every cache hit again and comparing:
+    no difference. `write_hunk` drops the cached copy.
+  - The laptop's speed varies too much (92 to 150% for the same exe) to
+    measure the gain here; to be measured on a cabinet.
+  - The emulation is not exactly repeatable: two runs of the same exe
+    read slightly different hunks (host timing, e.g. the Voodoo threads).
