@@ -93,7 +93,14 @@ namespace plib {
 //#define PPMF_FORCE_TYPE 1
 
 #ifndef PPMF_FORCE_TYPE
+#if defined(_MSC_VER) && !defined(__clang__)
+// njz3: the INTERNAL_MSC decoding calls handlers with a bad object in
+// MSVC release builds (nld_solver::fb_step at reset: pong, rallyx...);
+// use plain member function pointers there
+#define PPMF_FORCE_TYPE 0
+#else
 #define PPMF_FORCE_TYPE -1
+#endif
 #endif
 
 namespace plib {

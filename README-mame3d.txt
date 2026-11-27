@@ -169,6 +169,13 @@ Display
   a background that does not extend past the 4:3 screen (HNG64 menus) is
   stretched with the rest.
 
+Since mame3d 0.289-2666-g3704727
+- Games with netlist sound or video (Rally-X, New Rally-X, 280-ZZZAP,
+  Speed Freak, Monaco GP, Pong...) crashed at start-up with this MSVC
+  build (access violation in the netlist solver). The netlist library
+  decoded MSVC member function pointers itself and called its handlers
+  with a bad object; it now uses plain member function pointers. Fixed.
+
 Since mame3d 0.289-2664-g7c5dda3
 - The driver warning screen ("This machine has known problems...",
   "Press any key to continue") was shown again at start-up since
@@ -397,7 +404,6 @@ Based on upstream MAME from 2026-11-23, with:
   (68040 FPU timings and skipping the DSP busy wait).
 
 Known issues
-- pong (and probably other netlist games) crashes with this MSVC build.
 - -validate reports about 20,600 badly encoded key labels, on home computer
   keyboards and terminals (cause not found). Racing games are not affected.
 - The random 0xC0000005 crashes when quitting MAME (srallyc, scud,
