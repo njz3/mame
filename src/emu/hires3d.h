@@ -167,7 +167,10 @@ public:
 	// takes the texture if the renderer did not read it; the bitmap must
 	// not be written by the CPU once it is given; with a texture, the
 	// bitmap is only filled by texture.read()
-	void use_frame(bitmap_rgb32 &bitmap, std::function<void ()> &&ready = nullptr, gpu_texture &&texture = gpu_texture());
+	void use_frame(bitmap_rgb32 &bitmap, std::function<void ()> &&ready, gpu_texture &&texture);
+	// (overload rather than a default argument: GCC rejects gpu_texture()
+	// as a default argument while the enclosing class is incomplete)
+	void use_frame(bitmap_rgb32 &bitmap, std::function<void ()> &&ready = nullptr) { use_frame(bitmap, std::move(ready), gpu_texture()); }
 
 	// the update covering cliprect is finished; the frame is shown once
 	// the bottom of the visible area has been drawn

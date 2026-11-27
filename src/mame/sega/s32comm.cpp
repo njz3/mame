@@ -476,6 +476,9 @@ void sega_s32comm_device::device_add_mconfig(machine_config &config)
 //  sega_s32comm_device - constructor
 //-------------------------------------------------
 
+// out of line: context is only complete here (GCC needs it for unique_ptr's deleter)
+sega_s32comm_device::~sega_s32comm_device() = default;
+
 sega_s32comm_device::sega_s32comm_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock) :
 	device_t(mconfig, SEGA_SYSTEM32_COMM, tag, owner, clock)
 {

@@ -19,6 +19,7 @@ class sega_m1comm_device : public device_t
 {
 public:
 	sega_m1comm_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock = 0);
+	virtual ~sega_m1comm_device();
 
 	// public API - stuff that gets called from the model1
 	// shared memory 4k

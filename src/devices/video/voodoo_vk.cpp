@@ -197,7 +197,7 @@ struct voodoo_vk::impl : vk3d_context
 	// the display (frame()) or copied (read()); the one shown last is kept
 	struct readback_entry
 	{
-		buffer host;
+		vk3d_context::buffer host;
 		bitmap_rgb32 view;      // over host, for the display
 		int buffer = -1;        // colour buffer it holds, -1 if none
 		u32 version = 0;        // version of that buffer
